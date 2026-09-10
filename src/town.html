@@ -1,0 +1,1481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Town</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --shell:#20272e; --shell-2:#171d23; --panel:#2b333c; --edge:#3d4854;
+    --ink:#e4e9ef; --ink-dim:#93a1b0;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--shell-2);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.5}
+  .app{max-width:1220px;margin:0 auto;padding:18px 16px 40px;display:flex;flex-direction:column;gap:14px}
+
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 16px}
+  h1{font-family:"Silkscreen",monospace;font-size:22px;font-weight:700;margin:0;line-height:1.1}
+  .sub{color:var(--ink-dim);font-size:13px;margin:0}
+
+  .tally{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+  .tally button{font-family:"Silkscreen",monospace;font-size:11px;background:var(--panel);
+    color:var(--ink);border:1px solid var(--edge);border-radius:2px;padding:6px 9px;
+    cursor:pointer;display:flex;align-items:center;gap:6px}
+  .tally button[aria-pressed="true"]{background:#414d5a;border-color:#6d7d8e}
+  .tally .dot{width:7px;height:7px;display:inline-block}
+  .tally .n{color:var(--ink-dim)}
+  .tally button[aria-pressed="true"] .n{color:var(--ink)}
+
+  .split{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
+  @media (max-width:880px){ .split{grid-template-columns:minmax(0,1fr)} }
+
+  .stage{background:var(--shell);border:1px solid var(--edge);border-radius:3px;padding:10px}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;
+    image-rendering:crisp-edges;border-radius:2px;cursor:pointer}
+  canvas:focus-visible{outline:3px solid #ffd166;outline-offset:2px}
+
+  .stage-foot{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+    margin-top:10px;color:var(--ink-dim);font-size:12px}
+  .key{display:flex;align-items:center;gap:6px}
+  .key i{width:10px;height:10px;display:inline-block;font-style:normal}
+  .stage-foot button{margin-left:auto;font-family:"Silkscreen",monospace;font-size:11px;
+    background:none;border:1px solid var(--edge);color:var(--ink-dim);padding:5px 8px;
+    border-radius:2px;cursor:pointer}
+
+  .feed{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;
+    padding-top:10px;border-top:1px solid var(--edge)}
+  .feed input{flex:1;min-width:180px;background:#171d23;border:1px solid var(--edge);
+    color:var(--ink);border-radius:2px;padding:7px 8px;font-family:ui-monospace,monospace;font-size:12px}
+  .feed button{font-family:"Silkscreen",monospace;font-size:11px;background:#37414c;
+    color:var(--ink);border:1px solid var(--edge);border-radius:2px;padding:7px 12px;cursor:pointer}
+  .feed p{flex-basis:100%;margin:0;font-size:12px;color:var(--ink-dim)}
+
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:3px;padding:14px}
+  .card h2{font-family:"Silkscreen",monospace;font-size:15px;margin:0 0 2px}
+  .role-line{font-size:12px;color:var(--ink-dim);margin:0 0 12px}
+  .status-chip{display:inline-flex;align-items:center;gap:6px;font-family:"Silkscreen",monospace;
+    font-size:11px;padding:4px 7px;border-radius:2px;background:#232a32;border:1px solid var(--edge)}
+  dl{margin:12px 0 0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px}
+  dt{color:var(--ink-dim)} dd{margin:0;word-break:break-word}
+  .log{margin-top:12px;background:#171d23;border:1px solid var(--edge);border-radius:2px;
+    padding:8px 9px;font-family:ui-monospace,monospace;font-size:12px;color:#a9d5b8;white-space:pre-wrap}
+  .acts{display:flex;gap:8px;margin-top:12px}
+  .acts button{flex:1;font-family:"Silkscreen",monospace;font-size:11px;padding:8px;
+    border-radius:2px;cursor:pointer;background:#37414c;color:var(--ink);border:1px solid var(--edge)}
+  .acts button.danger{color:#ffb3ae;border-color:#6b3b39}
+  .acts button:hover{background:#434f5c}
+  .hint{margin:0;color:var(--ink-dim);font-size:12px}
+  .doing{margin:10px 0 0;font-family:ui-monospace,monospace;font-size:12px;color:#ffd7a1}
+  .muted{color:var(--ink-dim)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>Agent Town</h1>
+      <p class="sub">Every house is one agent. Smoke means it's working.</p>
+    </div>
+    <div class="tally" id="tally" role="group" aria-label="Filter by district"></div>
+  </header>
+
+  <div class="split">
+    <div class="stage">
+      <canvas id="town" tabindex="0" role="img" aria-label="Pixel map of running agents, grouped into districts by role"></canvas>
+      <div class="stage-foot">
+        <span class="key"><i style="background:#ffd166"></i>working</span>
+        <span class="key"><i style="background:#93a1b0"></i>idle</span>
+        <span class="key"><i style="background:#e2504a"></i>blocked</span>
+        <span class="key"><i style="background:#79c25f"></i>finished</span>
+        <span class="key"><i style="background:#7d868e"></i>offline</span>
+        <span class="key"><i style="background:#a86e3e;width:8px;height:7px"></i>shed = spawned agent</span>
+        <button id="pause" aria-pressed="false">pause feed</button>
+      </div>
+      <div class="stage-foot" style="margin-top:4px">
+        <span class="key">roof flag:</span>
+        <span class="key"><i style="background:#b07bd4"></i>opus</span>
+        <span class="key"><i style="background:#63a4e0"></i>sonnet</span>
+        <span class="key"><i style="background:#6fc98a"></i>haiku</span>
+      </div>
+      <div class="feed">
+        <input id="endpoint" type="url" placeholder="http://localhost:8787/agents" aria-label="Agent status endpoint">
+        <button id="connect">connect</button>
+        <p id="note">Showing a demo town. Point it at a URL that returns your agents as JSON.</p>
+      </div>
+    </div>
+    <aside class="card" id="panel" aria-live="polite">
+      <p class="hint">Click a house to see what that agent is doing. Arrow keys walk between houses.</p>
+    </aside>
+  </div>
+</div>
+
+<script>
+/* =======================================================================
+   DATA ADAPTER
+   Agent = { id, name, role, status, task, startedAt, tokens, lastLine, parent }
+   role   : dev | research | ops | content
+   status : working | idle | blocked | done | offline
+   ======================================================================= */
+const POLL_MS = 1500;
+let ENDPOINT = null;
+
+async function fetchAgents(){
+  if(!ENDPOINT) return SIM.snapshot();
+  try{
+    const res = await fetch(ENDPOINT, {headers:{accept:"application/json"}});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.agents || []);
+    if(!Array.isArray(list) || !list.length) throw new Error("no agents in response");
+    feedNote(`live — ${list.length} agents from ${new URL(ENDPOINT).host}`, "#79c25f");
+    return list.map((a,i)=>({
+      id: String(a.id ?? "n"+i),
+      name: a.name ?? a.id ?? ("agent-"+i),
+      role: ["dev","research","ops","content"].includes(a.role) ? a.role : "ops",
+      status: ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle",
+      parent: a.parent ?? null,
+      task: a.task ?? "—",
+      activity: a.activity ?? "",
+      model: MODELS[a.model] ? a.model : "sonnet",
+      branch: a.branch ?? "",
+      dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
+      startedAt: a.startedAt ?? Date.now(),
+      tokens: a.tokens ?? 0,
+      cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
+      lastLine: a.lastLine ?? ""
+    }));
+  }catch(err){
+    feedNote(`${ENDPOINT} — ${err.message}. Back on the demo town.`, "#e2504a");
+    ENDPOINT = null;
+    return SIM.snapshot();
+  }
+}
+
+/* ---- mock world ---- */
+const TASKS = {
+  dev:["refactor webhook queue","patch CRM sync retry","bump deps + run suite","write migration 0042","fix flaky auth test","port settings page"],
+  research:["read arXiv 2508.11912","compare vector stores","summarise competitor pricing","trace recall regression","survey MCP servers"],
+  ops:["deploy to Railway","rotate staging certs","watch error budget","prune D1 snapshots","tail prod logs"],
+  content:["draft changelog 3.46","reply to Derek","outline launch post","clean up docs nav","write release notes"]
+};
+const ACTIVITY = {
+  working:["editing src/sync.ts","running the test suite","reading 12 search results","waiting on API response","writing the PR description","diffing two schema versions"],
+  idle:["polling the queue","nothing queued"],
+  blocked:["waiting on you","retrying in 40s"],
+  done:["handed back to you","report written"],
+  offline:["—"]
+};
+const DISPATCH = ["Jack","cron: nightly","webhook: github","Jack","slack: #ops","Jack"];
+const MODELS = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a"};
+const BRANCHES = {
+  dev:["fix/sync-429","feat/settings","main","chore/deps"],
+  research:["main","spike/vectors"],
+  ops:["deploy/prod","main"],
+  content:["docs/changelog","main"]
+};
+const RATE = 0.000009;   // $ per token, rough blended estimate
+
+const LINES = {
+  working:["> 47 files scanned, 3 candidates","> tests 118 passed, 2 skipped","> streaming... 4.1k tokens","> commit staged, awaiting review"],
+  idle:["> queue empty, waiting for work","> heartbeat ok"],
+  blocked:["! rate limited by upstream (429)","! needs approval: destructive migration","! auth token expired","! merge conflict in src/sync.ts"],
+  done:["ok finished in 4m12s","ok PR opened, 6 files changed"],
+  offline:["- shut down cleanly"]
+};
+const pick = a => a[Math.floor(Math.random()*a.length)];
+
+const SIM = (() => {
+  // [name, role, status] — optional 4th value is the index of the agent that spawned it
+  const seed = [
+    ["Bolt","dev","working"],["Marge","dev","working"],["Kip","dev","blocked"],
+    ["Otto","dev","idle"],["Vera","dev","done"],["Gus","dev","working"],["Ida","dev","idle"],
+    ["Juno","research","working"],["Pim","research","working"],["Wren","research","idle"],
+    ["Sable","research","offline"],
+    ["Hollis","ops","working"],["Dov","ops","idle"],["Tess","ops","blocked"],["Nils","ops","working"],
+    ["Odie","content","working"],["Ruth","content","done"],["Cass","content","idle"],
+    ["Bolt-1","dev","working",0],["Bolt-2","dev","blocked",0],
+    ["Juno-1","research","working",7],["Juno-2","research","done",7],["Juno-3","research","working",7],
+    ["Hollis-1","ops","idle",11]
+  ];
+  const now = Date.now();
+  const agents = seed.map((s,i)=>({
+    id:"a"+i, name:s[0], role:s[1], status:s[2],
+    parent: s[3]==null ? null : "a"+s[3],
+    task: s[2]==="offline" ? "—" : pick(TASKS[s[1]]),
+    activity: pick(ACTIVITY[s[2]]),
+    model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku"]) : "haiku",
+    branch: s[3]==null ? pick(BRANCHES[s[1]]) : null,
+    dispatchedBy: s[3]==null ? pick(DISPATCH) : seed[s[3]][0],
+    startedAt: now - Math.floor(Math.random()*40*60*1000),
+    tokens: Math.floor(Math.random()*180000),
+    cost: 0,
+    lastLine: pick(LINES[s[2]])
+  }));
+  agents.forEach(a=>{
+    a.cost = a.tokens * RATE;
+    if(!a.branch){
+      const mum = agents.find(x=>x.id===a.parent);
+      a.branch = mum ? mum.branch : "main";
+    }
+  });
+  let live = true;
+  setInterval(()=>{
+    if(!live) return;
+    agents.forEach(a=>{
+      if(a.status==="working"){
+        const d = Math.floor(Math.random()*900);
+        a.tokens += d; a.cost += d * RATE;
+        if(Math.random() > 0.85) a.activity = pick(ACTIVITY.working);
+      }
+      if(Math.random() > 0.94){
+        const s = pick({
+          working:["working","working","blocked","done"],
+          idle:["idle","working","working"],
+          blocked:["blocked","blocked","working"],
+          done:["done","idle"],
+          offline:["offline","offline","idle"]
+        }[a.status]);
+        if(s !== a.status){
+          a.status = s; a.lastLine = pick(LINES[s]); a.activity = pick(ACTIVITY[s]);
+          if(s==="working"){ a.task = pick(TASKS[a.role]); a.startedAt = Date.now(); }
+        }
+      } else if(Math.random() > 0.8){ a.lastLine = pick(LINES[a.status]); }
+    });
+  }, 2200);
+  return {
+    snapshot: () => agents.map(a=>({...a})),
+    set(id, status){
+      const a = agents.find(x=>x.id===id); if(!a) return;
+      a.status = status; a.lastLine = pick(LINES[status]); a.activity = pick(ACTIVITY[status]);
+      if(status==="working"){ a.task = pick(TASKS[a.role]); a.startedAt = Date.now(); }
+      if(status==="offline") a.task = "—";
+    },
+    setLive(v){ live = v; }
+  };
+})();
+
+/* =======================================================================
+   TOWN
+   ======================================================================= */
+const DISTRICTS = [
+  {key:"dev",      label:"DEV LANE",      roof:"#e08a3c", roofDark:"#a85c1e"},
+  {key:"research", label:"RESEARCH ROW",  roof:"#6f83d6", roofDark:"#47549f"},
+  {key:"ops",      label:"OPS HOLLOW",    roof:"#4fb08c", roofDark:"#2f7a63"},
+  {key:"content",  label:"WORDSMITH WAY", roof:"#cc5f78", roofDark:"#933d52"}
+];
+
+const HOUSE_W=54, HOUSE_H=66, COLS=4;
+const GAP_X=14, GAP_Y=74, PAD=12, SIGN_H=30, MARGIN=30, ROAD=40;
+// where things sit in the yard, measured down from the bottom of the house
+const LANE_Y = 1, LANE_H = 9, SIGN_Y = 13, BENCH_Y = 29, SHED_Y = 49;
+const D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
+let W = MARGIN*2 + D_W*2 + ROAD;
+let H = 400, ROAD_Y = 200, DR = [];
+
+const C = {
+  grass:"#63b85f", grassDk:"#46914b", grassLt:"#84d472", grassSh:"#3a7a43",
+  dirt:"#e3a860", dirtDk:"#c4823f", dirtEdge:"#a3672f",
+  outline:"#2b3a2c",
+  wood:"#a86e3e", woodDk:"#6f4526", woodLt:"#c78e55",
+  wall:"#f2e2c2", wallDk:"#d9c39c",
+  stone:"#9fa9b0", stoneDk:"#6e7a83",
+  winOn:"#ffd166", winOff:"#5d7382",
+  water:"#4f9fc4", waterDk:"#3a7ea3",
+  smoke:"#e8eef2", alert:"#e2504a", ok:"#79c25f",
+  off:"#7d868e", offDk:"#525b63",
+  leaf:"#4fa04f", leafDk:"#347a3f", leafLt:"#7ecb6c",
+  soil:"#d8944e", soilDk:"#b5713a", crop:"#3f8a45", fruit:"#d9463f"
+};
+
+const MODEL_COLOR = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a"};
+
+const cv = document.getElementById("town");
+const ctx = cv.getContext("2d");
+cv.width = W; cv.height = 0;
+ctx.imageSmoothingEnabled = false;
+const bg = document.createElement("canvas");
+const bx = bg.getContext("2d");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let agents = [], plots = [], gardens = [];
+const actors = new Map();   // agent id -> villager sprite state, survives each poll
+let pops = 0;               // how many thought bubbles are currently popped open
+let selectedId = null, hoverId = null, filter = null, paused = false, t = 0;
+
+const px = (x,y,w,h,c)=>{ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); };
+
+/* ---------- scenery, painted once per layout ---------- */
+function paintBackground(){
+  const p = (x,y,w,h,c)=>{ bx.fillStyle=c; bx.fillRect(x|0,y|0,w|0,h|0); };
+  let s = 7;
+  const rnd = ()=> (s = (s*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  p(0,0,W,H,C.grass);
+  // soft two-tone patches so the field isn't a flat slab
+  for(let i=0;i<48;i++){
+    const gx=(rnd()*W)|0, gy=(rnd()*H)|0, r=4+((rnd()*6)|0);
+    const tone = C.grassDk;
+    for(let dy=-r; dy<=r; dy++){
+      const hw = Math.round(Math.sqrt(Math.max(0, r*r-dy*dy)));
+      if(hw) p(gx-hw, gy+dy, hw*2, 1, tone);
+    }
+  }
+  for(let i=0;i<1100;i++){
+    const gx=(rnd()*W)|0, gy=(rnd()*H)|0, r=rnd();
+    if(r>0.74){ p(gx,gy,3,1,C.grassLt); p(gx+1,gy-1,1,1,C.grassLt); }
+    else if(r>0.4) p(gx,gy,2,1,C.grassDk);
+  }
+
+  const rx = MARGIN + D_W, ry = ROAD_Y;
+  // dirt roads with baked edges
+  p(0, ry-1, W, ROAD+2, C.dirtEdge);
+  p(0, ry, W, ROAD, C.dirt);
+  p(rx-1, 0, ROAD+2, H, C.dirtEdge);
+  p(rx, 0, ROAD, H, C.dirt);
+  p(0, ry+7, W, 1, C.dirtDk);
+  p(0, ry+ROAD-8, W, 1, C.dirtDk);
+  p(rx+7, 0, 1, H, C.dirtDk);
+  p(rx+ROAD-8, 0, 1, H, C.dirtDk);
+  // repaint the junction so the seams don't cross
+  p(rx, ry, ROAD, ROAD, C.dirt);
+  for(let i=0;i<700;i++){
+    const gx=(rnd()*W)|0, gy=(rnd()*H)|0;
+    if((gy>ry && gy<ry+ROAD) || (gx>rx && gx<rx+ROAD)){
+      const r=rnd();
+      if(r>0.9){ p(gx,gy,2,2,C.stone); p(gx,gy+1,2,1,C.stoneDk); }
+      else if(r>0.55) p(gx,gy,2,1,C.dirtDk);
+    }
+  }
+
+  const spurs = [];
+  // a street runs in front of every row of doors, with a winding spur
+  // out to the main road — this is what the villagers actually walk on
+  DISTRICTS.forEach((d, di) => {
+    const r = DR[di];
+    const mine = plots.filter(pl => pl.agent.role === d.key);
+    if (!mine.length) return;
+    const rows = Math.max(...mine.map(pl => Math.round((pl.y - (r.y+PAD+SIGN_H)) / (HOUSE_H+GAP_Y)))) + 1;
+    const topSide = di < 2;
+
+    for (let row = 0; row < rows; row++) {
+      const rowY = r.y + PAD + SIGN_H + row*(HOUSE_H+GAP_Y);
+      const laneY = rowY + HOUSE_H + LANE_Y + (LANE_H>>1);
+      const inRow = mine.filter(pl => Math.abs(pl.y - rowY) < 4);
+      if (!inRow.length) continue;
+      const x0 = Math.min(...inRow.map(pl => pl.x)) - 8;
+      const x1 = Math.max(...inRow.map(pl => pl.x)) + HOUSE_W + 8;
+      dirtPath(p, [[x0, laneY], [x1, laneY]], LANE_H);
+      // a stub up to each front door
+      inRow.forEach(pl => dirtPath(p, [[pl.x+27, laneY], [pl.x+27, rowY+HOUSE_H-2]], 7));
+    }
+
+    // spur from the last lane out to the main road, with a couple of bends
+    const lastY = r.y + PAD + SIGN_H + (rows-1)*(HOUSE_H+GAP_Y) + HOUSE_H + LANE_Y + (LANE_H>>1);
+    const spurX = r.x + PAD + Math.round(D_W*0.34);
+    const jogX = spurX + (di % 2 ? -34 : 38);
+    const roadY = topSide ? ry + 4 : ry + ROAD - 4;
+    const midY = topSide
+      ? lastY + Math.round((roadY - lastY) * 0.55)
+      : lastY - Math.round((lastY - roadY) * 0.55);
+    dirtPath(p, [[spurX, lastY], [spurX, midY], [jogX, midY], [jogX, roadY]], 8);
+    spurs.push(jogX);
+  });
+
+  // ponds and orchards fill whatever the houses didn't use
+  DISTRICTS.forEach((d, di) => {
+    const r = DR[di];
+    const mine = plots.filter(pl => pl.agent.role === d.key);
+    const rows = mine.length ? Math.ceil(mine.length / COLS) : 0;
+    const used = SIGN_H + rows*(HOUSE_H+GAP_Y) + PAD*2;
+    const spare = r.h - used;
+    if (spare < 70) return;
+    const top = r.y + used - PAD + 6;
+    pondTo(p, r.x + PAD + 10, top + 8, Math.round(D_W*0.42), Math.min(58, spare-24), rnd);
+    const ox = r.x + PAD + Math.round(D_W*0.55);
+    const tone = di % 2
+      ? {light:"#ffd7e6", mid:"#f2a8c4", dark:"#c9789c"}      // cherry
+      : {light:"#fff3c9", mid:"#f2d98a", dark:"#c9ab52"};     // golden
+    for (let oy = 0; oy < Math.min(2, Math.floor((spare-30)/34)); oy++)
+      for (let ox2 = 0; ox2 < 3; ox2++)
+        blossomTreeTo(p, ox + ox2*26, top + 10 + oy*34, 7, tone);
+  });
+
+  // hedges along the district frontage, with a gap where the path comes through
+  DISTRICTS.forEach((d, di) => {
+    const r = DR[di];
+    for(let i = 2; i < r.w - 6; i += 7){
+      const hx = r.x + i;
+      if(spurs.some(sx => Math.abs(hx - sx) < 16)) continue;
+      const hy = r.y + r.h - 12;
+      if(Math.abs(hx - (rx + (ROAD>>1))) < PLAZA*0.6 &&
+         Math.abs(hy - (ry + (ROAD>>1))) < PLAZA*0.6) continue;
+      bushTo(p, hx, hy, 5);
+    }
+  });
+
+  // forest ring around the outside of town
+  const onRoad = (ax,ay)=> (ay>ry-10 && ay<ry+ROAD+10) || (ax>rx-10 && ax<rx+ROAD+10);
+  const inPlot = (ax,ay)=> DR.some(d=> ax>d.x-9 && ax<d.x+d.w+9 && ay>d.y-9 && ay<d.y+d.h+9);
+  for(let gy=-6; gy<H+6; gy+=17){
+    for(let gx=-6; gx<W+6; gx+=19){
+      const r = 6+((rnd()*3)|0);
+      const jx = gx + ((rnd()*7)|0), jy = gy + ((rnd()*7)|0);
+      if(onRoad(jx+r, jy+r) || inPlot(jx+r, jy+r)) continue;
+      const roll = rnd();
+      if(roll > 0.93)      stumpTo(p, jx+2, jy+4);
+      else if(roll > 0.89) rockTo(p, jx+2, jy+3, 4 + ((rnd()*2)|0));
+      else if(roll > 0.86) logsTo(p, jx, jy+4);
+      else if(roll > 0.84) barrelsTo(p, jx+1, jy+3);
+      else {
+        treeTo(p, jx, jy, r);
+        if(rnd() > 0.86) shroomsTo(p, jx+r+4, jy+r*2-2);
+      }
+    }
+  }
+
+  // grass overhangs the dirt in scalloped bumps rather than a ruled line
+  const scallop = (edge, horizontal, inward) => {
+    const len = horizontal ? W : H;
+    let d = 2;
+    for(let i = 0; i < len; i += 3){
+      d = Math.max(1, Math.min(4, d + ((rnd()*3)|0) - 1));   // random walk, stays continuous
+      const w2 = 3;
+      const y0 = inward ? edge : edge - d + 1;
+      if(horizontal){
+        p(i, y0, w2, d, C.grass);
+        p(i, inward ? y0 + d : y0 - 1, w2, 1, C.grassDk);
+      } else {
+        p(y0, i, d, w2, C.grass);
+        p(inward ? y0 + d : y0 - 1, i, 1, w2, C.grassDk);
+      }
+    }
+  };
+  scallop(ry, true, true);
+  scallop(ry + ROAD, true, false);
+  scallop(rx, false, true);
+  scallop(rx + ROAD, false, false);
+  // work benches, hedges and flowers in the yards
+  plots.forEach(pl=>{
+    benchTo(p, pl.x+30, pl.y+HOUSE_H+BENCH_Y, pl.agent.role);
+    if(!(pl.kids && pl.kids.length)) bushTo(p, pl.x-12, pl.y+HOUSE_H+BENCH_Y-2, 4);
+    if((pl.x+pl.y) % 3 === 0) flowersTo(p, pl.x+HOUSE_W+2, pl.y+HOUSE_H-4, rnd);
+  });
+
+  plazaTo(p, rx + (ROAD>>1), ry + (ROAD>>1), rnd);
+  gardens.forEach(g => gardenTo(p, g.x, g.y, g.w, g.h));
+}
+
+function treeTo(p, x, y, r){
+  const cx = x+r, cy = y+r;
+  p(x+2, cy+r+2, r*2-4, 3, C.grassSh);
+  p(cx-3, cy+r-3, 6, 9, C.outline);
+  p(cx-2, cy+r-3, 4, 8, C.woodDk);
+  p(cx-2, cy+r-3, 2, 8, C.wood);
+  for(let dy=-r; dy<=r; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, r*r - dy*dy)));
+    if(!hw) continue;
+    p(cx-hw-1, cy+dy, hw*2+2, 1, C.outline);
+    if(hw>0) p(cx-hw, cy+dy, hw*2, 1, dy > r*0.35 ? C.leafDk : C.leaf);
+  }
+  for(let dy=-r+1; dy<-r*0.1; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, (r-1)*(r-1) - dy*dy)));
+    if(hw>1) p(cx-hw, cy+dy, hw+1, 1, C.leafLt);
+  }
+  p(cx-2, cy-r+2, 3, 2, "#a3e388");
+}
+
+function dirtPath(p, pts, w){
+  const seg = (x1,y1,x2,y2,ww,col) => {
+    if(x1 === x2) p(x1-(ww>>1), Math.min(y1,y2), ww, Math.abs(y2-y1)+1, col);
+    else          p(Math.min(x1,x2), y1-(ww>>1), Math.abs(x2-x1)+1, ww, col);
+  };
+  for(const pass of [[w+2, C.dirtEdge],[w, C.dirt]]){
+    for(let i=0;i<pts.length-1;i++){
+      seg(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1], pass[0], pass[1]);
+      p(pts[i+1][0]-(pass[0]>>1), pts[i+1][1]-(pass[0]>>1), pass[0], pass[0], pass[1]);
+    }
+  }
+}
+
+function pondTo(p, x, y, w, h, rnd){
+  // irregular blob, wider in the middle
+  const cx = x + w/2, cy = y + h/2, rx2 = w/2, ry2 = h/2;
+  let wob = 0;
+  for(let dy=0; dy<h; dy++){
+    const ny = (y+dy - cy) / ry2;
+    if(Math.abs(ny) > 1) continue;
+    wob = Math.max(-2, Math.min(2, wob + ((rnd()*3)|0) - 1));
+    const half = rx2 * Math.sqrt(1 - ny*ny) + wob;
+    const x0 = Math.round(cx - half), ww = Math.round(half*2);
+    if(ww < 4) continue;
+    p(x0-1, y+dy, ww+2, 1, C.outline);
+    p(x0, y+dy, ww, 1, dy < 3 ? C.waterDk : C.water);
+    if(dy > h-4) p(x0, y+dy, ww, 1, C.waterDk);
+  }
+  // lily pads and a glint
+  for(let i=0;i<3;i++){
+    const px2 = x + 6 + ((rnd()*(w-14))|0), py2 = y + 4 + ((rnd()*(h-8))|0);
+    p(px2-1, py2-1, 7, 5, C.outline);
+    p(px2, py2, 5, 3, C.leafDk);
+    p(px2+1, py2, 3, 1, C.leaf);
+    if(i === 0){ p(px2+1, py2-3, 3, 3, C.outline); p(px2+2, py2-2, 1, 1, "#f2d05a"); }
+  }
+  p(x+Math.round(w*0.3), y+3, 6, 1, "#bfe4f2");
+  p(x+Math.round(w*0.3)+2, y+5, 4, 1, "#bfe4f2");
+}
+
+function blossomTreeTo(p, x, y, r, tone){
+  const cx = x+r, cy = y+r;
+  p(x+2, cy+r+2, r*2-4, 3, C.grassSh);
+  p(cx-3, cy+r-3, 6, 9, C.outline);
+  p(cx-2, cy+r-3, 4, 8, C.woodDk);
+  p(cx-2, cy+r-3, 2, 8, C.wood);
+  for(let dy=-r; dy<=r; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, r*r - dy*dy)));
+    if(!hw) continue;
+    p(cx-hw-1, cy+dy, hw*2+2, 1, C.outline);
+    p(cx-hw, cy+dy, hw*2, 1, dy > r*0.35 ? tone.dark : tone.mid);
+  }
+  for(let dy=-r+1; dy<-r*0.1; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, (r-1)*(r-1) - dy*dy)));
+    if(hw>1) p(cx-hw, cy+dy, hw+1, 1, tone.light);
+  }
+  // petals on the grass below
+  p(cx-r-1, cy+r+3, 2, 1, tone.mid);
+  p(cx+2, cy+r+4, 2, 1, tone.light);
+  p(cx-2, cy+r+2, 2, 1, tone.mid);
+}
+
+function hedgeTo(p, x, y, len, vertical){
+  for(let i=0; i<len; i+=7) {
+    if(vertical) bushTo(p, x, y+i, 5);
+    else bushTo(p, x+i, y, 5);
+  }
+}
+
+function stumpTo(p, x, y){
+  p(x+1, y+7, 10, 2, C.grassSh);
+  p(x, y+2, 12, 7, C.outline);
+  p(x+1, y+3, 10, 5, C.woodDk);
+  p(x+1, y, 10, 4, C.outline);
+  p(x+2, y+1, 8, 3, C.wood);
+  p(x+4, y+2, 4, 1, C.woodLt);
+  p(x+5, y+2, 2, 1, C.woodDk);
+}
+
+function logsTo(p, x, y){
+  p(x+1, y+9, 14, 2, C.grassSh);
+  for(let i=0;i<2;i++){
+    const yy = y + 5 - i*4, w = 14 - i*3, xx = x + i*2;
+    p(xx-1, yy-1, w+2, 6, C.outline);
+    p(xx, yy, w, 4, C.woodDk);
+    p(xx, yy, w, 1, C.wood);
+    p(xx+w-4, yy, 4, 4, C.wood);
+    p(xx+w-3, yy+1, 2, 2, C.woodLt);
+  }
+}
+
+function barrelsTo(p, x, y){
+  for(let i=0;i<2;i++){
+    const xx = x + i*8, yy = y + (i?2:0);
+    p(xx, yy+9, 7, 2, C.grassSh);
+    p(xx-1, yy-1, 9, 11, C.outline);
+    p(xx, yy, 7, 10, C.wood);
+    p(xx, yy+2, 7, 1, C.woodDk);
+    p(xx, yy+7, 7, 1, C.woodDk);
+    p(xx+1, yy, 2, 10, C.woodLt);
+  }
+}
+
+function rockTo(p, x, y, r){
+  p(x, y+r*2-1, r*2+2, 2, C.grassSh);
+  for(let dy=-r; dy<=r; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, r*r - dy*dy)));
+    if(!hw) continue;
+    p(x+r-hw, y+r+dy, hw*2, 1, C.outline);
+    if(hw>1) p(x+r-hw+1, y+r+dy, hw*2-2, 1, dy>0 ? C.stoneDk : C.stone);
+  }
+  p(x+r-2, y+2, 2, 2, "#c3ccd2");
+}
+
+function shroomsTo(p, x, y){
+  for(let i=0;i<2;i++){
+    const xx = x + i*5, yy = y + (i?2:0);
+    p(xx, yy+3, 3, 3, C.outline);
+    p(xx+1, yy+3, 1, 2, "#f0e6d2");
+    p(xx-1, yy, 5, 4, C.outline);
+    p(xx, yy+1, 3, 2, "#d94f4a");
+    p(xx+1, yy+1, 1, 1, "#f7dcd0");
+  }
+}
+
+function benchTo(p, x, y, role){
+  const d = DISTRICTS.find(z=>z.key===role);
+  p(x, y+12, 18, 2, C.grassSh);
+  p(x-1, y+3, 20, 5, C.outline);
+  p(x, y+4, 18, 3, C.wood);
+  p(x, y+6, 18, 1, C.woodDk);
+  p(x+1, y+8, 3, 5, C.woodDk);
+  p(x+14, y+8, 3, 5, C.woodDk);
+  p(x+3, y-1, 5, 5, C.outline);
+  p(x+4, y, 3, 3, C.stone);
+  p(x+11, y-2, 3, 6, C.outline);
+  p(x+12, y-1, 1, 5, C.woodDk);
+  p(x+10, y-3, 5, 3, C.outline);
+  p(x+11, y-2, 3, 1, d.roofDark);
+}
+
+function bushTo(p, x, y, r){
+  const cx=x+r, cy=y+r;
+  p(x+1, cy+r+1, r*2-2, 2, C.grassSh);
+  for(let dy=-r; dy<=r; dy++){
+    const hw = Math.round(Math.sqrt(Math.max(0, r*r-dy*dy)));
+    if(!hw) continue;
+    p(cx-hw-1, cy+dy, hw*2+2, 1, C.outline);
+    p(cx-hw, cy+dy, hw*2, 1, dy > r*0.3 ? C.leafDk : C.leaf);
+  }
+  p(cx-r+1, cy-r+2, 2, 2, C.leafLt);
+}
+
+function flowersTo(p, x, y, rnd){
+  const petals = ["#f2d05a","#e87ba8","#f0f0f0"];
+  for(let i=0;i<3;i++){
+    const fx = x + i*4 + ((rnd()*2)|0), fy = y + ((rnd()*6)|0);
+    p(fx, fy+2, 1, 2, C.leafDk);
+    p(fx-1, fy, 3, 2, petals[i % petals.length]);
+  }
+}
+
+/* ── the town square ────────────────────────────────────────────────────
+   Where the two roads meet. Cobbled, with the wishing well at the centre,
+   a couple of market stalls, a noticeboard and somewhere to sit.        */
+const PLAZA = 108;
+
+function cobbleTo(p, cx, cy, size, rnd){
+  const half = size >> 1, rad = 20;
+  const rowHalf = dy => {
+    const d = Math.abs(dy) - (half - rad);
+    if(d <= 0) return half;
+    return Math.round((half - rad) + Math.sqrt(Math.max(0, rad*rad - d*d)));
+  };
+  for(let dy = -half; dy <= half; dy++){
+    const hw = rowHalf(dy);
+    p(cx-hw-1, cy+dy, hw*2+2, 1, C.outline);
+    p(cx-hw, cy+dy, hw*2, 1, "#b9b2a4");
+  }
+  // individual cobbles, offset every other course
+  for(let dy = -half+2; dy <= half-3; dy += 5){
+    const hw = rowHalf(dy) - 2;
+    const shift = ((dy/5)|0) % 2 ? 3 : 0;
+    for(let dx = -hw+shift; dx < hw-4; dx += 7){
+      const tone = rnd() > 0.72 ? "#cfc7b6" : (rnd() > 0.4 ? "#c4bcac" : "#aba393");
+      p(cx+dx, cy+dy, 6, 4, tone);
+      p(cx+dx, cy+dy+3, 6, 1, "#9d9585");
+    }
+  }
+  // kerb
+  for(let dy = -half; dy <= half; dy++){
+    const hw = rowHalf(dy);
+    p(cx-hw, cy+dy, 2, 1, "#8d857a");
+    p(cx+hw-2, cy+dy, 2, 1, "#8d857a");
+  }
+}
+
+function stallTo(p, x, y, stripe){
+  // counter
+  p(x+1, y+24, 30, 2, C.grassSh);
+  p(x-1, y+15, 34, 11, C.outline);
+  p(x, y+16, 32, 9, C.wood);
+  p(x, y+18, 32, 1, C.woodDk);
+  p(x+2, y+23, 3, 4, C.woodDk);
+  p(x+27, y+23, 3, 4, C.woodDk);
+  // posts
+  p(x+1, y+2, 3, 14, C.woodDk);
+  p(x+28, y+2, 3, 14, C.woodDk);
+  // striped awning
+  p(x-2, y-1, 36, 9, C.outline);
+  for(let i=0;i<32;i+=4){
+    p(x+i, y, 4, 7, (i/4)%2 ? "#f4f0e4" : stripe);
+  }
+  p(x-2, y+7, 36, 2, C.outline);
+  for(let i=0;i<34;i+=6) p(x-1+i, y+8, 3, 2, (i/6)%2 ? "#f4f0e4" : stripe);
+  // goods on the counter
+  p(x+4, y+12, 5, 4, C.outline); p(x+5, y+13, 3, 2, "#d94f4a");
+  p(x+11, y+13, 4, 3, C.outline); p(x+12, y+14, 2, 1, "#f2d05a");
+  p(x+18, y+11, 6, 5, C.outline); p(x+19, y+12, 4, 3, C.leafDk);
+  p(x+25, y+13, 4, 3, C.outline); p(x+26, y+14, 2, 1, "#e8a33c");
+}
+
+function noticeTo(p, x, y){
+  p(x+2, y+22, 16, 2, C.grassSh);
+  p(x+3, y+14, 3, 9, C.woodDk);
+  p(x+13, y+14, 3, 9, C.woodDk);
+  p(x-1, y-1, 22, 17, C.outline);
+  p(x, y, 20, 15, C.woodDk);
+  p(x+1, y+1, 18, 12, C.wood);
+  // pinned notices
+  p(x+3, y+3, 6, 5, "#f4f0e4"); p(x+4, y+4, 4, 1, "#8d857a"); p(x+4, y+6, 3, 1, "#8d857a");
+  p(x+11, y+2, 6, 4, "#efe4c8"); p(x+12, y+3, 4, 1, "#8d857a");
+  p(x+10, y+8, 7, 4, "#f4f0e4"); p(x+11, y+9, 5, 1, "#8d857a");
+}
+
+function plazaBenchTo(p, x, y){
+  p(x+1, y+9, 20, 2, C.grassSh);
+  p(x-1, y+1, 24, 5, C.outline);
+  p(x, y+2, 22, 3, C.wood);
+  p(x, y+4, 22, 1, C.woodDk);
+  p(x+2, y+6, 3, 4, C.woodDk);
+  p(x+17, y+6, 3, 4, C.woodDk);
+  p(x-1, y-4, 24, 4, C.outline);
+  p(x, y-3, 22, 2, C.wood);
+}
+
+function lanternTo(p, x, y){
+  p(x, y+14, 6, 2, C.grassSh);
+  p(x+1, y+4, 3, 11, C.outline);
+  p(x+2, y+4, 1, 10, C.woodDk);
+  p(x-1, y-3, 8, 8, C.outline);
+  p(x, y-2, 6, 6, "#f2d05a");
+  p(x+1, y-1, 4, 4, "#fff3c9");
+  p(x, y-4, 6, 2, C.stoneDk);
+}
+
+function planterTo(p, x, y){
+  p(x+1, y+9, 12, 2, C.grassSh);
+  p(x-1, y+3, 16, 8, C.outline);
+  p(x, y+4, 14, 6, C.wood);
+  p(x, y+6, 14, 1, C.woodDk);
+  p(x+1, y, 12, 4, C.leafDk);
+  p(x+2, y-1, 10, 3, C.leaf);
+  p(x+3, y-2, 2, 2, "#f2d05a");
+  p(x+7, y-2, 2, 2, "#e87ba8");
+  p(x+10, y-1, 2, 2, "#f4f0e4");
+}
+
+function plazaTo(p, cx, cy, rnd){
+  cobbleTo(p, cx, cy, PLAZA, rnd);
+  const h = PLAZA >> 1;
+  stallTo(p, cx - h + 6,  cy - h + 8, "#d94f4a");
+  stallTo(p, cx + 4,      cy + h - 34, "#4f8fd9");
+  noticeTo(p, cx + h - 28, cy - h + 12);
+  plazaBenchTo(p, cx - h + 8, cy + h - 22);
+  lanternTo(p, cx - h + 4,  cy - 6);
+  lanternTo(p, cx + h - 10, cy + 8);
+  planterTo(p, cx + h - 24, cy + h - 18);
+  planterTo(p, cx - h + 34, cy - h + 4);
+  wellTo(p, cx - 11, cy - 6);
+}
+
+function wellTo(p, x, y){
+  // stone ring
+  p(x+1, y+21, 20, 3, C.grassSh);
+  p(x-2, y+8, 26, 15, C.outline);
+  p(x-1, y+9, 24, 13, C.stoneDk);
+  for(let r2=0;r2<2;r2++)
+    for(let i=0;i<24;i+=6)
+      p(x+i-1 + (r2?3:0), y+10+r2*6, 5, 5, r2 ? C.stone : "#b3bdc4");
+  p(x+4, y+11, 14, 8, C.outline);
+  p(x+5, y+12, 12, 6, C.waterDk);
+  p(x+6, y+13, 10, 4, C.water);
+  p(x+7, y+13, 4, 1, "#bfe4f2");
+  // posts and shingled roof
+  p(x+1, y-6, 4, 15, C.outline);
+  p(x+2, y-6, 2, 14, C.woodDk);
+  p(x+17, y-6, 4, 15, C.outline);
+  p(x+18, y-6, 2, 14, C.woodDk);
+  for(let i=0;i<7;i++){
+    const w = 8 + i*3, rx2 = x + 11 - (w>>1);
+    p(rx2-1, y-13+i, w+2, 1, C.outline);
+    p(rx2, y-13+i, w, 1, i%3===2 ? "#8f5a2e" : C.wood);
+  }
+  p(x-3, y-7, 28, 2, C.outline);
+  p(x-2, y-7, 26, 1, "#8f5a2e");
+  // rope and bucket
+  p(x+10, y-5, 1, 8, "#e8dcc0");
+  p(x+7, y+2, 8, 7, C.outline);
+  p(x+8, y+3, 6, 5, C.wood);
+  p(x+8, y+5, 6, 1, C.woodDk);
+  p(x+6, y+2, 10, 1, C.woodDk);
+}
+
+function gardenTo(p, x, y, w, h){
+  p(x-1, y-1, w+2, h+2, C.outline);
+  p(x, y, w, h, C.soil);
+  for(let ry=3; ry<h-2; ry+=7) p(x+2, y+ry, w-4, 3, C.soilDk);
+  for(let ry=3; ry<h-2; ry+=7){
+    for(let cx=4; cx<w-4; cx+=8){
+      p(x+cx, y+ry-3, 4, 4, C.crop);
+      p(x+cx+1, y+ry-4, 2, 2, "#5cb45f");
+      if((cx+ry)%3===0) p(x+cx+1, y+ry-1, 2, 2, C.fruit);
+    }
+  }
+  for(let fx=0; fx<=w; fx+=8){ p(x+fx-1, y-4, 2, h+8, C.woodDk); }
+  p(x-1, y-3, w+2, 2, C.wood);
+  p(x-1, y+h+1, w+2, 2, C.wood);
+}
+
+/* ---------- sprites ---------- */
+function drawHouse(x, y, ag){
+  const d = DISTRICTS.find(z=>z.key===ag.role);
+  const dead = ag.status==="offline";
+  const roof = dead ? C.off : d.roof, roofDk = dead ? C.offDk : d.roofDark;
+  const wall = dead ? "#aab2b8" : C.wall, wallDk = dead ? "#8d959b" : C.wallDk;
+  const O = C.outline;
+
+  px(x+5, y+HOUSE_H-3, HOUSE_W-10, 3, C.grassSh);
+
+  const bodyX = x+6, bodyW = 42, bodyY = y+36, bodyH = 27;
+  px(bodyX-1, bodyY-1, bodyW+2, bodyH+2, O);
+  px(bodyX, bodyY, bodyW, bodyH, wall);
+  px(bodyX, bodyY+bodyH-8, bodyW, 8, wallDk);
+  px(bodyX, bodyY, 4, bodyH, C.wood);
+  px(bodyX+bodyW-4, bodyY, 4, bodyH, C.wood);
+  px(bodyX+3, bodyY, 1, bodyH, C.woodDk);
+  px(bodyX+bodyW-4, bodyY, 1, bodyH, C.woodDk);
+  px(bodyX, bodyY+bodyH-4, bodyW, 4, C.stoneDk);
+  for(let i=0;i<bodyW-2;i+=6) px(bodyX+i+1, bodyY+bodyH-3, 4, 2, C.stone);
+
+  // roof
+  const roofTop = y+2, rows = 21;
+  for(let i=0;i<rows;i++){
+    const w = 14 + Math.round(i*(HOUSE_W-14)/(rows-1));
+    const rxx = x + ((HOUSE_W-w)>>1), ryy = roofTop+i;
+    px(rxx-1, ryy, w+2, 1, O);
+    px(rxx, ryy, w, 1, (i%3===2) ? roofDk : roof);
+    if(i%3!==2) px(rxx+1, ryy, 2, 1, dead ? C.off : "#ffffff22");
+  }
+  px(x+19, roofTop-2, 16, 2, O);
+  px(x+20, roofTop-1, 14, 1, roofDk);
+  px(x, roofTop+rows, HOUSE_W, 2, O);
+  px(x+1, roofTop+rows, HOUSE_W-2, 1, roofDk);
+  px(x+37, y+4, 9, 17, O);
+  px(x+38, y+5, 7, 16, C.stoneDk);
+  px(x+38, y+5, 7, 3, C.stone);
+  px(x+39, y+10, 2, 2, C.stone);
+  px(x+42, y+14, 2, 2, C.stone);
+
+  // model pennant on the ridge
+  const flag = dead ? C.offDk : (MODEL_COLOR[ag.model] || "#63a4e0");
+  px(x+25, y-8, 2, 13, O);
+  px(x+27, y-8, 10, 2, O);
+  for(let i=0;i<5;i++) px(x+27, y-6+i, 10-i*2, 1, i===2 ? O : flag);
+
+  // facade nameplate
+  const nb = {x: bodyX-2, y: y+23, w: bodyW+4, h: 13};
+  px(nb.x-1, nb.y-1, nb.w+2, nb.h+2, O);
+  px(nb.x, nb.y, nb.w, nb.h, C.woodDk);
+  px(nb.x+1, nb.y+1, nb.w-2, nb.h-3, dead ? "#6c7278" : C.wood);
+  px(nb.x+1, nb.y+1, nb.w-2, 1, dead ? "#7d8288" : C.woodLt);
+  ctx.font = '8px "Silkscreen", monospace';
+  ctx.textBaseline = "top";
+  let nm = ag.name;
+  // prefer chopping at a word boundary over sawing a word in half
+  while(nm.includes("-") && ctx.measureText(nm).width > nb.w-6){
+    nm = nm.slice(0, nm.lastIndexOf("-"));
+  }
+  while(nm.length > 1 && ctx.measureText(nm).width > nb.w-6) nm = nm.slice(0,-1);
+  ctx.fillStyle = dead ? "#2d3238" : "#2b1d10";
+  ctx.fillText(nm, nb.x + Math.round((nb.w - ctx.measureText(nm).width)/2), nb.y+3);
+
+  // windows + door
+  const lit = ag.status==="working";
+  const winC = dead ? "#3d454b" : (lit ? C.winOn : C.winOff);
+  [x+12, x+34].forEach(wx=>{
+    px(wx-1, bodyY+4, 10, 10, O);
+    px(wx, bodyY+5, 8, 8, winC);
+    px(wx+3, bodyY+5, 1, 8, C.woodDk);
+    px(wx, bodyY+8, 8, 1, C.woodDk);
+    px(wx-2, bodyY+14, 12, 2, C.woodDk);
+    if(lit) px(wx, bodyY+5, 8, 1, "#fff0b8");
+  });
+  const dx = x+23, dy = bodyY+9;
+  px(dx-1, dy-1, 10, 19, O);
+  px(dx, dy, 8, 18, C.woodDk);
+  px(dx+1, dy+1, 6, 16, C.wood);
+  px(dx+4, dy+1, 1, 16, C.woodDk);
+  px(dx+5, dy+9, 1, 2, "#ffd166");
+  px(dx-3, bodyY+bodyH, 14, 3, C.stone);
+  px(dx-3, bodyY+bodyH+2, 14, 1, C.stoneDk);
+}
+
+function drawBranchPost(x, y, branch, dim){
+  if(!branch) return;
+  ctx.font = '8px "Silkscreen", monospace';
+  ctx.textBaseline = "top";
+  const seg = String(branch).split("/");
+  let txt = seg[seg.length-1];
+  while(txt.length > 1 && ctx.measureText(txt).width > 42) txt = txt.slice(0,-1);
+  const w = Math.max(24, Math.round(ctx.measureText(txt).width) + 8);
+  const bx2 = x + ((HOUSE_W - w) >> 1);
+  px(bx2 + (w>>1) - 1, y+10, 3, 5, C.outline);
+  px(bx2-1, y-1, w+2, 12, C.outline);
+  px(bx2, y, w, 10, dim ? "#6c7278" : "#3f4c56");
+  px(bx2, y, w, 1, dim ? "#7d8288" : "#55636f");
+  ctx.fillStyle = dim ? "#9aa1a7" : "#bcd3e0";
+  ctx.fillText(txt, bx2+4, y+1);
+}
+
+function drawShed(x, y, ag){
+  const d = DISTRICTS.find(z=>z.key===ag.role);
+  const dead = ag.status==="offline";
+  const O = C.outline;
+  px(x+1, y+15, 14, 2, C.grassSh);
+  px(x+1, y+7, 14, 9, O);
+  px(x+2, y+8, 12, 7, dead ? "#aab2b8" : C.wallDk);
+  for(let i=0;i<5;i++){
+    const w = 6 + i*2, rxx = x + 8 - (w>>1);
+    px(rxx-1, y+2+i, w+2, 1, O);
+    px(rxx, y+2+i, w, 1, (i===3) ? (dead?C.offDk:d.roofDark) : (dead?C.off:d.roof));
+  }
+  px(x, y+7, 16, 1, O);
+  const lit = ag.status==="working";
+  px(x+3, y+10, 4, 4, O);
+  px(x+4, y+10, 2, 3, dead ? "#3d454b" : (lit ? C.winOn : C.winOff));
+  px(x+9, y+9, 4, 6, C.woodDk);
+  if(ag.status==="blocked" || ag.status==="done"){
+    const col = ag.status==="blocked" ? C.alert : C.ok;
+    px(x+6, y-3, 5, 5, O); px(x+7, y-2, 3, 3, col);
+  }
+}
+
+const PERSON = [
+  "...oooo...",
+  "..ohhhho..",
+  ".ohhhhhho.",
+  ".ohssssho.",
+  ".ohssssho.",
+  "..osssso..",
+  ".obbbbbbo.",
+  "obbbbbbbbo",
+  "obbbbbbbbo",
+  "obbbbbbbbo",
+  ".opp..ppo.",
+  ".opp..ppo.",
+  ".okk..kko.",
+  "..oo..oo.."
+];
+function drawPerson(x, y, body, step){
+  const pal = {o:C.outline, h:"#4a3320", s:"#f0bd8e", b:body, p:"#3f4a57", k:"#2b2118"};
+  px(x+1, y+14, 8, 2, C.grassSh);
+  PERSON.forEach((row, ry)=>{
+    for(let cx=0; cx<row.length; cx++){
+      const ch = row[cx];
+      if(ch===".") continue;
+      const ox = (step && ry>=10) ? (cx<5 ? 1 : -1) : 0;
+      px(x+cx+ox, y+ry, 1, 1, pal[ch]);
+    }
+  });
+}
+
+/* Livestock. Purely decorative — they carry no data, they just make the
+   place feel inhabited instead of like a dashboard with grass on it. */
+const SPRITES = {
+  goose: { pal:{o:C.outline,h:"#f6f4ee",b:"#e8a33c",e:"#2b2118"}, rows:[
+    "...ooo..",
+    "..ohho..",
+    "..oheo..",
+    "..ohbb..",
+    ".oohhoo.",
+    "ohhhhhho",
+    "ohhhhhho",
+    ".ohhhho.",
+    "..b..b.."
+  ]},
+  pig: { pal:{o:C.outline,p:"#e39aa8",n:"#c4707f",e:"#2b2118"}, rows:[
+    "..oooooo..",
+    ".opppppppo",
+    "opppppppno",
+    "oppeppppno",
+    "oppppppppo",
+    ".opppppppo",
+    "..o.oo.o.."
+  ]},
+  duck: { pal:{o:C.outline,h:"#8fae5c",b:"#e8a33c",e:"#2b2118"}, rows:[
+    "...ooo..",
+    "..ohho..",
+    "..oheo..",
+    "..ohbb..",
+    ".oohhoo.",
+    "ohhhhhho",
+    "ohhhhhho",
+    ".ohhhho.",
+    "..b..b.."
+  ]},
+  hen: { pal:{o:C.outline,h:"#c98a5a",b:"#d94f4a",e:"#2b2118"}, rows:[
+    "...bb...",
+    "..ohho..",
+    "..oheo..",
+    "..ohbb..",
+    ".oohhoo.",
+    "ohhhhhho",
+    "ohhhhhho",
+    ".ohhhho.",
+    "..b..b.."
+  ]},
+  cat: { pal:{o:C.outline,a:"#d98b3a",e:"#2b2118",w:"#f2e2c2"}, rows:[
+    ".o.o.....",
+    "oaoao....",
+    "oaeaeo...",
+    "oaawaoooo",
+    "oaaaaaaao",
+    ".oaaaaao.",
+    "..o.o.o.."
+  ]}
+};
+
+function drawSprite(kind, x, y, flip){
+  const s = SPRITES[kind];
+  const w = s.rows[0].length;
+  s.rows.forEach((row, ry)=>{
+    for(let cx=0; cx<w; cx++){
+      const ch = row[flip ? w-1-cx : cx];
+      if(ch === ".") continue;
+      px(x+cx, y+ry, 1, 1, s.pal[ch]);
+    }
+  });
+}
+
+const fauna = [];
+function stockTown(){
+  fauna.length = 0;
+  // no fenced-off roaming boxes — the whole town is theirs, and if a goose
+  // parks itself in front of a nameplate for a minute, so be it
+  const box = { x: 14, y: 14, w: W-30, h: H-30 };
+  const add = (kind, x, y) => fauna.push({
+    kind, x, y, tx:x, ty:y, wait:Math.random()*4,
+    box, flip:false, bob:Math.random()*6
+  });
+  const spread = [
+    ["goose", 0.14, 0.30], ["goose", 0.62, 0.18], ["hen", 0.28, 0.66],
+    ["hen",   0.78, 0.74], ["duck",  0.46, 0.52], ["pig", 0.34, 0.44],
+    ["cat",   0.18, 0.82], ["cat",   0.86, 0.36]
+  ];
+  spread.forEach(([k, fx, fy]) => add(k, Math.round(W*fx), Math.round(H*fy)));
+}
+
+function moveFauna(){
+  if(reduce) return;
+  for(const f of fauna){
+    if(f.wait > 0){ f.wait -= 1/60; continue; }
+    const dx = f.tx - f.x, dy = f.ty - f.y;
+    if(Math.hypot(dx, dy) < 1.2){
+      f.tx = f.box.x + Math.random()*f.box.w;
+      f.ty = f.box.y + Math.random()*f.box.h;
+      f.wait = 0.6 + Math.random()*4;
+      continue;
+    }
+    const spd = f.kind === "pig" ? 0.16 : (f.kind === "cat" ? 0.3 : 0.24);
+    f.x += Math.max(-spd, Math.min(spd, dx * 0.05));
+    f.y += Math.max(-spd, Math.min(spd, dy * 0.05));
+    f.flip = dx < 0;
+  }
+}
+
+function drawFauna(){
+  for(const f of fauna){
+    const moving = f.wait <= 0;
+    const hop = (moving && f.kind !== "pig" && f.kind !== "cat"
+                 && Math.floor(t*6 + f.bob) % 2) ? -1 : 0;
+    px(Math.round(f.x)+1, Math.round(f.y)+ (f.kind==="pig"?7:9), 6, 2, C.grassSh);
+    drawSprite(f.kind, Math.round(f.x), Math.round(f.y)+hop, f.flip);
+  }
+}
+
+function drawBubble(x, y, kind){
+  const col = kind==="blocked" ? C.alert : C.ok;
+  px(x-1, y-1, 13, 13, C.outline);
+  px(x, y, 11, 11, col);
+  px(x+1, y+1, 9, 2, "#ffffff33");
+  px(x+4, y+11, 3, 3, C.outline);
+  px(x+4, y+11, 3, 2, col);
+  if(kind==="blocked"){
+    px(x+5, y+2, 2, 5, "#fff"); px(x+5, y+8, 2, 2, "#fff");
+  } else {
+    px(x+2, y+5, 2, 2, "#1f3a1a"); px(x+3, y+6, 2, 2, "#1f3a1a");
+    px(x+4, y+5, 2, 2, "#1f3a1a"); px(x+5, y+4, 2, 2, "#1f3a1a"); px(x+7, y+2, 2, 2, "#1f3a1a");
+  }
+}
+
+function wrapText(text, maxW){
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = "";
+  for(const w of words){
+    const attempt = line ? line+" "+w : w;
+    if(ctx.measureText(attempt).width > maxW && line){ lines.push(line); line = w; }
+    else line = attempt;
+    if(lines.length === 2) break;
+  }
+  if(lines.length < 2 && line) lines.push(line);
+  if(lines.length === 2){
+    let last = lines[1];
+    const consumed = lines.join(" ").length;
+    if(consumed < String(text).length){
+      while(ctx.measureText(last+"...").width > maxW && last.length) last = last.slice(0,-1);
+      lines[1] = last + "...";
+    }
+  }
+  return lines;
+}
+
+function drawThought(cx, bottomY, text, revealed){
+  if(!text) return;
+  ctx.font = '8px "Silkscreen", monospace';
+  ctx.textBaseline = "top";
+  const lines = wrapText(text, 78);
+  const shown = (revealed == null) ? Infinity : revealed;
+  const w = Math.max(34, Math.ceil(Math.max(...lines.map(l=>ctx.measureText(l).width))) + 10);
+  const h = lines.length*10 + 7;
+  const x = Math.min(W-w-2, Math.max(2, Math.round(cx - w/2)));
+  const y = bottomY - h - 9;
+  px(cx-2, bottomY-3, 4, 4, C.outline);
+  px(cx-1, bottomY-2, 2, 2, "#f7f2e4");
+  px(cx-3, bottomY-8, 5, 5, C.outline);
+  px(cx-2, bottomY-7, 3, 3, "#f7f2e4");
+  px(x-1, y-1, w+2, h+2, C.outline);
+  px(x, y, w, h, "#f7f2e4");
+  px(x+1, y+1, w-2, 1, "#ffffff");
+  // reveal the message a character at a time, like it's still being written
+  ctx.fillStyle = C.outline;
+  let budget = shown;
+  lines.forEach((l,i)=>{
+    if(budget <= 0) return;
+    const part = l.slice(0, Math.max(0, Math.floor(budget)));
+    ctx.fillText(part, x+5, y+4+i*10);
+    if(part.length < l.length || (i === lines.length-1 && budget < l.length + 0.5)){
+      if(Math.floor(t*6) % 2) px(x+5+ctx.measureText(part).width, y+4+i*10, 4, 7, C.outline);
+    }
+    budget -= l.length;
+  });
+}
+
+function drawSparks(x, y, seed){
+  for(let i=0;i<3;i++){
+    const life = ((t*1.6 + i*0.4 + seed*0.05) % 1);
+    ctx.globalAlpha = 1-life;
+    px(x + Math.round(Math.sin((life+i)*6)*5), y - Math.round(life*9), 2, 2, i===1 ? "#ffd166" : "#fff0b8");
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawSmoke(x, y, phase){
+  for(let i=0;i<3;i++){
+    const life = (phase + i*0.33) % 1;
+    const sy = y - life*20;
+    const sx = x + Math.sin((life*3+i)*2.2)*4;
+    const sz = 3 + Math.round(life*3);
+    ctx.globalAlpha = 0.8*(1-life);
+    px(sx, sy, sz, sz, C.smoke);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function signWidth(label){
+  ctx.font = '8px "Silkscreen", monospace';
+  return Math.max(46, Math.round(ctx.measureText(label).width) + 12);
+}
+function drawSign(x, y, label, color){
+  ctx.font = '8px "Silkscreen", monospace';
+  const w = signWidth(label);
+  px(x+4, y+14, 4, 9, C.outline);
+  px(x+w-8, y+14, 4, 9, C.outline);
+  px(x+5, y+14, 2, 8, C.wood);
+  px(x+w-7, y+14, 2, 8, C.wood);
+  px(x-1, y-1, w+2, 16, C.outline);
+  px(x, y, w, 14, C.woodDk);
+  px(x+2, y+2, w-4, 10, color);
+  px(x+2, y+2, w-4, 2, "#ffffff2e");
+  ctx.fillStyle = C.outline;
+  ctx.textBaseline = "top";
+  ctx.fillText(label, x+6, y+4);
+}
+
+/* ---------- layout ---------- */
+function layout(){
+  const rooted = agents.filter(a=>!a.parent);
+  const rowsOf = k => Math.max(1, Math.ceil(rooted.filter(a=>a.role===k).length / COLS));
+  const heightOf = k => SIGN_H + rowsOf(k)*(HOUSE_H+GAP_Y) + PAD*2;
+  const topH = Math.max(heightOf("dev"), heightOf("research"));
+  const botH = Math.max(heightOf("ops"), heightOf("content"));
+  ROAD_Y = MARGIN + topH;
+  H = MARGIN*2 + topH + ROAD + botH;
+  DR = DISTRICTS.map((d,i)=>({
+    x: MARGIN + (i%2)*(D_W+ROAD),
+    y: i<2 ? MARGIN : ROAD_Y + ROAD,
+    w: D_W, h: i<2 ? topH : botH
+  }));
+  if(cv.height !== H){
+    cv.width = W; cv.height = H; bg.width = W; bg.height = H;
+    ctx.imageSmoothingEnabled = false;
+  }
+
+  plots = []; gardens = [];
+  DISTRICTS.forEach((d, di)=>{
+    const r = DR[di];
+    const mine = rooted.filter(a=>a.role===d.key);
+    mine.forEach((ag, i)=>{
+      const x = r.x + PAD + (i%COLS)*(HOUSE_W+GAP_X);
+      const y = r.y + PAD + SIGN_H + ((i/COLS)|0)*(HOUSE_H+GAP_Y);
+      const kids = agents.filter(a=>a.parent===ag.id).slice(0,3)
+        .map((k, ki)=>({agent:k, x: x + 2 + ki*17, y: y + HOUSE_H + SHED_Y}));
+      plots.push({agent:ag, x, y, district:d, kids});
+    });
+    // spare slots in the last row become allotments
+    const spare = mine.length % COLS;
+    if(spare){
+      const row = (mine.length/COLS)|0;
+      const x = r.x + PAD + spare*(HOUSE_W+GAP_X);
+      const y = r.y + PAD + SIGN_H + row*(HOUSE_H+GAP_Y) + 8;
+      const w = (COLS-spare)*(HOUSE_W+GAP_X) - GAP_X;
+      gardens.push({x, y, w, h:40});
+    }
+  });
+  paintBackground();
+  if(!fauna.length) stockTown();
+}
+
+/* ---------- frame ---------- */
+function draw(){
+  t += 1/60;
+  ctx.drawImage(bg, 0, 0);
+
+  DISTRICTS.forEach((d, di)=>{
+    const r = DR[di];
+    ctx.globalAlpha = (filter && filter!==d.key) ? 0.35 : 1;
+    const sx = di === 3 ? r.x + r.w - PAD - signWidth(d.label) : r.x + PAD;
+    drawSign(sx, r.y + PAD, d.label, d.roof);
+    ctx.globalAlpha = 1;
+  });
+
+  plots.forEach(p=>{
+    const ag = p.agent;
+    const faded = filter && filter !== ag.role;
+    ctx.globalAlpha = faded ? 0.3 : 1;
+
+    drawHouse(p.x, p.y, ag);
+    drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch, ag.status==="offline");
+    if(ag.status === "working"){
+      const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
+      drawSmoke(p.x+40, p.y+2, phase);
+    }
+
+    // ---- villager: walks out to the bench when there's work on ----
+    const door = {x: p.x+22, y: p.y+HOUSE_H-15};
+    let a = actors.get(ag.id);
+    if(!a){
+      a = {x:door.x, y:door.y, indoors:true, line:ag.lastLine, popUntil:0};
+      actors.set(ag.id, a);
+    }
+    if(ag.lastLine !== a.line){
+      a.line = ag.lastLine;
+      a.streamAt = t;
+      const typeTime = ag.lastLine.length / 26;
+      if(!reduce && pops < 2 && ag.status !== "offline"){ a.popUntil = t + typeTime + 2.6; pops++; }
+    }
+    if(a.popUntil && t > a.popUntil){ a.popUntil = 0; pops = Math.max(0, pops-1); }
+
+    let target = {x: door.x, y: door.y+3}, working = false;
+    if(ag.status === "working"){
+      target = {x: p.x+16, y: p.y+HOUSE_H+BENCH_Y-3}; working = true;   // at the bench
+    } else if(ag.status === "idle"){
+      const pace = reduce ? 0 : Math.sin(t*0.7 + p.x)*10;
+      target = {x: p.x+22+pace, y: p.y+HOUSE_H-14};
+    } else if(ag.status === "offline"){
+      target = door;
+    }
+
+    if(!(ag.status === "offline" && a.indoors)){
+      const spd = reduce ? 99 : 0.5;
+      const dx = target.x - a.x, dy = target.y - a.y;
+      const dist = Math.hypot(dx, dy);
+      a.x += Math.max(-spd, Math.min(spd, dx));
+      a.y += Math.max(-spd, Math.min(spd, dy));
+      const moving = dist > 1;
+      if(ag.status === "offline" && dist < 1.5) a.indoors = true;
+      else if(ag.status !== "offline") a.indoors = false;
+
+      if(!a.indoors){
+        const atBench = working && dist < 2;
+        const step = reduce ? 0 : (moving ? (Math.floor(t*6 + p.x) % 2) : 0);
+        const bob  = (atBench && !reduce) ? (Math.floor(t*7) % 2) : 0;
+        drawPerson(Math.round(a.x), Math.round(a.y)+bob, DISTRICTS.find(d=>d.key===ag.role).roof, step);
+        if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
+        if(ag.status === "blocked" || ag.status === "done"){
+          const bb = reduce ? 0 : Math.round(Math.sin(t*3 + p.x));
+          drawBubble(Math.round(a.x)+9, Math.round(a.y)-15+bb, ag.status);
+        }
+      }
+    }
+    (p.kids||[]).forEach(k=>{
+      drawShed(k.x, k.y, k.agent);
+      if(k.agent.status==="working" && !reduce){
+        const ph = (t*0.5 + k.x*0.1) % 1;
+        ctx.globalAlpha = (faded?0.3:1) * 0.6*(1-ph);
+        px(k.x+10, k.y+1 - ph*8, 2, 2, C.smoke);
+        ctx.globalAlpha = faded ? 0.3 : 1;
+      }
+      if(k.agent.id===selectedId || k.agent.id===hoverId){
+        ctx.strokeStyle = k.agent.id===selectedId ? "#ffd166" : "#fff";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(k.x-1.5, k.y-1.5, 19, 19);
+      }
+    });
+    ctx.globalAlpha = 1;
+
+    const on = ag.id===selectedId, over = ag.id===hoverId;
+    if(on || over){
+      ctx.strokeStyle = on ? "#ffd166" : "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x-1.5, p.y-1.5, HOUSE_W+3, HOUSE_H+3);
+    }
+  });
+  moveFauna();
+  drawFauna();
+
+  plots.forEach(p=>{
+    if(filter && filter !== p.agent.role) return;
+    const a = actors.get(p.agent.id);
+    if(!a || a.indoors) return;
+    const show = p.agent.id===hoverId || p.agent.id===selectedId || (a.popUntil && t < a.popUntil);
+    if(!show) return;
+    const revealed = reduce ? Infinity : (t - (a.streamAt ?? 0)) * 26;
+    drawThought(Math.round(a.x)+5, Math.round(a.y)-2, p.agent.lastLine, revealed);
+  });
+
+  requestAnimationFrame(draw);
+}
+
+/* ---------- interaction ---------- */
+function hit(evt){
+  const r = cv.getBoundingClientRect();
+  const x = (evt.clientX - r.left) * (W / r.width);
+  const y = (evt.clientY - r.top) * (H / r.height);
+  for(const p of plots){
+    if(filter && filter !== p.agent.role) continue;
+    for(const k of (p.kids||[])) if(x>=k.x-2 && x<=k.x+18 && y>=k.y-4 && y<=k.y+17) return k.agent.id;
+    if(x>=p.x && x<=p.x+HOUSE_W && y>=p.y-4 && y<=p.y+HOUSE_H+6) return p.agent.id;
+  }
+  return null;
+}
+cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId ? "pointer":"default"; });
+cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
+cv.addEventListener("click", e=>{ const id = hit(e); if(id){ selectedId = id; renderPanel(); } });
+cv.addEventListener("keydown", e=>{
+  const vis = [];
+  plots.forEach(p=>{
+    if(filter && filter!==p.agent.role) return;
+    vis.push(p.agent.id);
+    (p.kids||[]).forEach(k=>vis.push(k.agent.id));
+  });
+  if(!vis.length) return;
+  const i = vis.indexOf(selectedId);
+  if(e.key==="ArrowRight"||e.key==="ArrowDown"){ selectedId = vis[(i+1+vis.length)%vis.length]; e.preventDefault(); renderPanel(); }
+  if(e.key==="ArrowLeft"||e.key==="ArrowUp"){ selectedId = vis[(i-1+vis.length)%vis.length]; e.preventDefault(); renderPanel(); }
+});
+
+/* ---------- panel ---------- */
+const STATUS_COLOR = {working:"#ffd166", idle:"#93a1b0", blocked:"#e2504a", done:"#79c25f", offline:"#7d868e"};
+const STATUS_TEXT  = {working:"working", idle:"idle", blocked:"blocked", done:"finished", offline:"offline"};
+const panel = document.getElementById("panel");
+
+function uptime(ms){
+  const s = Math.max(0, Math.floor((Date.now()-ms)/1000));
+  const h = (s/3600)|0, m = ((s%3600)/60)|0;
+  return h ? `${h}h ${m}m` : `${m}m ${s%60}s`;
+}
+function clock(ms){
+  return new Date(ms).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+function money(n){
+  return n >= 1 ? `$${n.toFixed(2)}` : `${(n*100).toFixed(1)}c`;
+}
+function burnRate(ag){
+  const mins = (Date.now() - ag.startedAt) / 60000;
+  return mins > 0.5 ? money(ag.cost/mins) + "/min" : "—";
+}
+function renderPanel(){
+  const ag = agents.find(a=>a.id===selectedId);
+  if(!ag){
+    panel.innerHTML = `<p class="hint">Click a house to see what that agent is doing. Arrow keys walk between houses.</p>`;
+    return;
+  }
+  const d = DISTRICTS.find(x=>x.key===ag.role);
+  const mum = ag.parent ? agents.find(a=>a.id===ag.parent) : null;
+  const kids = agents.filter(a=>a.parent===ag.id);
+  const live = ag.status !== "offline";
+  panel.innerHTML = `
+    <h2>${ag.name}</h2>
+    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : d.label.toLowerCase()}</p>
+    <span class="status-chip"><i style="width:8px;height:8px;background:${STATUS_COLOR[ag.status]};display:inline-block"></i>${STATUS_TEXT[ag.status]}</span>
+    ${live && ag.activity ? `<p class="doing">${ag.activity}</p>` : ""}
+    <dl>
+      <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${ag.model}</dd>
+      <dt>Branch</dt><dd>${ag.branch || "—"}</dd>
+      <dt>Task</dt><dd>${ag.task}</dd>
+      <dt>Sent by</dt><dd>${mum ? `${mum.name} <span class="muted">(agent)</span>` : ag.dispatchedBy}</dd>
+      <dt>Started</dt><dd>${live ? `${clock(ag.startedAt)} <span class="muted">· ${uptime(ag.startedAt)} ago</span>` : "—"}</dd>
+      <dt>Cost</dt><dd>${money(ag.cost)} <span class="muted">· ${live ? burnRate(ag) : "idle"}</span></dd>
+      <dt>Tokens</dt><dd>${ag.tokens.toLocaleString()}</dd>
+      ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${k.name} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
+    </dl>
+    <div class="log">${ag.lastLine}</div>
+    <div class="acts">
+      <button data-act="${ag.status==="working" ? "idle" : "working"}">${ag.status==="working" ? "pause" : "wake"}</button>
+      <button class="danger" data-act="offline">shut down</button>
+    </div>`;
+  panel.querySelectorAll("[data-act]").forEach(b=>{
+    b.onclick = ()=>{ SIM.set(ag.id, b.dataset.act); refresh(); };
+  });
+}
+
+/* ---------- chrome ---------- */
+const tally = document.getElementById("tally");
+function renderTally(){
+  tally.innerHTML = "";
+  DISTRICTS.forEach(d=>{
+    const n = agents.filter(a=>a.role===d.key).length;
+    const busy = agents.filter(a=>a.role===d.key && a.status==="working").length;
+    const b = document.createElement("button");
+    b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
+    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key}<span class="n">${busy}/${n}</span>`;
+    b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
+    tally.appendChild(b);
+  });
+  const busy = agents.filter(a=>a.status==="working").length;
+  const spend = agents.reduce((n,a)=>n + (a.cost||0), 0);
+  document.querySelector(".sub").textContent =
+    `${busy} of ${agents.length} agents working · ${money(spend)} spent so far`;
+}
+const noteEl = document.getElementById("note");
+function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
+
+document.getElementById("connect").onclick = ()=>{
+  const v = document.getElementById("endpoint").value.trim();
+  if(!v){ ENDPOINT = null; feedNote("Back on the demo town."); return refresh(); }
+  ENDPOINT = v; feedNote("connecting..."); refresh();
+};
+document.getElementById("endpoint").addEventListener("keydown", e=>{
+  if(e.key==="Enter") document.getElementById("connect").click();
+});
+document.getElementById("pause").onclick = (e)=>{
+  paused = !paused; SIM.setLive(!paused);
+  e.target.setAttribute("aria-pressed", String(paused));
+  e.target.textContent = paused ? "resume feed" : "pause feed";
+};
+
+async function refresh(){
+  agents = await fetchAgents();
+  layout(); renderTally(); renderPanel();
+}
+refresh();
+setInterval(()=>{ if(!paused) refresh(); }, POLL_MS);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# Dependencies
+node_modules
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# Coverage / build leftovers
+coverage/
+dist/
+build/

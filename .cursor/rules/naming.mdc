@@ -1,0 +1,14 @@
+---
+description: CottageCode naming lock. Do not reopen.
+alwaysApply: true
+---
+
+# Naming lock
+
+- **CottageCode** is the product, tab title, README heading, and npm-style package name (`cottagecode`). CamelCase on purpose so it fights the cottagecore homophone.
+- **Townmap** is the atlas view. It is a word we use, not a second logo, and not the tab title.
+- Each Autohub saved project is a **town**: HubTown, MemTown, FusionTown, AppTown, VaultTown.
+- Town names = distinctive stem + `Town` (autohub → HubTown, not AutoHubTown). Unknown projects get `{Stem}Town` from the repo basename. Never hash strangers into four aesthetic lanes.
+- Each agent is a **cottage**. Chimney smoke = working. Sheds = spawned agents. Blocked = `!`.
+- GitHub repo is `verygoodplugins/cottagecode`.
+- Do not claim Agent Town, AutoYard, or TownMap as the product name.

@@ -1,0 +1,23 @@
+{
+  "name": "cottagecode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pixel townmap of running agents. Each cottage is one agent. Smoke means working.",
+  "license": "MIT",
+  "author": "Jack Arturo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/verygoodplugins/cottagecode.git"
+  },
+  "bin": {
+    "cottagecode": "./src/feed.mjs"
+  },
+  "scripts": {
+    "start": "node src/feed.mjs",
+    "once": "node src/feed.mjs --once"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
