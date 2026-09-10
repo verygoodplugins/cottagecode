@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * agent-town-feed — reads Claude Code's own session transcripts and serves
- * them in the shape Agent Town eats. No dependencies, nothing installed.
+ * cottagecode feed. Reads Claude Code session transcripts and serves them
+ * in the shape the townmap eats. No dependencies, nothing installed.
  *
- *   node agent-town-feed.mjs        →  http://localhost:8787
+ *   node src/feed.mjs        →  http://localhost:8787
  *
  * Flags:
  *   --port 8787       what to listen on
@@ -378,7 +378,7 @@ createServer(async (req, res) => {
   }
   res.writeHead(404, cors).end("not found");
 }).listen(PORT, () => {
-  console.log(`\n  Agent Town  →  http://localhost:${PORT}`);
-  console.log(`  reading     →  ${PROJECTS}`);
-  console.log(`  window      →  last ${Math.round(WINDOW / 3600e3)}h\n`);
+  console.log(`\n  CottageCode  →  http://localhost:${PORT}`);
+  console.log(`  reading      →  ${PROJECTS}`);
+  console.log(`  window       →  last ${Math.round(WINDOW / 3600e3)}h\n`);
 });

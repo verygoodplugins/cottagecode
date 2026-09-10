@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Town</title>
+<title>CottageCode</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
@@ -79,15 +79,15 @@
 <div class="app">
   <header>
     <div>
-      <h1>Agent Town</h1>
-      <p class="sub">Every house is one agent. Smoke means it's working.</p>
+      <h1>CottageCode</h1>
+      <p class="sub">Every cottage is one agent. Smoke means it's working.</p>
     </div>
-    <div class="tally" id="tally" role="group" aria-label="Filter by district"></div>
+    <div class="tally" id="tally" role="group" aria-label="Filter by town"></div>
   </header>
 
   <div class="split">
     <div class="stage">
-      <canvas id="town" tabindex="0" role="img" aria-label="Pixel map of running agents, grouped into districts by role"></canvas>
+      <canvas id="town" tabindex="0" role="img" aria-label="Townmap: pixel map of running agents, grouped into towns by project"></canvas>
       <div class="stage-foot">
         <span class="key"><i style="background:#ffd166"></i>working</span>
         <span class="key"><i style="background:#93a1b0"></i>idle</span>
@@ -104,13 +104,13 @@
         <span class="key"><i style="background:#6fc98a"></i>haiku</span>
       </div>
       <div class="feed">
-        <input id="endpoint" type="url" placeholder="http://localhost:8787/agents" aria-label="Agent status endpoint">
+        <input id="endpoint" type="url" placeholder="http://localhost:8787/agents" aria-label="Cottage status endpoint">
         <button id="connect">connect</button>
-        <p id="note">Showing a demo town. Point it at a URL that returns your agents as JSON.</p>
+        <p id="note">Showing a demo townmap. Point it at a URL that returns cottages as JSON.</p>
       </div>
     </div>
     <aside class="card" id="panel" aria-live="polite">
-      <p class="hint">Click a house to see what that agent is doing. Arrow keys walk between houses.</p>
+      <p class="hint">Click a cottage to see what that agent is doing. Arrow keys walk between cottages.</p>
     </aside>
   </div>
 </div>
@@ -118,8 +118,8 @@
 <script>
 /* =======================================================================
    DATA ADAPTER
-   Agent = { id, name, role, status, task, startedAt, tokens, lastLine, parent }
-   role   : dev | research | ops | content
+   Cottage = { id, name, role, status, task, startedAt, tokens, lastLine, parent }
+   role   : still the four sketch lanes until the Townmap commit
    status : working | idle | blocked | done | offline
    ======================================================================= */
 const POLL_MS = 1500;
@@ -133,7 +133,7 @@ async function fetchAgents(){
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.agents || []);
     if(!Array.isArray(list) || !list.length) throw new Error("no agents in response");
-    feedNote(`live — ${list.length} agents from ${new URL(ENDPOINT).host}`, "#79c25f");
+    feedNote(`live. ${list.length} cottages from ${new URL(ENDPOINT).host}`, "#79c25f");
     return list.map((a,i)=>({
       id: String(a.id ?? "n"+i),
       name: a.name ?? a.id ?? ("agent-"+i),
@@ -151,7 +151,7 @@ async function fetchAgents(){
       lastLine: a.lastLine ?? ""
     }));
   }catch(err){
-    feedNote(`${ENDPOINT} — ${err.message}. Back on the demo town.`, "#e2504a");
+    feedNote(`${ENDPOINT}. ${err.message}. Back on the demo townmap.`, "#e2504a");
     ENDPOINT = null;
     return SIM.snapshot();
   }
@@ -1402,7 +1402,7 @@ function burnRate(ag){
 function renderPanel(){
   const ag = agents.find(a=>a.id===selectedId);
   if(!ag){
-    panel.innerHTML = `<p class="hint">Click a house to see what that agent is doing. Arrow keys walk between houses.</p>`;
+    panel.innerHTML = `<p class="hint">Click a cottage to see what that agent is doing. Arrow keys walk between cottages.</p>`;
     return;
   }
   const d = DISTRICTS.find(x=>x.key===ag.role);
@@ -1450,14 +1450,14 @@ function renderTally(){
   const busy = agents.filter(a=>a.status==="working").length;
   const spend = agents.reduce((n,a)=>n + (a.cost||0), 0);
   document.querySelector(".sub").textContent =
-    `${busy} of ${agents.length} agents working · ${money(spend)} spent so far`;
+    `${busy} of ${agents.length} cottages working · ${money(spend)} spent so far`;
 }
 const noteEl = document.getElementById("note");
 function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
 
 document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
-  if(!v){ ENDPOINT = null; feedNote("Back on the demo town."); return refresh(); }
+  if(!v){ ENDPOINT = null; feedNote("Back on the demo townmap."); return refresh(); }
   ENDPOINT = v; feedNote("connecting..."); refresh();
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
@@ -1473,6 +1473,16 @@ async function refresh(){
   agents = await fetchAgents();
   layout(); renderTally(); renderPanel();
 }
+
+(function boot(){
+  const box = document.getElementById("endpoint");
+  const same = `${location.origin}/agents`;
+  box.value = same;
+  if (location.protocol.startsWith("http")) {
+    ENDPOINT = same;
+    feedNote("connecting to local feed...");
+  }
+})();
 refresh();
 setInterval(()=>{ if(!paused) refresh(); }, POLL_MS);
 requestAnimationFrame(draw);
