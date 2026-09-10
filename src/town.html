@@ -118,39 +118,62 @@
 <script>
 /* =======================================================================
    DATA ADAPTER
-   Cottage = { id, name, role, status, task, startedAt, tokens, lastLine, parent }
-   role   : still the four sketch lanes until the Townmap commit
+   Cottage = { id, name, town, status, task, startedAt, tokens, lastLine, parent }
+   town   : HubTown | MemTown | FusionTown | AppTown | VaultTown | {Stem}Town
    status : working | idle | blocked | done | offline
    ======================================================================= */
 const POLL_MS = 1500;
 let ENDPOINT = null;
+let LIVE = false;
+
+function townKey(ag){
+  return ag.town || ag.role || "WildTown";
+}
+
+function normalizeTown(raw){
+  const s = String(raw || "").trim();
+  if(!s) return "WildTown";
+  const legacy = {dev:"HubTown", research:"MemTown", ops:"FusionTown", content:"AppTown"};
+  if(legacy[s]) return legacy[s];
+  if(/town$/i.test(s)){
+    const stem = s.replace(/town$/i, "");
+    return (stem.charAt(0).toUpperCase() + stem.slice(1)) + "Town";
+  }
+  return s.replace(/(^|[^a-zA-Z0-9]+)([a-zA-Z0-9])/g, (_, _b, c) => c.toUpperCase()).replace(/[^a-zA-Z0-9]/g, "") + "Town";
+}
 
 async function fetchAgents(){
-  if(!ENDPOINT) return SIM.snapshot();
+  if(!ENDPOINT){ LIVE = false; return SIM.snapshot(); }
   try{
     const res = await fetch(ENDPOINT, {headers:{accept:"application/json"}});
     if(!res.ok) throw new Error("HTTP "+res.status);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.agents || []);
-    if(!Array.isArray(list) || !list.length) throw new Error("no agents in response");
+    if(!Array.isArray(list) || !list.length) throw new Error("no cottages in response");
+    LIVE = true;
     feedNote(`live. ${list.length} cottages from ${new URL(ENDPOINT).host}`, "#79c25f");
-    return list.map((a,i)=>({
-      id: String(a.id ?? "n"+i),
-      name: a.name ?? a.id ?? ("agent-"+i),
-      role: ["dev","research","ops","content"].includes(a.role) ? a.role : "ops",
-      status: ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle",
-      parent: a.parent ?? null,
-      task: a.task ?? "—",
-      activity: a.activity ?? "",
-      model: MODELS[a.model] ? a.model : "sonnet",
-      branch: a.branch ?? "",
-      dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
-      startedAt: a.startedAt ?? Date.now(),
-      tokens: a.tokens ?? 0,
-      cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
-      lastLine: a.lastLine ?? ""
-    }));
+    return list.map((a,i)=>{
+      const town = normalizeTown(a.town || a.role);
+      return {
+        id: String(a.id ?? "n"+i),
+        name: a.name ?? a.id ?? ("agent-"+i),
+        town,
+        role: town,
+        status: ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle",
+        parent: a.parent ?? null,
+        task: a.task ?? "-",
+        activity: a.activity ?? "",
+        model: MODELS[a.model] ? a.model : "sonnet",
+        branch: a.branch ?? "",
+        dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
+        startedAt: a.startedAt ?? Date.now(),
+        tokens: a.tokens ?? 0,
+        cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
+        lastLine: a.lastLine ?? ""
+      };
+    });
   }catch(err){
+    LIVE = false;
     feedNote(`${ENDPOINT}. ${err.message}. Back on the demo townmap.`, "#e2504a");
     ENDPOINT = null;
     return SIM.snapshot();
@@ -159,10 +182,11 @@ async function fetchAgents(){
 
 /* ---- mock world ---- */
 const TASKS = {
-  dev:["refactor webhook queue","patch CRM sync retry","bump deps + run suite","write migration 0042","fix flaky auth test","port settings page"],
-  research:["read arXiv 2508.11912","compare vector stores","summarise competitor pricing","trace recall regression","survey MCP servers"],
-  ops:["deploy to Railway","rotate staging certs","watch error budget","prune D1 snapshots","tail prod logs"],
-  content:["draft changelog 3.46","reply to Derek","outline launch post","clean up docs nav","write release notes"]
+  HubTown:["refactor webhook queue","patch CRM sync retry","bump deps + run suite","write migration 0042","fix flaky auth test","port settings page"],
+  MemTown:["read arXiv 2508.11912","compare vector stores","summarise competitor pricing","trace recall regression","survey MCP servers"],
+  FusionTown:["deploy to Railway","rotate staging certs","watch error budget","prune D1 snapshots","tail prod logs"],
+  AppTown:["draft changelog 3.46","reply to Derek","outline launch post","clean up docs nav","write release notes"],
+  VaultTown:["sign a skill bundle","rotate vault keys","audit SKILL.md hashes","sync profile links"]
 };
 const ACTIVITY = {
   working:["editing src/sync.ts","running the test suite","reading 12 search results","waiting on API response","writing the PR description","diffing two schema versions"],
@@ -174,10 +198,11 @@ const ACTIVITY = {
 const DISPATCH = ["Jack","cron: nightly","webhook: github","Jack","slack: #ops","Jack"];
 const MODELS = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a"};
 const BRANCHES = {
-  dev:["fix/sync-429","feat/settings","main","chore/deps"],
-  research:["main","spike/vectors"],
-  ops:["deploy/prod","main"],
-  content:["docs/changelog","main"]
+  HubTown:["fix/sync-429","feat/settings","main","chore/deps"],
+  MemTown:["main","spike/vectors"],
+  FusionTown:["deploy/prod","main"],
+  AppTown:["docs/changelog","main"],
+  VaultTown:["feat/signing","main"]
 };
 const RATE = 0.000009;   // $ per token, rough blended estimate
 
@@ -191,23 +216,24 @@ const LINES = {
 const pick = a => a[Math.floor(Math.random()*a.length)];
 
 const SIM = (() => {
-  // [name, role, status] — optional 4th value is the index of the agent that spawned it
+  // [name, town, status]  optional 4th value is the index of the cottage that spawned it
   const seed = [
-    ["Bolt","dev","working"],["Marge","dev","working"],["Kip","dev","blocked"],
-    ["Otto","dev","idle"],["Vera","dev","done"],["Gus","dev","working"],["Ida","dev","idle"],
-    ["Juno","research","working"],["Pim","research","working"],["Wren","research","idle"],
-    ["Sable","research","offline"],
-    ["Hollis","ops","working"],["Dov","ops","idle"],["Tess","ops","blocked"],["Nils","ops","working"],
-    ["Odie","content","working"],["Ruth","content","done"],["Cass","content","idle"],
-    ["Bolt-1","dev","working",0],["Bolt-2","dev","blocked",0],
-    ["Juno-1","research","working",7],["Juno-2","research","done",7],["Juno-3","research","working",7],
-    ["Hollis-1","ops","idle",11]
+    ["Bolt","HubTown","working"],["Marge","HubTown","working"],["Kip","HubTown","blocked"],
+    ["Otto","HubTown","idle"],["Vera","HubTown","done"],["Gus","HubTown","working"],["Ida","HubTown","idle"],
+    ["Juno","MemTown","working"],["Pim","MemTown","working"],["Wren","MemTown","idle"],
+    ["Sable","MemTown","offline"],
+    ["Hollis","FusionTown","working"],["Dov","FusionTown","idle"],["Tess","FusionTown","blocked"],["Nils","FusionTown","working"],
+    ["Odie","AppTown","working"],["Ruth","AppTown","done"],["Cass","AppTown","idle"],
+    ["Nyx","VaultTown","working"],["Reed","VaultTown","idle"],
+    ["Bolt-1","HubTown","working",0],["Bolt-2","HubTown","blocked",0],
+    ["Juno-1","MemTown","working",7],["Juno-2","MemTown","done",7],["Juno-3","MemTown","working",7],
+    ["Hollis-1","FusionTown","idle",11]
   ];
   const now = Date.now();
   const agents = seed.map((s,i)=>({
-    id:"a"+i, name:s[0], role:s[1], status:s[2],
+    id:"a"+i, name:s[0], town:s[1], role:s[1], status:s[2],
     parent: s[3]==null ? null : "a"+s[3],
-    task: s[2]==="offline" ? "—" : pick(TASKS[s[1]]),
+    task: s[2]==="offline" ? "-" : pick(TASKS[s[1]]),
     activity: pick(ACTIVITY[s[2]]),
     model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku"]) : "haiku",
     branch: s[3]==null ? pick(BRANCHES[s[1]]) : null,
@@ -243,7 +269,7 @@ const SIM = (() => {
         }[a.status]);
         if(s !== a.status){
           a.status = s; a.lastLine = pick(LINES[s]); a.activity = pick(ACTIVITY[s]);
-          if(s==="working"){ a.task = pick(TASKS[a.role]); a.startedAt = Date.now(); }
+          if(s==="working"){ a.task = pick(TASKS[townKey(a)]); a.startedAt = Date.now(); }
         }
       } else if(Math.random() > 0.8){ a.lastLine = pick(LINES[a.status]); }
     });
@@ -253,22 +279,44 @@ const SIM = (() => {
     set(id, status){
       const a = agents.find(x=>x.id===id); if(!a) return;
       a.status = status; a.lastLine = pick(LINES[status]); a.activity = pick(ACTIVITY[status]);
-      if(status==="working"){ a.task = pick(TASKS[a.role]); a.startedAt = Date.now(); }
-      if(status==="offline") a.task = "—";
+      if(status==="working"){ a.task = pick(TASKS[townKey(a)]); a.startedAt = Date.now(); }
+      if(status==="offline") a.task = "-";
     },
     setLive(v){ live = v; }
   };
 })();
 
 /* =======================================================================
-   TOWN
+   TOWNMAP
    ======================================================================= */
-const DISTRICTS = [
-  {key:"dev",      label:"DEV LANE",      roof:"#e08a3c", roofDark:"#a85c1e"},
-  {key:"research", label:"RESEARCH ROW",  roof:"#6f83d6", roofDark:"#47549f"},
-  {key:"ops",      label:"OPS HOLLOW",    roof:"#4fb08c", roofDark:"#2f7a63"},
-  {key:"content",  label:"WORDSMITH WAY", roof:"#cc5f78", roofDark:"#933d52"}
+const TOWN_PALETTE = [
+  {roof:"#e08a3c", roofDark:"#a85c1e"},
+  {roof:"#6f83d6", roofDark:"#47549f"},
+  {roof:"#4fb08c", roofDark:"#2f7a63"},
+  {roof:"#cc5f78", roofDark:"#933d52"},
+  {roof:"#c9a227", roofDark:"#8a6e14"},
+  {roof:"#5c9ead", roofDark:"#3a6d78"}
 ];
+const FALLBACK_TOWN = {key:"WildTown", label:"WILDTOWN", roof:"#7d868e", roofDark:"#525b63"};
+let TOWNS = [];
+
+function districtsFrom(list){
+  const keys = [...new Set(list.map(a=>townKey(a)))];
+  keys.sort((a,b)=>{
+    if(a==="HubTown") return -1;
+    if(b==="HubTown") return 1;
+    return a.localeCompare(b);
+  });
+  return keys.map((key,i)=>({
+    key,
+    label: key.toUpperCase(),
+    ...TOWN_PALETTE[key==="HubTown" ? 0 : (i % TOWN_PALETTE.length)]
+  }));
+}
+function townStyle(ag){
+  const k = townKey(ag);
+  return TOWNS.find(z=>z.key===k) || TOWNS[0] || FALLBACK_TOWN;
+}
 
 const HOUSE_W=54, HOUSE_H=66, COLS=4;
 const GAP_X=14, GAP_Y=74, PAD=12, SIGN_H=30, MARGIN=30, ROAD=40;
@@ -277,6 +325,8 @@ const LANE_Y = 1, LANE_H = 9, SIGN_Y = 13, BENCH_Y = 29, SHED_Y = 49;
 const D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
 let W = MARGIN*2 + D_W*2 + ROAD;
 let H = 400, ROAD_Y = 200, DR = [];
+let VERT_ROAD = MARGIN + D_W;
+let HORZ_ROADS = [];
 
 const C = {
   grass:"#63b85f", grassDk:"#46914b", grassLt:"#84d472", grassSh:"#3a7a43",
@@ -332,21 +382,23 @@ function paintBackground(){
     else if(r>0.4) p(gx,gy,2,1,C.grassDk);
   }
 
-  const rx = MARGIN + D_W, ry = ROAD_Y;
-  // dirt roads with baked edges
-  p(0, ry-1, W, ROAD+2, C.dirtEdge);
-  p(0, ry, W, ROAD, C.dirt);
+  const rx = VERT_ROAD;
+  const roadsY = HORZ_ROADS.length ? HORZ_ROADS : (H > ROAD + MARGIN*2 ? [ROAD_Y] : []);
   p(rx-1, 0, ROAD+2, H, C.dirtEdge);
   p(rx, 0, ROAD, H, C.dirt);
-  p(0, ry+7, W, 1, C.dirtDk);
-  p(0, ry+ROAD-8, W, 1, C.dirtDk);
   p(rx+7, 0, 1, H, C.dirtDk);
   p(rx+ROAD-8, 0, 1, H, C.dirtDk);
-  // repaint the junction so the seams don't cross
-  p(rx, ry, ROAD, ROAD, C.dirt);
+  roadsY.forEach(ry=>{
+    p(0, ry-1, W, ROAD+2, C.dirtEdge);
+    p(0, ry, W, ROAD, C.dirt);
+    p(0, ry+7, W, 1, C.dirtDk);
+    p(0, ry+ROAD-8, W, 1, C.dirtDk);
+    p(rx, ry, ROAD, ROAD, C.dirt);
+  });
   for(let i=0;i<700;i++){
     const gx=(rnd()*W)|0, gy=(rnd()*H)|0;
-    if((gy>ry && gy<ry+ROAD) || (gx>rx && gx<rx+ROAD)){
+    const onH = roadsY.some(ry => gy>ry && gy<ry+ROAD);
+    if(onH || (gx>rx && gx<rx+ROAD)){
       const r=rnd();
       if(r>0.9){ p(gx,gy,2,2,C.stone); p(gx,gy+1,2,1,C.stoneDk); }
       else if(r>0.55) p(gx,gy,2,1,C.dirtDk);
@@ -354,14 +406,17 @@ function paintBackground(){
   }
 
   const spurs = [];
-  // a street runs in front of every row of doors, with a winding spur
-  // out to the main road — this is what the villagers actually walk on
-  DISTRICTS.forEach((d, di) => {
+  TOWNS.forEach((d, di) => {
     const r = DR[di];
-    const mine = plots.filter(pl => pl.agent.role === d.key);
+    if(!r) return;
+    const mine = plots.filter(pl => townKey(pl.agent) === d.key);
     if (!mine.length) return;
     const rows = Math.max(...mine.map(pl => Math.round((pl.y - (r.y+PAD+SIGN_H)) / (HOUSE_H+GAP_Y)))) + 1;
-    const topSide = di < 2;
+    const nearest = roadsY.reduce((best, ry)=>{
+      const dist = Math.min(Math.abs((r.y+r.h) - ry), Math.abs(r.y - (ry+ROAD)));
+      return dist < best.dist ? {ry, dist} : best;
+    }, {ry: roadsY[0] ?? r.y+r.h, dist: Infinity});
+    const topSide = r.y + r.h/2 <= (nearest.ry + ROAD/2);
 
     for (let row = 0; row < rows; row++) {
       const rowY = r.y + PAD + SIGN_H + row*(HOUSE_H+GAP_Y);
@@ -371,26 +426,29 @@ function paintBackground(){
       const x0 = Math.min(...inRow.map(pl => pl.x)) - 8;
       const x1 = Math.max(...inRow.map(pl => pl.x)) + HOUSE_W + 8;
       dirtPath(p, [[x0, laneY], [x1, laneY]], LANE_H);
-      // a stub up to each front door
       inRow.forEach(pl => dirtPath(p, [[pl.x+27, laneY], [pl.x+27, rowY+HOUSE_H-2]], 7));
     }
 
-    // spur from the last lane out to the main road, with a couple of bends
     const lastY = r.y + PAD + SIGN_H + (rows-1)*(HOUSE_H+GAP_Y) + HOUSE_H + LANE_Y + (LANE_H>>1);
     const spurX = r.x + PAD + Math.round(D_W*0.34);
-    const jogX = spurX + (di % 2 ? -34 : 38);
-    const roadY = topSide ? ry + 4 : ry + ROAD - 4;
-    const midY = topSide
-      ? lastY + Math.round((roadY - lastY) * 0.55)
-      : lastY - Math.round((lastY - roadY) * 0.55);
-    dirtPath(p, [[spurX, lastY], [spurX, midY], [jogX, midY], [jogX, roadY]], 8);
+    const jogX = spurX + (r.col % 2 ? -34 : 38);
+    if (roadsY.length) {
+      const roadY = topSide ? nearest.ry + 4 : nearest.ry + ROAD - 4;
+      const midY = topSide
+        ? lastY + Math.round((roadY - lastY) * 0.55)
+        : lastY - Math.round((lastY - roadY) * 0.55);
+      dirtPath(p, [[spurX, lastY], [spurX, midY], [jogX, midY], [jogX, roadY]], 8);
+    } else {
+      const roadX = r.col === 0 ? rx + 4 : rx + ROAD - 4;
+      dirtPath(p, [[spurX, lastY], [roadX, lastY]], 8);
+    }
     spurs.push(jogX);
   });
 
-  // ponds and orchards fill whatever the houses didn't use
-  DISTRICTS.forEach((d, di) => {
+  TOWNS.forEach((d, di) => {
     const r = DR[di];
-    const mine = plots.filter(pl => pl.agent.role === d.key);
+    if(!r) return;
+    const mine = plots.filter(pl => townKey(pl.agent) === d.key);
     const rows = mine.length ? Math.ceil(mine.length / COLS) : 0;
     const used = SIGN_H + rows*(HOUSE_H+GAP_Y) + PAD*2;
     const spare = r.h - used;
@@ -399,28 +457,29 @@ function paintBackground(){
     pondTo(p, r.x + PAD + 10, top + 8, Math.round(D_W*0.42), Math.min(58, spare-24), rnd);
     const ox = r.x + PAD + Math.round(D_W*0.55);
     const tone = di % 2
-      ? {light:"#ffd7e6", mid:"#f2a8c4", dark:"#c9789c"}      // cherry
-      : {light:"#fff3c9", mid:"#f2d98a", dark:"#c9ab52"};     // golden
+      ? {light:"#ffd7e6", mid:"#f2a8c4", dark:"#c9789c"}
+      : {light:"#fff3c9", mid:"#f2d98a", dark:"#c9ab52"};
     for (let oy = 0; oy < Math.min(2, Math.floor((spare-30)/34)); oy++)
       for (let ox2 = 0; ox2 < 3; ox2++)
         blossomTreeTo(p, ox + ox2*26, top + 10 + oy*34, 7, tone);
   });
 
-  // hedges along the district frontage, with a gap where the path comes through
-  DISTRICTS.forEach((d, di) => {
+  TOWNS.forEach((d, di) => {
     const r = DR[di];
+    if(!r) return;
     for(let i = 2; i < r.w - 6; i += 7){
       const hx = r.x + i;
       if(spurs.some(sx => Math.abs(hx - sx) < 16)) continue;
       const hy = r.y + r.h - 12;
-      if(Math.abs(hx - (rx + (ROAD>>1))) < PLAZA*0.6 &&
-         Math.abs(hy - (ry + (ROAD>>1))) < PLAZA*0.6) continue;
+      const onPlaza = roadsY.some(ry =>
+        Math.abs(hx - (rx + (ROAD>>1))) < PLAZA*0.6 &&
+        Math.abs(hy - (ry + (ROAD>>1))) < PLAZA*0.6);
+      if(onPlaza) continue;
       bushTo(p, hx, hy, 5);
     }
   });
 
-  // forest ring around the outside of town
-  const onRoad = (ax,ay)=> (ay>ry-10 && ay<ry+ROAD+10) || (ax>rx-10 && ax<rx+ROAD+10);
+  const onRoad = (ax,ay)=> roadsY.some(ry => ay>ry-10 && ay<ry+ROAD+10) || (ax>rx-10 && ax<rx+ROAD+10);
   const inPlot = (ax,ay)=> DR.some(d=> ax>d.x-9 && ax<d.x+d.w+9 && ay>d.y-9 && ay<d.y+d.h+9);
   for(let gy=-6; gy<H+6; gy+=17){
     for(let gx=-6; gx<W+6; gx+=19){
@@ -456,18 +515,23 @@ function paintBackground(){
       }
     }
   };
-  scallop(ry, true, true);
-  scallop(ry + ROAD, true, false);
   scallop(rx, false, true);
   scallop(rx + ROAD, false, false);
-  // work benches, hedges and flowers in the yards
+  roadsY.forEach(ry=>{
+    scallop(ry, true, true);
+    scallop(ry + ROAD, true, false);
+  });
   plots.forEach(pl=>{
-    benchTo(p, pl.x+30, pl.y+HOUSE_H+BENCH_Y, pl.agent.role);
+    benchTo(p, pl.x+30, pl.y+HOUSE_H+BENCH_Y, townKey(pl.agent));
     if(!(pl.kids && pl.kids.length)) bushTo(p, pl.x-12, pl.y+HOUSE_H+BENCH_Y-2, 4);
     if((pl.x+pl.y) % 3 === 0) flowersTo(p, pl.x+HOUSE_W+2, pl.y+HOUSE_H-4, rnd);
   });
 
-  plazaTo(p, rx + (ROAD>>1), ry + (ROAD>>1), rnd);
+  if(roadsY.length){
+    roadsY.forEach(ry => plazaTo(p, rx + (ROAD>>1), ry + (ROAD>>1), rnd));
+  } else {
+    plazaTo(p, rx + (ROAD>>1), Math.round(H/2), rnd);
+  }
   gardens.forEach(g => gardenTo(p, g.x, g.y, g.w, g.h));
 }
 
@@ -615,8 +679,8 @@ function shroomsTo(p, x, y){
   }
 }
 
-function benchTo(p, x, y, role){
-  const d = DISTRICTS.find(z=>z.key===role);
+function benchTo(p, x, y, town){
+  const d = TOWNS.find(z=>z.key===town) || FALLBACK_TOWN;
   p(x, y+12, 18, 2, C.grassSh);
   p(x-1, y+3, 20, 5, C.outline);
   p(x, y+4, 18, 3, C.wood);
@@ -822,7 +886,7 @@ function gardenTo(p, x, y, w, h){
 
 /* ---------- sprites ---------- */
 function drawHouse(x, y, ag){
-  const d = DISTRICTS.find(z=>z.key===ag.role);
+  const d = townStyle(ag);
   const dead = ag.status==="offline";
   const roof = dead ? C.off : d.roof, roofDk = dead ? C.offDk : d.roofDark;
   const wall = dead ? "#aab2b8" : C.wall, wallDk = dead ? "#8d959b" : C.wallDk;
@@ -922,7 +986,7 @@ function drawBranchPost(x, y, branch, dim){
 }
 
 function drawShed(x, y, ag){
-  const d = DISTRICTS.find(z=>z.key===ag.role);
+  const d = townStyle(ag);
   const dead = ag.status==="offline";
   const O = C.outline;
   px(x+1, y+15, 14, 2, C.grassSh);
@@ -1198,27 +1262,49 @@ function drawSign(x, y, label, color){
 
 /* ---------- layout ---------- */
 function layout(){
+  TOWNS = districtsFrom(agents);
   const rooted = agents.filter(a=>!a.parent);
-  const rowsOf = k => Math.max(1, Math.ceil(rooted.filter(a=>a.role===k).length / COLS));
+  const rowsOf = k => Math.max(1, Math.ceil(rooted.filter(a=>townKey(a)===k).length / COLS));
   const heightOf = k => SIGN_H + rowsOf(k)*(HOUSE_H+GAP_Y) + PAD*2;
-  const topH = Math.max(heightOf("dev"), heightOf("research"));
-  const botH = Math.max(heightOf("ops"), heightOf("content"));
-  ROAD_Y = MARGIN + topH;
-  H = MARGIN*2 + topH + ROAD + botH;
-  DR = DISTRICTS.map((d,i)=>({
-    x: MARGIN + (i%2)*(D_W+ROAD),
-    y: i<2 ? MARGIN : ROAD_Y + ROAD,
-    w: D_W, h: i<2 ? topH : botH
-  }));
-  if(cv.height !== H){
+  const n = Math.max(TOWNS.length, 1);
+  const gridCols = 2;
+  const gridRows = Math.max(1, Math.ceil(n / gridCols));
+  const rowHs = [];
+  for(let r=0; r<gridRows; r++){
+    let h = 90;
+    for(let c=0; c<gridCols; c++){
+      const d = TOWNS[r*gridCols + c];
+      if(d) h = Math.max(h, heightOf(d.key));
+    }
+    rowHs.push(h);
+  }
+  DR = TOWNS.map((d,i)=>{
+    const c = i % gridCols;
+    const r = (i / gridCols) | 0;
+    let y = MARGIN;
+    for(let k=0; k<r; k++) y += rowHs[k] + ROAD;
+    return {x: MARGIN + c*(D_W+ROAD), y, w: D_W, h: rowHs[r], row: r, col: c};
+  });
+  HORZ_ROADS = [];
+  let acc = MARGIN;
+  for(let r=0; r<gridRows-1; r++){
+    acc += rowHs[r];
+    HORZ_ROADS.push(acc);
+    acc += ROAD;
+  }
+  VERT_ROAD = MARGIN + D_W;
+  ROAD_Y = HORZ_ROADS[0] ?? MARGIN + rowHs[0];
+  H = MARGIN*2 + rowHs.reduce((a,b)=>a+b, 0) + ROAD*Math.max(0, gridRows-1);
+  W = MARGIN*2 + gridCols*D_W + ROAD*(gridCols-1);
+  if(cv.height !== H || cv.width !== W){
     cv.width = W; cv.height = H; bg.width = W; bg.height = H;
     ctx.imageSmoothingEnabled = false;
   }
 
   plots = []; gardens = [];
-  DISTRICTS.forEach((d, di)=>{
+  TOWNS.forEach((d, di)=>{
     const r = DR[di];
-    const mine = rooted.filter(a=>a.role===d.key);
+    const mine = rooted.filter(a=>townKey(a)===d.key);
     mine.forEach((ag, i)=>{
       const x = r.x + PAD + (i%COLS)*(HOUSE_W+GAP_X);
       const y = r.y + PAD + SIGN_H + ((i/COLS)|0)*(HOUSE_H+GAP_Y);
@@ -1226,7 +1312,6 @@ function layout(){
         .map((k, ki)=>({agent:k, x: x + 2 + ki*17, y: y + HOUSE_H + SHED_Y}));
       plots.push({agent:ag, x, y, district:d, kids});
     });
-    // spare slots in the last row become allotments
     const spare = mine.length % COLS;
     if(spare){
       const row = (mine.length/COLS)|0;
@@ -1245,17 +1330,18 @@ function draw(){
   t += 1/60;
   ctx.drawImage(bg, 0, 0);
 
-  DISTRICTS.forEach((d, di)=>{
+  TOWNS.forEach((d, di)=>{
     const r = DR[di];
+    if(!r) return;
     ctx.globalAlpha = (filter && filter!==d.key) ? 0.35 : 1;
-    const sx = di === 3 ? r.x + r.w - PAD - signWidth(d.label) : r.x + PAD;
+    const sx = r.col === 1 ? r.x + r.w - PAD - signWidth(d.label) : r.x + PAD;
     drawSign(sx, r.y + PAD, d.label, d.roof);
     ctx.globalAlpha = 1;
   });
 
   plots.forEach(p=>{
     const ag = p.agent;
-    const faded = filter && filter !== ag.role;
+    const faded = filter && filter !== townKey(ag);
     ctx.globalAlpha = faded ? 0.3 : 1;
 
     drawHouse(p.x, p.y, ag);
@@ -1304,7 +1390,7 @@ function draw(){
         const atBench = working && dist < 2;
         const step = reduce ? 0 : (moving ? (Math.floor(t*6 + p.x) % 2) : 0);
         const bob  = (atBench && !reduce) ? (Math.floor(t*7) % 2) : 0;
-        drawPerson(Math.round(a.x), Math.round(a.y)+bob, DISTRICTS.find(d=>d.key===ag.role).roof, step);
+        drawPerson(Math.round(a.x), Math.round(a.y)+bob, townStyle(ag).roof, step);
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
         if(ag.status === "blocked" || ag.status === "done"){
           const bb = reduce ? 0 : Math.round(Math.sin(t*3 + p.x));
@@ -1339,7 +1425,7 @@ function draw(){
   drawFauna();
 
   plots.forEach(p=>{
-    if(filter && filter !== p.agent.role) return;
+    if(filter && filter !== townKey(p.agent)) return;
     const a = actors.get(p.agent.id);
     if(!a || a.indoors) return;
     const show = p.agent.id===hoverId || p.agent.id===selectedId || (a.popUntil && t < a.popUntil);
@@ -1357,7 +1443,7 @@ function hit(evt){
   const x = (evt.clientX - r.left) * (W / r.width);
   const y = (evt.clientY - r.top) * (H / r.height);
   for(const p of plots){
-    if(filter && filter !== p.agent.role) continue;
+    if(filter && filter !== townKey(p.agent)) continue;
     for(const k of (p.kids||[])) if(x>=k.x-2 && x<=k.x+18 && y>=k.y-4 && y<=k.y+17) return k.agent.id;
     if(x>=p.x && x<=p.x+HOUSE_W && y>=p.y-4 && y<=p.y+HOUSE_H+6) return p.agent.id;
   }
@@ -1369,7 +1455,7 @@ cv.addEventListener("click", e=>{ const id = hit(e); if(id){ selectedId = id; re
 cv.addEventListener("keydown", e=>{
   const vis = [];
   plots.forEach(p=>{
-    if(filter && filter!==p.agent.role) return;
+    if(filter && filter!==townKey(p.agent)) return;
     vis.push(p.agent.id);
     (p.kids||[]).forEach(k=>vis.push(k.agent.id));
   });
@@ -1405,13 +1491,13 @@ function renderPanel(){
     panel.innerHTML = `<p class="hint">Click a cottage to see what that agent is doing. Arrow keys walk between cottages.</p>`;
     return;
   }
-  const d = DISTRICTS.find(x=>x.key===ag.role);
+  const d = townStyle(ag);
   const mum = ag.parent ? agents.find(a=>a.id===ag.parent) : null;
   const kids = agents.filter(a=>a.parent===ag.id);
   const live = ag.status !== "offline";
   panel.innerHTML = `
     <h2>${ag.name}</h2>
-    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : d.label.toLowerCase()}</p>
+    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : d.key}</p>
     <span class="status-chip"><i style="width:8px;height:8px;background:${STATUS_COLOR[ag.status]};display:inline-block"></i>${STATUS_TEXT[ag.status]}</span>
     ${live && ag.activity ? `<p class="doing">${ag.activity}</p>` : ""}
     <dl>
@@ -1438,9 +1524,9 @@ function renderPanel(){
 const tally = document.getElementById("tally");
 function renderTally(){
   tally.innerHTML = "";
-  DISTRICTS.forEach(d=>{
-    const n = agents.filter(a=>a.role===d.key).length;
-    const busy = agents.filter(a=>a.role===d.key && a.status==="working").length;
+  TOWNS.forEach(d=>{
+    const n = agents.filter(a=>townKey(a)===d.key).length;
+    const busy = agents.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
     b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key}<span class="n">${busy}/${n}</span>`;

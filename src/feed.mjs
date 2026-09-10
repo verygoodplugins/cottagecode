@@ -19,24 +19,12 @@
 import { createServer } from "node:http";
 import { readdir, stat, open, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, basename, dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { repoOf, worktreeOf, townName } from "./towns.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
-
-/* ── config ─────────────────────────────────────────────────────────────
-   Districts. The town has four; you have many repos. Worktrees collapse
-   into their base repo automatically, so map the repo, not the worktree.
-   Anything unlisted gets a district by stable hash.                      */
-const ROLE_MAP = {
-  "wp-fusion": "dev",
-  "autohub": "dev",
-  "autoapp": "dev",
-  // "automem":  "research",
-  // "cockpit":  "ops",
-};
-const ROLES = ["dev", "research", "ops", "content"];
 
 /* USD per million tokens. THESE ARE PLACEHOLDERS — set them from current
    pricing or every cost in the town is fiction. Cache reads are the cheap
@@ -73,27 +61,6 @@ const shortModel = m => {
   if (s.includes("haiku")) return "haiku";
   return "sonnet";
 };
-
-/* Worktrees are sibling checkouts of one repo. Claude encodes the cwd into
-   the directory name, so `autohub--claude-worktrees-affectionate-brattain`
-   and plain `autohub` are the same project wearing different hats. */
-function repoOf(cwd) {
-  const base = basename(cwd || "");
-  return base
-    .replace(/--?(claude-|codex-)?worktrees?-.*$/i, "")
-    .replace(/^-+|-+$/g, "") || base || "unknown";
-}
-function worktreeOf(cwd) {
-  const m = String(cwd || "").match(/worktrees?[/-](.+)$/i);
-  return m ? m[1].replace(/^-+/, "") : "";
-}
-
-const hashRole = s => {
-  let h = 0;
-  for (const c of s) h = (h * 31 + c.charCodeAt(0)) & 0x7fffffff;
-  return ROLES[h % ROLES.length];
-};
-const roleFor = repo => ROLE_MAP[repo] || hashRole(repo);
 
 function priceOf(model, u) {
   const p = PRICE[shortModel(model)] || PRICE.sonnet;
@@ -253,6 +220,7 @@ function toAgents(sessions) {
     if (!S.id) continue;
     const repo = repoOf(S.cwd);
     const wt = worktreeOf(S.cwd);
+    const town = townName(S.cwd);
     // Slugs read like "can-you-look-at-replicated-perlis" — the front is
     // filler, the tail is the distinctive bit. Take words off the end while
     // they still fit on a nameplate.
@@ -272,7 +240,8 @@ function toAgents(sessions) {
     out.push({
       id: S.id,
       name,
-      role: roleFor(repo),
+      town,
+      role: town,
       status: statusOf(S, now),
       task: `${repo}${wt ? ` · ${wt}` : ""}`,
       activity: S.lastTool || (S.turnOpen ? "thinking" : "idle"),
@@ -293,7 +262,8 @@ function toAgents(sessions) {
       out.push({
         id: `${S.id}:${sc.root.slice(0, 8)}`,
         name: `${name}-${i}`,
-        role: roleFor(repo),
+        town,
+        role: town,
         status: sc.open && !stale ? "working" : (stale ? "done" : "idle"),
         task: `subagent of ${name}`,
         activity: sc.lastTool || "thinking",
@@ -339,11 +309,15 @@ async function scan() {
     }
   }
 
-  cache = toAgents(sessions).sort((a, b) => a.role.localeCompare(b.role));
+  cache = toAgents(sessions).sort((a, b) => {
+    if (a.town === "HubTown" && b.town !== "HubTown") return -1;
+    if (b.town === "HubTown" && a.town !== "HubTown") return 1;
+    return String(a.town).localeCompare(b.town) || String(a.name).localeCompare(b.name);
+  });
   if (DEBUG) {
     console.log(`\n[${new Date().toLocaleTimeString()}] ${cache.length} agents`);
     for (const a of cache) {
-      console.log(`  ${a.name.padEnd(22)} ${a.status.padEnd(8)} ${a.role.padEnd(9)} ` +
+      console.log(`  ${a.name.padEnd(22)} ${a.status.padEnd(8)} ${String(a.town).padEnd(14)} ` +
                   `${a.model.padEnd(7)} ${String(a.branch).slice(0,24).padEnd(26)} ` +
                   `$${a.cost.toFixed(3).padStart(8)}  ${a.lastLine.slice(0, 40)}`);
     }
