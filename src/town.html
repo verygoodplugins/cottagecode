@@ -89,9 +89,9 @@
     <div class="stage">
       <canvas id="town" tabindex="0" role="img" aria-label="Townmap: pixel map of running agents, grouped into towns by project"></canvas>
       <div class="stage-foot">
-        <span class="key"><i style="background:#ffd166"></i>working</span>
+        <span class="key"><i style="background:#e8eef2;border-radius:50%"></i>smoke = working</span>
         <span class="key"><i style="background:#93a1b0"></i>idle</span>
-        <span class="key"><i style="background:#e2504a"></i>blocked</span>
+        <span class="key"><i style="background:#e2504a"></i>! blocked</span>
         <span class="key"><i style="background:#79c25f"></i>finished</span>
         <span class="key"><i style="background:#7d868e"></i>offline</span>
         <span class="key"><i style="background:#a86e3e;width:8px;height:7px"></i>shed = spawned agent</span>
@@ -102,6 +102,9 @@
         <span class="key"><i style="background:#b07bd4"></i>opus</span>
         <span class="key"><i style="background:#63a4e0"></i>sonnet</span>
         <span class="key"><i style="background:#6fc98a"></i>haiku</span>
+        <span class="key"><i style="background:#10a37f"></i>gpt</span>
+        <span class="key"><i style="background:#c9a227"></i>local</span>
+        <span class="key"><i style="background:#e07a5f"></i>mlx</span>
       </div>
       <div class="feed">
         <input id="endpoint" type="url" placeholder="http://localhost:8787/agents" aria-label="Cottage status endpoint">
@@ -142,6 +145,17 @@ function normalizeTown(raw){
   return s.replace(/(^|[^a-zA-Z0-9]+)([a-zA-Z0-9])/g, (_, _b, c) => c.toUpperCase()).replace(/[^a-zA-Z0-9]/g, "") + "Town";
 }
 
+function shortModel(m){
+  const s = String(m || "").toLowerCase();
+  if(s.includes("opus")) return "opus";
+  if(s.includes("haiku")) return "haiku";
+  if(s.includes("sonnet")) return "sonnet";
+  if(s.includes("gpt") || s.includes("openai")) return "gpt";
+  if(s.includes("mlx")) return "mlx";
+  if(s.includes("local") || s.includes("ollama") || s.includes("lmstudio") || s.includes("llama")) return "local";
+  return MODELS[s] ? s : (s || "sonnet");
+}
+
 async function fetchAgents(){
   if(!ENDPOINT){ LIVE = false; return SIM.snapshot(); }
   try{
@@ -151,7 +165,8 @@ async function fetchAgents(){
     const list = Array.isArray(data) ? data : (data.agents || []);
     if(!Array.isArray(list) || !list.length) throw new Error("no cottages in response");
     LIVE = true;
-    feedNote(`live. ${list.length} cottages from ${new URL(ENDPOINT).host}`, "#79c25f");
+    const src = (!Array.isArray(data) && data.source) ? ` (${data.source})` : "";
+    feedNote(`live. ${list.length} cottages${src} from ${new URL(ENDPOINT).host}`, "#79c25f");
     return list.map((a,i)=>{
       const town = normalizeTown(a.town || a.role);
       return {
@@ -163,7 +178,7 @@ async function fetchAgents(){
         parent: a.parent ?? null,
         task: a.task ?? "-",
         activity: a.activity ?? "",
-        model: MODELS[a.model] ? a.model : "sonnet",
+        model: shortModel(a.model),
         branch: a.branch ?? "",
         dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
         startedAt: a.startedAt ?? Date.now(),
@@ -196,7 +211,7 @@ const ACTIVITY = {
   offline:["—"]
 };
 const DISPATCH = ["Jack","cron: nightly","webhook: github","Jack","slack: #ops","Jack"];
-const MODELS = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a"};
+const MODELS = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a", gpt:"#10a37f", local:"#c9a227", mlx:"#e07a5f"};
 const BRANCHES = {
   HubTown:["fix/sync-429","feat/settings","main","chore/deps"],
   MemTown:["main","spike/vectors"],
@@ -235,7 +250,7 @@ const SIM = (() => {
     parent: s[3]==null ? null : "a"+s[3],
     task: s[2]==="offline" ? "-" : pick(TASKS[s[1]]),
     activity: pick(ACTIVITY[s[2]]),
-    model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku"]) : "haiku",
+    model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku","gpt","local"]) : "haiku",
     branch: s[3]==null ? pick(BRANCHES[s[1]]) : null,
     dispatchedBy: s[3]==null ? pick(DISPATCH) : seed[s[3]][0],
     startedAt: now - Math.floor(Math.random()*40*60*1000),
@@ -343,7 +358,7 @@ const C = {
   soil:"#d8944e", soilDk:"#b5713a", crop:"#3f8a45", fruit:"#d9463f"
 };
 
-const MODEL_COLOR = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a"};
+const MODEL_COLOR = {opus:"#b07bd4", sonnet:"#63a4e0", haiku:"#6fc98a", gpt:"#10a37f", local:"#c9a227", mlx:"#e07a5f"};
 
 const cv = document.getElementById("town");
 const ctx = cv.getContext("2d");
@@ -1334,8 +1349,8 @@ function draw(){
     const r = DR[di];
     if(!r) return;
     ctx.globalAlpha = (filter && filter!==d.key) ? 0.35 : 1;
-    const sx = r.col === 1 ? r.x + r.w - PAD - signWidth(d.label) : r.x + PAD;
-    drawSign(sx, r.y + PAD, d.label, d.roof);
+    const sx = r.col === 1 ? r.x + r.w - PAD - signWidth(d.key === "HubTown" ? "HOME HUBTOWN" : d.label) : r.x + PAD;
+    drawSign(sx, r.y + PAD, d.key === "HubTown" ? "HOME HUBTOWN" : d.label, d.roof);
     ctx.globalAlpha = 1;
   });
 
@@ -1497,7 +1512,7 @@ function renderPanel(){
   const live = ag.status !== "offline";
   panel.innerHTML = `
     <h2>${ag.name}</h2>
-    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : d.key}</p>
+    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : (d.key === "HubTown" ? "HubTown · home" : d.key)}</p>
     <span class="status-chip"><i style="width:8px;height:8px;background:${STATUS_COLOR[ag.status]};display:inline-block"></i>${STATUS_TEXT[ag.status]}</span>
     ${live && ag.activity ? `<p class="doing">${ag.activity}</p>` : ""}
     <dl>
@@ -1511,10 +1526,10 @@ function renderPanel(){
       ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${k.name} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
     </dl>
     <div class="log">${ag.lastLine}</div>
-    <div class="acts">
+    ${LIVE ? `<p class="hint">Pause, wake, and shut down stay on the demo townmap. They do not touch live cottages.</p>` : `<div class="acts">
       <button data-act="${ag.status==="working" ? "idle" : "working"}">${ag.status==="working" ? "pause" : "wake"}</button>
       <button class="danger" data-act="offline">shut down</button>
-    </div>`;
+    </div>`}`;
   panel.querySelectorAll("[data-act]").forEach(b=>{
     b.onclick = ()=>{ SIM.set(ag.id, b.dataset.act); refresh(); };
   });
@@ -1529,7 +1544,7 @@ function renderTally(){
     const busy = agents.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
-    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key}<span class="n">${busy}/${n}</span>`;
+    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key === "HubTown" ? "HubTown home" : d.key}<span class="n">${busy}/${n}</span>`;
     b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
     tally.appendChild(b);
   });

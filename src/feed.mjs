@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
-import { readHubAgents } from "./hub.mjs";
+import { readHubAgents, shortModel } from "./hub.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
@@ -54,13 +54,6 @@ const WINDOW = (() => {
 
 /* ── per-file parse state, kept between polls ───────────────────────── */
 const files = new Map();   // path -> { offset, tail, session }
-
-const shortModel = m => {
-  const s = String(m || "").toLowerCase();
-  if (s.includes("opus")) return "opus";
-  if (s.includes("haiku")) return "haiku";
-  return "sonnet";
-};
 
 function priceOf(model, u) {
   const p = PRICE[shortModel(model)] || PRICE.sonnet;
