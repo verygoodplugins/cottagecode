@@ -11,9 +11,8 @@
  *   --once            print one snapshot as JSON and exit
  *   --debug           log what each session resolved to, and why
  *
- * Reads ~/.claude/projects/<slugified-cwd>/<sessionId>.jsonl. Files are read
- * incrementally — full on first sight, then only the new bytes — so token
- * totals stay accurate without re-parsing megabytes every two seconds.
+ * Reads ~/.claude/projects jsonl and, when present, Autohub's hub-unified.db
+ * (readonly sqlite). The browser talks only to this process.
  */
 
 import { createServer } from "node:http";
@@ -22,6 +21,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
+import { readHubAgents } from "./hub.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
@@ -283,13 +283,24 @@ function toAgents(sessions) {
 
 /* ── the scan ───────────────────────────────────────────────────────── */
 let cache = [];
-async function scan() {
+let source = "none";
+let hubLabel = "none";
+
+function sortCottages(list) {
+  return list.sort((a, b) => {
+    if (a.town === "HubTown" && b.town !== "HubTown") return -1;
+    if (b.town === "HubTown" && a.town !== "HubTown") return 1;
+    return String(a.town).localeCompare(b.town) || String(a.name).localeCompare(b.name);
+  });
+}
+
+async function scanClaude() {
   const now = Date.now();
   let dirs = [];
   try { dirs = await readdir(PROJECTS, { withFileTypes: true }); }
   catch (e) {
     console.error(`can't read ${PROJECTS}: ${e.message}`);
-    return;
+    return [];
   }
 
   const sessions = [];
@@ -303,19 +314,31 @@ async function scan() {
       const path = join(dir, name);
       try {
         const st = await stat(path);
-        if (now - st.mtimeMs > WINDOW && !files.has(path)) continue;   // cold, never seen
+        if (now - st.mtimeMs > WINDOW && !files.has(path)) continue;
         sessions.push(await readIncrement(path));
       } catch { /* file vanished mid-scan */ }
     }
   }
+  return toAgents(sessions);
+}
 
-  cache = toAgents(sessions).sort((a, b) => {
-    if (a.town === "HubTown" && b.town !== "HubTown") return -1;
-    if (b.town === "HubTown" && a.town !== "HubTown") return 1;
-    return String(a.town).localeCompare(b.town) || String(a.name).localeCompare(b.name);
-  });
+async function scan() {
+  const claude = await scanClaude();
+  const hub = readHubAgents();
+  if (hub.error) console.error(`hub db: ${hub.error}`);
+  hubLabel = hub.ok ? hub.dbPath : (hub.missing ? "none" : (hub.error || "error"));
+
+  if (hub.ok && hub.agents.length) {
+    const extra = claude.filter((a) => !hub.keys.has(a.id));
+    cache = sortCottages([...hub.agents, ...extra]);
+    source = extra.length ? "hub+claude" : "hub";
+  } else {
+    cache = sortCottages(claude);
+    source = claude.length ? "claude" : "none";
+  }
+
   if (DEBUG) {
-    console.log(`\n[${new Date().toLocaleTimeString()}] ${cache.length} agents`);
+    console.log(`\n[${new Date().toLocaleTimeString()}] ${cache.length} cottages  source=${source}`);
     for (const a of cache) {
       console.log(`  ${a.name.padEnd(22)} ${a.status.padEnd(8)} ${String(a.town).padEnd(14)} ` +
                   `${a.model.padEnd(7)} ${String(a.branch).slice(0,24).padEnd(26)} ` +
@@ -339,7 +362,7 @@ createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/agents") {
     res.writeHead(200, { ...cors, "content-type": "application/json" });
-    return res.end(JSON.stringify(cache));
+    return res.end(JSON.stringify({ agents: cache, source }));
   }
   if (url.pathname === "/" || url.pathname === "/index.html") {
     try {
@@ -353,6 +376,8 @@ createServer(async (req, res) => {
   res.writeHead(404, cors).end("not found");
 }).listen(PORT, () => {
   console.log(`\n  CottageCode  →  http://localhost:${PORT}`);
-  console.log(`  reading      →  ${PROJECTS}`);
+  console.log(`  hub db       →  ${hubLabel}`);
+  console.log(`  claude       →  ${PROJECTS}`);
+  console.log(`  source       →  ${source}  (${cache.length} cottages)`);
   console.log(`  window       →  last ${Math.round(WINDOW / 3600e3)}h\n`);
 });
