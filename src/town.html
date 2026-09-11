@@ -74,6 +74,19 @@
   .doing{margin:10px 0 0;font-family:ui-monospace,monospace;font-size:12px;color:#ffd7a1}
   .muted{color:var(--ink-dim)}
   .card a{color:#9ecbff}
+  .launch{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .launch a, .launch button{font-family:"Silkscreen",monospace;font-size:11px;padding:8px 10px;
+    border-radius:2px;cursor:pointer;background:#37414c;color:var(--ink);border:1px solid var(--edge);
+    text-decoration:none;display:inline-block}
+  .launch a.pr{border-color:#c9a24a;color:#ffd166}
+  .launch a.pr.merged{border-color:#4a7a3e;color:#9ee08a}
+  .launch a:hover, .launch button:hover{background:#434f5c}
+  .letters{margin:12px 0 0;display:flex;flex-direction:column;gap:8px}
+  .letter{background:#171d23;border:1px solid var(--edge);padding:8px 9px;border-radius:2px;
+    cursor:pointer;text-align:left;width:100%;color:var(--ink);font:inherit}
+  .letter:hover{border-color:#e2504a}
+  .letter .who{font-family:"Silkscreen",monospace;font-size:11px}
+  .letter .why{font-size:12px;color:var(--ink-dim);margin-top:4px}
 </style>
 </head>
 <body>
@@ -98,6 +111,7 @@
         <span class="key"><i style="background:#a86e3e;width:8px;height:7px"></i>shed = spawned agent</span>
         <span class="key"><i style="background:#e8c15a"></i>parcel = open PR</span>
         <span class="key"><i style="background:#79c25f"></i>parcel = merged</span>
+        <span class="key"><i style="background:#c23b2e"></i>mail = letters for you</span>
         <button id="settled" aria-pressed="false">settled (0)</button>
         <button id="pause" aria-pressed="false">pause feed</button>
       </div>
@@ -117,7 +131,7 @@
       </div>
     </div>
     <aside class="card" id="panel" aria-live="polite">
-      <p class="hint">Click a cottage to see what that agent is doing. Arrow keys walk between cottages.</p>
+      <p class="hint">Click a cottage, or click Jack's stoop for the letter pile. Arrow keys walk the houses.</p>
     </aside>
   </div>
 </div>
@@ -192,6 +206,8 @@ async function fetchAgents(){
         worktreePath: a.worktreePath ?? "",
         result: a.result ?? "",
         pr,
+        attention: a.attention ?? "",
+        handoffUrl: a.handoffUrl ?? "",
         activity: a.activity ?? "",
         model: shortModel(a.model),
         branch: a.branch ?? "",
@@ -270,6 +286,8 @@ const SIM = (() => {
     worktreePath: "",
     result: s[2]==="done" ? "PR opened, 6 files changed" : "",
     pr: s[2]==="done" ? {number:412, url:"", title:"fix sync", state:"open"} : {number:null,url:"",title:"",state:"none"},
+    attention: s[2]==="blocked" ? pick(LINES.blocked) : "",
+    handoffUrl: "",
     activity: pick(ACTIVITY[s[2]]),
     model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku","gpt","local"]) : "haiku",
     branch: s[3]==null ? pick(BRANCHES[s[1]]) : null,
@@ -339,6 +357,7 @@ let TOWNS = [];
 
 function districtsFrom(list){
   const keys = [...new Set(list.map(a=>townKey(a)))];
+  if(!keys.includes("HubTown")) keys.unshift("HubTown");
   keys.sort((a,b)=>{
     if(a==="HubTown") return -1;
     if(b==="HubTown") return 1;
@@ -395,6 +414,8 @@ let agents = [], plots = [], gardens = [];
 const actors = new Map();   // agent id -> villager sprite state, survives each poll
 let pops = 0;               // how many thought bubbles are currently popped open
 let selectedId = null, hoverId = null, filter = null, paused = false, t = 0;
+const JACK_ID = "__jack__";
+let jackPlot = null;
 
 const px = (x,y,w,h,c)=>{ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); };
 
@@ -1075,6 +1096,111 @@ function drawPerson(x, y, body, step){
   });
 }
 
+/* Jack: navy shirt, red cap. Not a town-roof villager. */
+const JACK = [
+  "...rrrr....",
+  "..rrrrrr...",
+  ".rrhhhhrr..",
+  ".ohssssho..",
+  ".ohssssho..",
+  "..osssso...",
+  ".onnnnnno..",
+  "onnnnnnnno.",
+  "onnnnnnnno.",
+  ".opp..ppo..",
+  ".opp..ppo..",
+  ".okk..kko..",
+  "..oo..oo..."
+];
+function drawJack(x, y, step){
+  const pal = {o:C.outline, r:"#c23b2e", h:"#3d2918", s:"#f0bd8e", n:"#2c4a6e", p:"#3f4a57", k:"#2b2118"};
+  px(x+1, y+13, 8, 2, C.grassSh);
+  JACK.forEach((row, ry)=>{
+    for(let cx=0; cx<row.length; cx++){
+      const ch = row[cx];
+      if(ch===".") continue;
+      const ox = (step && ry>=9) ? (cx<5 ? 1 : -1) : 0;
+      px(x+cx+ox, y+ry, 1, 1, pal[ch]);
+    }
+  });
+}
+
+function letters(){
+  return agents.filter(a => a.status === "blocked" && a.occupancy !== "settled");
+}
+
+function letterWhy(ag){
+  const attn = (ag.attention || "").trim();
+  if(attn) return attn;
+  const task = (ag.task || "").trim();
+  if(task && task !== "-" && !/session ended/i.test(task)) return task;
+  return (ag.lastLine || "needs you").trim();
+}
+
+function cursorUrl(p){
+  const s = String(p || "");
+  if(!s.startsWith("/") || s.length < 2) return "";
+  return "cursor://file" + s.split("/").map(encodeURIComponent).join("/");
+}
+
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+}
+
+function drawMailbox(x, y, n){
+  px(x+6, y+10, 2, 10, C.outline);
+  px(x+6, y+10, 2, 9, C.stoneDk);
+  px(x+1, y+2, 14, 10, C.outline);
+  px(x+2, y+3, 12, 8, n ? "#3d4854" : "#6e7a83");
+  px(x+3, y+4, 10, 2, n ? "#55636f" : "#8a949c");
+  const flag = n ? "#c23b2e" : "#7d868e";
+  px(x+13, y+3, 2, 7, C.outline);
+  px(x+15, y+3, 5, 3, C.outline);
+  px(x+15, y+4, 4, 2, flag);
+  if(n){
+    px(x+3, y+14, 8, 6, C.outline);
+    px(x+4, y+15, 6, 4, "#f7f2e4");
+    px(x+4, y+15, 6, 1, "#c23b2e");
+    if(n > 1){
+      px(x+5, y+17, 8, 6, C.outline);
+      px(x+6, y+18, 6, 4, "#f4e6c8");
+    }
+    ctx.font = '8px "Silkscreen", monospace';
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#fff0e8";
+    const label = n > 9 ? "9+" : String(n);
+    ctx.fillText(label, x+18, y+14);
+  }
+}
+
+function drawJackStoop(plot, n, on, over){
+  const x = plot.x, y = plot.y;
+  px(x+2, y+20, 28, 6, C.stoneDk);
+  px(x+3, y+20, 26, 4, C.stone);
+  px(x+6, y+6, 18, 14, C.outline);
+  px(x+7, y+7, 16, 12, "#d9c39c");
+  for(let i=0;i<6;i++){
+    const w = 8 + i*2, rx = x + 15 - (w>>1);
+    px(rx-1, y+i, w+2, 1, C.outline);
+    px(rx, y+i, w, 1, i===3 ? "#6b1f1a" : "#c23b2e");
+  }
+  px(x+12, y+12, 6, 8, C.woodDk);
+  px(x+13, y+13, 4, 6, C.wood);
+  ctx.font = '8px "Silkscreen", monospace';
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#2b1d10";
+  const you = "YOU";
+  ctx.fillText(you, x + 15 - (ctx.measureText(you).width>>1), y-8);
+  const bob = reduce ? 0 : Math.round(Math.sin(t*2)*0.5);
+  drawJack(x+22, y+12+bob, 0);
+  drawMailbox(x+38, y+8, n);
+  if(on || over){
+    ctx.strokeStyle = on ? "#ffd166" : "#ffffff";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x-1.5, y-9, plot.w+3, plot.h+12);
+  }
+}
+
 /* Livestock. Purely decorative — they carry no data, they just make the
    place feel inhabited instead of like a dashboard with grass on it. */
 const SPRITES = {
@@ -1318,13 +1444,17 @@ function drawParcel(x, y, state){
 function layout(){
   const vis = visibleAgents();
   if(filter && !vis.some(a=>townKey(a)===filter)) filter = null;
-  if(selectedId && !vis.some(a=>a.id===selectedId)) selectedId = null;
+  if(selectedId && selectedId !== JACK_ID && !vis.some(a=>a.id===selectedId)) selectedId = null;
   TOWNS = districtsFrom(vis);
   const rooted = vis.filter(a=>!a.parent);
   const maxCount = Math.max(1, ...TOWNS.map(d => rooted.filter(a=>townKey(a)===d.key).length), 1);
   COLS = maxCount <= 3 ? Math.max(2, maxCount) : (maxCount <= 8 ? 4 : 5);
   D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
-  const rowsOf = k => Math.max(1, Math.ceil(rooted.filter(a=>townKey(a)===k).length / COLS));
+  const rowsOf = k => {
+    const n = rooted.filter(a=>townKey(a)===k).length;
+    if(n === 0 && k === "HubTown") return 0;
+    return Math.max(1, Math.ceil(n / COLS));
+  };
   const heightOf = k => SIGN_H + rowsOf(k)*(HOUSE_H+GAP_Y) + PAD*2;
   const n = Math.max(TOWNS.length, 1);
   const gridCols = 2;
@@ -1383,6 +1513,18 @@ function layout(){
   });
   paintBackground();
   if(!fauna.length) stockTown();
+  placeJack();
+}
+
+function placeJack(){
+  const di = TOWNS.findIndex(d => d.key === "HubTown");
+  if(di < 0 || !DR[di]){ jackPlot = null; return; }
+  const r = DR[di];
+  const signW = signWidth("HOME HUBTOWN");
+  const signX = r.col === 1 ? r.x + r.w - PAD - signW : r.x + PAD;
+  const x = r.col === 1 ? signX - 72 : signX + signW + 8;
+  const y = r.y + PAD + 2;
+  jackPlot = { x, y, w: 62, h: 28 };
 }
 
 /* ---------- frame ---------- */
@@ -1398,6 +1540,11 @@ function draw(){
     drawSign(sx, r.y + PAD, d.key === "HubTown" ? "HOME HUBTOWN" : d.label, d.roof);
     ctx.globalAlpha = 1;
   });
+  if(jackPlot){
+    ctx.globalAlpha = (filter && filter !== "HubTown") ? 0.35 : 1;
+    drawJackStoop(jackPlot, letters().length, selectedId===JACK_ID, hoverId===JACK_ID);
+    ctx.globalAlpha = 1;
+  }
 
   plots.forEach(p=>{
     const ag = p.agent;
@@ -1505,6 +1652,10 @@ function hit(evt){
   const r = cv.getBoundingClientRect();
   const x = (evt.clientX - r.left) * (W / r.width);
   const y = (evt.clientY - r.top) * (H / r.height);
+  if(jackPlot && !(filter && filter !== "HubTown")){
+    const j = jackPlot;
+    if(x>=j.x-2 && x<=j.x+j.w+8 && y>=j.y-10 && y<=j.y+j.h+10) return JACK_ID;
+  }
   for(const p of plots){
     if(filter && filter !== townKey(p.agent)) continue;
     for(const k of (p.kids||[])) if(x>=k.x-2 && x<=k.x+18 && y>=k.y-4 && y<=k.y+17) return k.agent.id;
@@ -1512,16 +1663,37 @@ function hit(evt){
   }
   return null;
 }
-cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId ? "pointer":"default"; });
-cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
-cv.addEventListener("click", e=>{ const id = hit(e); if(id){ selectedId = id; renderPanel(); } });
-cv.addEventListener("keydown", e=>{
+function walkIds(){
   const vis = [];
+  if(jackPlot && !(filter && filter !== "HubTown")) vis.push(JACK_ID);
   plots.forEach(p=>{
     if(filter && filter!==townKey(p.agent)) return;
     vis.push(p.agent.id);
     (p.kids||[]).forEach(k=>vis.push(k.agent.id));
   });
+  return vis;
+}
+function openBest(ag){
+  if(!ag) return;
+  if(ag.pr && ag.pr.url){ window.open(ag.pr.url, "_blank", "noopener"); return; }
+  const cur = cursorUrl(ag.worktreePath);
+  if(cur){
+    const a = document.createElement("a");
+    a.href = cur;
+    a.click();
+  }
+}
+cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId ? "pointer":"default"; });
+cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
+cv.addEventListener("click", e=>{ const id = hit(e); if(id){ selectedId = id; renderPanel(); } });
+cv.addEventListener("dblclick", e=>{
+  const id = hit(e);
+  if(!id || id === JACK_ID) return;
+  e.preventDefault();
+  openBest(agents.find(a=>a.id===id));
+});
+cv.addEventListener("keydown", e=>{
+  const vis = walkIds();
   if(!vis.length) return;
   const i = vis.indexOf(selectedId);
   if(e.key==="ArrowRight"||e.key==="ArrowDown"){ selectedId = vis[(i+1+vis.length)%vis.length]; e.preventDefault(); renderPanel(); }
@@ -1548,10 +1720,48 @@ function burnRate(ag){
   const mins = (Date.now() - ag.startedAt) / 60000;
   return mins > 0.5 ? money(ag.cost/mins) + "/min" : "—";
 }
+function renderJackPanel(){
+  const pile = letters();
+  const n = pile.length;
+  panel.innerHTML = `
+    <h2>Jack</h2>
+    <p class="role-line">HubTown · you</p>
+    <span class="status-chip"><i style="width:8px;height:8px;background:${n ? "#e2504a" : "#79c25f"};display:inline-block"></i>${n ? n + " letter" + (n===1?"":"s") : "stoop is clear"}</span>
+    ${n ? `<div class="letters">${pile.map(ag => `
+      <button type="button" class="letter" data-jump="${esc(ag.id)}">
+        <div class="who">${esc(ag.name)} · ${esc(ag.town || "")}</div>
+        <div class="why">${esc(letterWhy(ag))}</div>
+      </button>`).join("")}</div>` : `<p class="hint">No mail. Nobody on the map needs you right now.</p>`}`;
+  panel.querySelectorAll("[data-jump]").forEach(b=>{
+    b.onclick = ()=>{ selectedId = b.dataset.jump; renderPanel(); };
+  });
+}
+
+function launchHtml(ag){
+  const bits = [];
+  const cur = cursorUrl(ag.worktreePath);
+  if(cur){
+    bits.push(`<a class="go" href="${esc(cur)}">open worktree</a>`);
+    bits.push(`<button type="button" data-copy="${esc(ag.worktreePath)}">copy path</button>`);
+  }
+  if(ag.pr && ag.pr.url){
+    const merged = ag.pr.state === "merged";
+    bits.push(`<a class="go pr${merged ? " merged" : ""}" href="${esc(ag.pr.url)}" target="_blank" rel="noreferrer">${merged ? "open merged PR" : "open PR"}</a>`);
+  }
+  if(ag.handoffUrl){
+    bits.push(`<a class="go" href="${esc(ag.handoffUrl)}" target="_blank" rel="noreferrer">babysit</a>`);
+  }
+  return bits.length ? `<div class="launch">${bits.join("")}</div>` : "";
+}
+
 function renderPanel(){
+  if(selectedId === JACK_ID){
+    renderJackPanel();
+    return;
+  }
   const ag = agents.find(a=>a.id===selectedId);
   if(!ag){
-    panel.innerHTML = `<p class="hint">Click a cottage to see what that agent is doing. Arrow keys walk between cottages.</p>`;
+    panel.innerHTML = `<p class="hint">Click a cottage, or click Jack's stoop for the letter pile. Arrow keys walk the houses.</p>`;
     return;
   }
   const d = townStyle(ag);
@@ -1564,30 +1774,42 @@ function renderPanel(){
     : "none we can see";
   const startedOk = ag.startedAt && ag.startedAt > Date.parse("2020-01-01");
   panel.innerHTML = `
-    <h2>${ag.name}</h2>
-    <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : (d.key === "HubTown" ? "HubTown · home" : d.key)}</p>
+    <h2>${esc(ag.name)}</h2>
+    <p class="role-line">${mum ? `shed in ${esc(mum.name)}'s yard` : (d.key === "HubTown" ? "HubTown · home" : esc(d.key))}</p>
     <span class="status-chip"><i style="width:8px;height:8px;background:${STATUS_COLOR[ag.status]};display:inline-block"></i>${STATUS_TEXT[ag.status]}</span>
-    ${live && ag.activity ? `<p class="doing">${ag.activity}</p>` : ""}
+    ${live && ag.activity ? `<p class="doing">${esc(ag.activity)}</p>` : ""}
     <dl>
-      <dt>Worktree</dt><dd>${ag.worktree || ag.worktreePath || "-"}</dd>
-      <dt>Branch</dt><dd>${ag.branch || "-"}</dd>
-      <dt>Task</dt><dd>${ag.task}</dd>
-      <dt>Result</dt><dd>${ag.result || ag.lastLine || "-"}</dd>
-      <dt>PR</dt><dd>${pr.url ? `<a href="${pr.url}" target="_blank" rel="noreferrer">${prLine}</a>` : prLine}</dd>
-      <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${ag.model}</dd>
-      <dt>Sent by</dt><dd>${mum ? `${mum.name} <span class="muted">(agent)</span>` : ag.dispatchedBy}</dd>
+      <dt>Worktree</dt><dd>${esc(ag.worktree || ag.worktreePath || "-")}</dd>
+      <dt>Branch</dt><dd>${esc(ag.branch || "-")}</dd>
+      <dt>Task</dt><dd>${esc(ag.task)}</dd>
+      <dt>Result</dt><dd>${esc(ag.result || ag.lastLine || "-")}</dd>
+      <dt>PR</dt><dd>${pr.url ? `<a href="${esc(pr.url)}" target="_blank" rel="noreferrer">${esc(prLine)}</a>` : esc(prLine)}</dd>
+      <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${esc(ag.model)}</dd>
+      <dt>Sent by</dt><dd>${mum ? `${esc(mum.name)} <span class="muted">(agent)</span>` : esc(ag.dispatchedBy)}</dd>
       <dt>Started</dt><dd>${startedOk ? `${clock(ag.startedAt)} <span class="muted">· ${uptime(ag.startedAt)} ago</span>` : "-"}</dd>
       <dt>Cost</dt><dd>${money(ag.cost)} <span class="muted">· ${live ? burnRate(ag) : "this run"}</span></dd>
       <dt>Tokens</dt><dd>${ag.tokens.toLocaleString()}</dd>
-      ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${k.name} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
+      ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${esc(k.name)} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
     </dl>
-    <div class="log">${ag.result || ag.lastLine || ""}</div>
+    <div class="log">${esc(ag.result || ag.lastLine || "")}</div>
+    ${launchHtml(ag)}
     ${LIVE ? `<p class="hint">Pause, wake, and shut down stay on the demo townmap. They do not touch live cottages.</p>` : `<div class="acts">
       <button data-act="${ag.status==="working" ? "idle" : "working"}">${ag.status==="working" ? "pause" : "wake"}</button>
       <button class="danger" data-act="offline">shut down</button>
     </div>`}`;
   panel.querySelectorAll("[data-act]").forEach(b=>{
     b.onclick = ()=>{ SIM.set(ag.id, b.dataset.act); refresh(); };
+  });
+  panel.querySelectorAll("[data-copy]").forEach(b=>{
+    b.onclick = async ()=>{
+      try{
+        await navigator.clipboard.writeText(b.dataset.copy);
+        b.textContent = "copied";
+        setTimeout(()=>{ b.textContent = "copy path"; }, 1200);
+      }catch{
+        b.textContent = "copy failed";
+      }
+    };
   });
 }
 
@@ -1606,11 +1828,19 @@ function renderTally(){
     b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
     tally.appendChild(b);
   });
+  const mailN = letters().length;
+  const mailBtn = document.createElement("button");
+  mailBtn.setAttribute("aria-pressed", selectedId===JACK_ID ? "true":"false");
+  mailBtn.innerHTML = `<span class="dot" style="background:#c23b2e"></span>letters<span class="n">${mailN}</span>`;
+  mailBtn.onclick = ()=>{ selectedId = JACK_ID; renderTally(); renderPanel(); };
+  tally.appendChild(mailBtn);
   const busy = vis.filter(a=>a.status==="working").length;
   const spend = vis.filter(a=>a.occupancy==="live" || a.occupancy==="recent").reduce((n,a)=>n + (a.cost||0), 0);
   const settledN = agents.filter(a=>a.occupancy==="settled").length;
   document.querySelector(".sub").textContent =
-    `${busy} working · ${money(spend)} this window` + (settledN ? ` · ${settledN} settled` : "");
+    `${busy} working · ${money(spend)} this window` +
+    (mailN ? ` · ${mailN} letter${mailN===1?"":"s"}` : "") +
+    (settledN ? ` · ${settledN} settled` : "");
   const sb = document.getElementById("settled");
   if(sb){
     sb.textContent = `settled (${settledN})`;
