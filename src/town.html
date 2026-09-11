@@ -157,11 +157,11 @@ function normalizeTown(raw){
   if(!s) return "WildTown";
   const legacy = {dev:"HubTown", research:"MemTown", ops:"FusionTown", content:"AppTown"};
   if(legacy[s]) return legacy[s];
-  // Strip to alphanumerics only so a feed cannot smuggle markup into town keys
-  // (renderTally and friends paint labels into the DOM).
-  let stem = s.replace(/town$/i, "").replace(/[^a-zA-Z0-9]+/g, "");
-  if(!stem) return "WildTown";
-  stem = stem.charAt(0).toUpperCase() + stem.slice(1);
+  // Keep word boundaries (my-project → MyProjectTown) while stripping markup.
+  const withoutTown = s.replace(/town$/i, "");
+  const words = withoutTown.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if(!words.length) return "WildTown";
+  const stem = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("");
   return /town$/i.test(stem) ? stem : stem + "Town";
 }
 
@@ -219,9 +219,21 @@ async function fetchAgents(){
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.agents || []);
     if(!Array.isArray(list)) throw new Error("agents must be an array");
-    // Empty array is a valid live snapshot (no runners up right now).
+    const srcName = (!Array.isArray(data) && data.source) ? String(data.source) : "";
+    let bundledEmpty = false;
+    try{
+      const u = new URL(ENDPOINT, location.href);
+      bundledEmpty = !list.length && u.origin === location.origin && u.pathname === "/agents" && (!srcName || srcName === "none");
+    }catch{ /* ignore */ }
+    if(bundledEmpty){
+      // Fresh install: keep polling /agents, but show the demo until something appears.
+      LIVE = false;
+      feedNote("local feed empty. demo townmap until cottages show up.");
+      return SIM.snapshot();
+    }
+    // Empty custom feeds stay connected (valid zero-cottage snapshot).
     LIVE = true;
-    const src = (!Array.isArray(data) && data.source) ? ` (${data.source})` : "";
+    const src = srcName ? ` (${srcName})` : "";
     feedNote(`live. ${list.length} cottages${src} from ${new URL(ENDPOINT).host}`, "#79c25f");
     const now = Date.now();
     return list.map((a,i)=>{
