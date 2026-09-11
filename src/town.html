@@ -73,6 +73,7 @@
   .hint{margin:0;color:var(--ink-dim);font-size:12px}
   .doing{margin:10px 0 0;font-family:ui-monospace,monospace;font-size:12px;color:#ffd7a1}
   .muted{color:var(--ink-dim)}
+  .card a{color:#9ecbff}
 </style>
 </head>
 <body>
@@ -95,6 +96,9 @@
         <span class="key"><i style="background:#79c25f"></i>finished</span>
         <span class="key"><i style="background:#7d868e"></i>offline</span>
         <span class="key"><i style="background:#a86e3e;width:8px;height:7px"></i>shed = spawned agent</span>
+        <span class="key"><i style="background:#e8c15a"></i>parcel = open PR</span>
+        <span class="key"><i style="background:#79c25f"></i>parcel = merged</span>
+        <button id="settled" aria-pressed="false">settled (0)</button>
         <button id="pause" aria-pressed="false">pause feed</button>
       </div>
       <div class="stage-foot" style="margin-top:4px">
@@ -128,6 +132,7 @@
 const POLL_MS = 1500;
 let ENDPOINT = null;
 let LIVE = false;
+let showSettled = false;
 
 function townKey(ag){
   return ag.town || ag.role || "WildTown";
@@ -169,19 +174,30 @@ async function fetchAgents(){
     feedNote(`live. ${list.length} cottages${src} from ${new URL(ENDPOINT).host}`, "#79c25f");
     return list.map((a,i)=>{
       const town = normalizeTown(a.town || a.role);
+      const status = ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle";
+      const occupancy = a.occupancy || (status === "offline" ? "settled" : (status === "done" ? "recent" : "live"));
+      const pr = a.pr && typeof a.pr === "object"
+        ? { number: a.pr.number || null, url: a.pr.url || "", title: a.pr.title || "", state: a.pr.state || "none" }
+        : { number: null, url: "", title: "", state: "none" };
       return {
         id: String(a.id ?? "n"+i),
         name: a.name ?? a.id ?? ("agent-"+i),
         town,
         role: town,
-        status: ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle",
+        status,
+        occupancy,
         parent: a.parent ?? null,
         task: a.task ?? "-",
+        worktree: a.worktree ?? "",
+        worktreePath: a.worktreePath ?? "",
+        result: a.result ?? "",
+        pr,
         activity: a.activity ?? "",
         model: shortModel(a.model),
         branch: a.branch ?? "",
         dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
         startedAt: a.startedAt ?? Date.now(),
+        endedAt: a.endedAt ?? 0,
         tokens: a.tokens ?? 0,
         cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
         lastLine: a.lastLine ?? ""
@@ -247,13 +263,19 @@ const SIM = (() => {
   const now = Date.now();
   const agents = seed.map((s,i)=>({
     id:"a"+i, name:s[0], town:s[1], role:s[1], status:s[2],
+    occupancy: s[2]==="offline" ? "settled" : (s[2]==="done" ? "recent" : "live"),
     parent: s[3]==null ? null : "a"+s[3],
-    task: s[2]==="offline" ? "-" : pick(TASKS[s[1]]),
+    task: s[2]==="offline" ? "Claude Code session ended." : pick(TASKS[s[1]]),
+    worktree: s[2]==="offline" ? "" : pick(["dreamy-pare","gifted-neumann","pensive-yonath",""]),
+    worktreePath: "",
+    result: s[2]==="done" ? "PR opened, 6 files changed" : "",
+    pr: s[2]==="done" ? {number:412, url:"", title:"fix sync", state:"open"} : {number:null,url:"",title:"",state:"none"},
     activity: pick(ACTIVITY[s[2]]),
     model: s[3]==null ? pick(["opus","sonnet","sonnet","haiku","gpt","local"]) : "haiku",
     branch: s[3]==null ? pick(BRANCHES[s[1]]) : null,
     dispatchedBy: s[3]==null ? pick(DISPATCH) : seed[s[3]][0],
     startedAt: now - Math.floor(Math.random()*40*60*1000),
+    endedAt: s[2]==="done" || s[2]==="offline" ? now - 20*60*1000 : 0,
     tokens: Math.floor(Math.random()*180000),
     cost: 0,
     lastLine: pick(LINES[s[2]])
@@ -333,11 +355,12 @@ function townStyle(ag){
   return TOWNS.find(z=>z.key===k) || TOWNS[0] || FALLBACK_TOWN;
 }
 
-const HOUSE_W=54, HOUSE_H=66, COLS=4;
-const GAP_X=14, GAP_Y=74, PAD=12, SIGN_H=30, MARGIN=30, ROAD=40;
+const HOUSE_W=54, HOUSE_H=66;
+let COLS=4;
+const GAP_X=14, GAP_Y=62, PAD=12, SIGN_H=30, MARGIN=30, ROAD=40;
 // where things sit in the yard, measured down from the bottom of the house
 const LANE_Y = 1, LANE_H = 9, SIGN_Y = 13, BENCH_Y = 29, SHED_Y = 49;
-const D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
+let D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
 let W = MARGIN*2 + D_W*2 + ROAD;
 let H = 400, ROAD_Y = 200, DR = [];
 let VERT_ROAD = MARGIN + D_W;
@@ -1276,9 +1299,31 @@ function drawSign(x, y, label, color){
 }
 
 /* ---------- layout ---------- */
+function visibleAgents(){
+  return agents.filter(a => showSettled || a.occupancy !== "settled");
+}
+
+function drawParcel(x, y, state){
+  if(!state || state === "none") return;
+  const col = state === "merged" ? C.ok : "#e8c15a";
+  px(x-6, y+HOUSE_H-10, 8, 7, C.outline);
+  px(x-5, y+HOUSE_H-9, 6, 5, col);
+  px(x-4, y+HOUSE_H-11, 4, 2, C.woodDk);
+  if(state === "merged"){
+    px(x-4, y+HOUSE_H-7, 4, 1, C.outline);
+    px(x-3, y+HOUSE_H-6, 2, 1, C.outline);
+  }
+}
+
 function layout(){
-  TOWNS = districtsFrom(agents);
-  const rooted = agents.filter(a=>!a.parent);
+  const vis = visibleAgents();
+  if(filter && !vis.some(a=>townKey(a)===filter)) filter = null;
+  if(selectedId && !vis.some(a=>a.id===selectedId)) selectedId = null;
+  TOWNS = districtsFrom(vis);
+  const rooted = vis.filter(a=>!a.parent);
+  const maxCount = Math.max(1, ...TOWNS.map(d => rooted.filter(a=>townKey(a)===d.key).length), 1);
+  COLS = maxCount <= 3 ? Math.max(2, maxCount) : (maxCount <= 8 ? 4 : 5);
+  D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
   const rowsOf = k => Math.max(1, Math.ceil(rooted.filter(a=>townKey(a)===k).length / COLS));
   const heightOf = k => SIGN_H + rowsOf(k)*(HOUSE_H+GAP_Y) + PAD*2;
   const n = Math.max(TOWNS.length, 1);
@@ -1323,7 +1368,7 @@ function layout(){
     mine.forEach((ag, i)=>{
       const x = r.x + PAD + (i%COLS)*(HOUSE_W+GAP_X);
       const y = r.y + PAD + SIGN_H + ((i/COLS)|0)*(HOUSE_H+GAP_Y);
-      const kids = agents.filter(a=>a.parent===ag.id).slice(0,3)
+      const kids = vis.filter(a=>a.parent===ag.id).slice(0,3)
         .map((k, ki)=>({agent:k, x: x + 2 + ki*17, y: y + HOUSE_H + SHED_Y}));
       plots.push({agent:ag, x, y, district:d, kids});
     });
@@ -1360,7 +1405,8 @@ function draw(){
     ctx.globalAlpha = faded ? 0.3 : 1;
 
     drawHouse(p.x, p.y, ag);
-    drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch, ag.status==="offline");
+    drawParcel(p.x, p.y, ag.pr && ag.pr.state);
+    drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch || ag.worktree, ag.status==="offline");
     if(ag.status === "working"){
       const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
       drawSmoke(p.x+40, p.y+2, phase);
@@ -1446,7 +1492,9 @@ function draw(){
     const show = p.agent.id===hoverId || p.agent.id===selectedId || (a.popUntil && t < a.popUntil);
     if(!show) return;
     const revealed = reduce ? Infinity : (t - (a.streamAt ?? 0)) * 26;
-    drawThought(Math.round(a.x)+5, Math.round(a.y)-2, p.agent.lastLine, revealed);
+    const thought = (p.agent.task && p.agent.task !== "-" && !/session ended/i.test(p.agent.task))
+      ? p.agent.task : p.agent.lastLine;
+    drawThought(Math.round(a.x)+5, Math.round(a.y)-2, thought, revealed);
   });
 
   requestAnimationFrame(draw);
@@ -1510,22 +1558,30 @@ function renderPanel(){
   const mum = ag.parent ? agents.find(a=>a.id===ag.parent) : null;
   const kids = agents.filter(a=>a.parent===ag.id);
   const live = ag.status !== "offline";
+  const pr = ag.pr || {};
+  const prLine = pr.state && pr.state !== "none"
+    ? `${pr.state === "merged" ? "merged" : "open"} ${pr.number ? "#"+pr.number : ""} ${pr.title || ""}`.trim()
+    : "none we can see";
+  const startedOk = ag.startedAt && ag.startedAt > Date.parse("2020-01-01");
   panel.innerHTML = `
     <h2>${ag.name}</h2>
     <p class="role-line">${mum ? `shed in ${mum.name}'s yard` : (d.key === "HubTown" ? "HubTown · home" : d.key)}</p>
     <span class="status-chip"><i style="width:8px;height:8px;background:${STATUS_COLOR[ag.status]};display:inline-block"></i>${STATUS_TEXT[ag.status]}</span>
     ${live && ag.activity ? `<p class="doing">${ag.activity}</p>` : ""}
     <dl>
-      <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${ag.model}</dd>
-      <dt>Branch</dt><dd>${ag.branch || "—"}</dd>
+      <dt>Worktree</dt><dd>${ag.worktree || ag.worktreePath || "-"}</dd>
+      <dt>Branch</dt><dd>${ag.branch || "-"}</dd>
       <dt>Task</dt><dd>${ag.task}</dd>
+      <dt>Result</dt><dd>${ag.result || ag.lastLine || "-"}</dd>
+      <dt>PR</dt><dd>${pr.url ? `<a href="${pr.url}" target="_blank" rel="noreferrer">${prLine}</a>` : prLine}</dd>
+      <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${ag.model}</dd>
       <dt>Sent by</dt><dd>${mum ? `${mum.name} <span class="muted">(agent)</span>` : ag.dispatchedBy}</dd>
-      <dt>Started</dt><dd>${live ? `${clock(ag.startedAt)} <span class="muted">· ${uptime(ag.startedAt)} ago</span>` : "—"}</dd>
-      <dt>Cost</dt><dd>${money(ag.cost)} <span class="muted">· ${live ? burnRate(ag) : "idle"}</span></dd>
+      <dt>Started</dt><dd>${startedOk ? `${clock(ag.startedAt)} <span class="muted">· ${uptime(ag.startedAt)} ago</span>` : "-"}</dd>
+      <dt>Cost</dt><dd>${money(ag.cost)} <span class="muted">· ${live ? burnRate(ag) : "this run"}</span></dd>
       <dt>Tokens</dt><dd>${ag.tokens.toLocaleString()}</dd>
       ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${k.name} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
     </dl>
-    <div class="log">${ag.lastLine}</div>
+    <div class="log">${ag.result || ag.lastLine || ""}</div>
     ${LIVE ? `<p class="hint">Pause, wake, and shut down stay on the demo townmap. They do not touch live cottages.</p>` : `<div class="acts">
       <button data-act="${ag.status==="working" ? "idle" : "working"}">${ag.status==="working" ? "pause" : "wake"}</button>
       <button class="danger" data-act="offline">shut down</button>
@@ -1539,19 +1595,27 @@ function renderPanel(){
 const tally = document.getElementById("tally");
 function renderTally(){
   tally.innerHTML = "";
-  TOWNS.forEach(d=>{
-    const n = agents.filter(a=>townKey(a)===d.key).length;
-    const busy = agents.filter(a=>townKey(a)===d.key && a.status==="working").length;
+  const vis = visibleAgents();
+  const towns = districtsFrom(vis);
+  towns.forEach(d=>{
+    const n = vis.filter(a=>townKey(a)===d.key).length;
+    const busy = vis.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
     b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key === "HubTown" ? "HubTown home" : d.key}<span class="n">${busy}/${n}</span>`;
     b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
     tally.appendChild(b);
   });
-  const busy = agents.filter(a=>a.status==="working").length;
-  const spend = agents.reduce((n,a)=>n + (a.cost||0), 0);
+  const busy = vis.filter(a=>a.status==="working").length;
+  const spend = vis.filter(a=>a.occupancy==="live" || a.occupancy==="recent").reduce((n,a)=>n + (a.cost||0), 0);
+  const settledN = agents.filter(a=>a.occupancy==="settled").length;
   document.querySelector(".sub").textContent =
-    `${busy} of ${agents.length} cottages working · ${money(spend)} spent so far`;
+    `${busy} working · ${money(spend)} this window` + (settledN ? ` · ${settledN} settled` : "");
+  const sb = document.getElementById("settled");
+  if(sb){
+    sb.textContent = `settled (${settledN})`;
+    sb.setAttribute("aria-pressed", showSettled ? "true":"false");
+  }
 }
 const noteEl = document.getElementById("note");
 function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
@@ -1564,6 +1628,11 @@ document.getElementById("connect").onclick = ()=>{
 document.getElementById("endpoint").addEventListener("keydown", e=>{
   if(e.key==="Enter") document.getElementById("connect").click();
 });
+document.getElementById("settled").onclick = (e)=>{
+  showSettled = !showSettled;
+  e.target.setAttribute("aria-pressed", String(showSettled));
+  layout(); renderTally(); renderPanel();
+};
 document.getElementById("pause").onclick = (e)=>{
   paused = !paused; SIM.setLive(!paused);
   e.target.setAttribute("aria-pressed", String(paused));
