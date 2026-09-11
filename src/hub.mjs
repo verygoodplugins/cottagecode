@@ -12,9 +12,11 @@ import { townName, worktreeOf } from "./towns.mjs";
 import {
   classifyOccupancy,
   inferPr,
+  isAbsolutePath,
   isEmptyResult,
   isGenericName,
   isWorktreeSlug,
+  pickHandoffUrl,
   shortenFront,
   shortenName,
 } from "./occupancy.mjs";
@@ -114,14 +116,19 @@ export function mapHubStatus(row, now = Date.now()) {
   return "idle";
 }
 
+function pickWorktreePath(ctx) {
+  const cands = [
+    ctx.lifecycle?.recovery?.babysitHandoff?.worktreePath,
+    ctx.workFolder,
+    ctx.cwd,
+    ctx.projectPath,
+    ctx.agentKernel?.route?.workspace?.root,
+  ].filter(isAbsolutePath);
+  return cands.find((p) => /worktrees?/i.test(p)) || cands[0] || "";
+}
+
 function pickWorktree(row, ctx) {
-  const path =
-    ctx.projectPath ||
-    ctx.workFolder ||
-    ctx.cwd ||
-    ctx.agentKernel?.route?.workspace?.root ||
-    "";
-  return worktreeOf(path);
+  return worktreeOf(pickWorktreePath(ctx));
 }
 
 function pickTask(row, ctx, worktree) {
@@ -199,10 +206,14 @@ function toCottage(row, now) {
   const ctx = parseContext(row.context);
   const project = projectFrom(row, ctx);
   const town = townName(project);
+  const worktreePath = pickWorktreePath(ctx);
   const worktree = pickWorktree(row, ctx);
   const result = pickResult(row, ctx);
   const pr = inferPr(`${result} ${row.task || ""}`, ctx);
   const task = pickTask(row, ctx, worktree);
+  const attention = row.attention_message
+    ? String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240)
+    : "";
   const tokens =
     (row.input_tokens || 0) +
     (row.output_tokens || 0) +
@@ -225,11 +236,13 @@ function toCottage(row, now) {
     status: mapHubStatus(row, now),
     task,
     worktree,
-    worktreePath: ctx.projectPath || ctx.workFolder || "",
+    worktreePath,
     result,
     pr,
-    activity: row.attention_message
-      ? String(row.attention_message).slice(0, 80)
+    attention,
+    handoffUrl: pickHandoffUrl(ctx),
+    activity: attention
+      ? attention.slice(0, 80)
       : row.platform || "",
     model: shortModel(row.model || ctx.agentKernel?.route?.model),
     branch: ctx.gitBranch || ctx.branch || ctx.lifecycle?.recovery?.babysitHandoff?.baseBranch || "",

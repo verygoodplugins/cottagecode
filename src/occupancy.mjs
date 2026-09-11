@@ -88,6 +88,36 @@ export function liveCostOf(list) {
     .reduce((n, c) => n + (Number(c.cost) || 0), 0);
 }
 
+/** Blocked and still on the default map. Settled ghosts are not mail. */
+export function isLetter(c) {
+  return Boolean(c && c.status === "blocked" && c.occupancy !== "settled");
+}
+
+export function lettersOf(list) {
+  return (list || []).filter(isLetter);
+}
+
+export function isAbsolutePath(p) {
+  return typeof p === "string" && p.startsWith("/") && p.length > 1 && !p.includes("\0");
+}
+
+export function cursorFileUrl(p) {
+  if (!isAbsolutePath(p)) return "";
+  return `cursor://file${p.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export function isHttpUrl(u) {
+  return typeof u === "string" && /^https?:\/\//i.test(u.trim());
+}
+
+export function pickHandoffUrl(ctx = {}) {
+  const handoff = ctx.lifecycle?.recovery?.babysitHandoff || {};
+  for (const u of [handoff.url, handoff.href, ctx.babysitUrl, ctx.handoffUrl, ctx.taskUrl]) {
+    if (isHttpUrl(u)) return String(u).trim();
+  }
+  return "";
+}
+
 export function shortenName(raw, max = 14) {
   const s = String(raw || "").trim();
   if (!s) return "";

@@ -24,6 +24,7 @@ import { repoOf, worktreeOf, townName } from "./towns.mjs";
 import { readHubAgents, shortModel } from "./hub.mjs";
 import {
   classifyOccupancy,
+  lettersOf,
   liveCostOf,
   stampOccupancy,
 } from "./occupancy.mjs";
@@ -247,6 +248,8 @@ function toAgents(sessions) {
       worktreePath: S.cwd || "",
       result: "",
       pr: { number: null, url: "", title: "", state: "none" },
+      attention: "",
+      handoffUrl: "",
       activity: S.lastTool || (S.turnOpen ? "thinking" : "idle"),
       model: shortModel(S.model),
       branch: S.branch,
@@ -278,6 +281,8 @@ function toAgents(sessions) {
         worktreePath: S.cwd || "",
         result: "",
         pr: { number: null, url: "", title: "", state: "none" },
+        attention: "",
+        handoffUrl: "",
         activity: sc.lastTool || "thinking",
         model: shortModel(sc.model || S.model),
         branch: S.branch,
@@ -381,11 +386,13 @@ createServer(async (req, res) => {
     res.writeHead(200, { ...cors, "content-type": "application/json" });
     const settled = cache.filter((a) => a.occupancy === "settled").length;
     const live = cache.filter((a) => a.occupancy !== "settled").length;
+    const letters = lettersOf(cache);
     return res.end(JSON.stringify({
       agents: cache,
       source,
       live,
       settled,
+      letters: letters.length,
       liveCost: liveCostOf(cache),
     }));
   }
