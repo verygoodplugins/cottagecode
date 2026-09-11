@@ -150,13 +150,17 @@ function pickTask(row, ctx, worktree) {
   return raw.slice(0, 150) || "-";
 }
 
-function pickName(row, ctx, worktree, pr) {
+function pickName(row, ctx, worktree, pr, task) {
   if (ctx.agentName && !isGenericName(ctx.agentName)) return shortenName(ctx.agentName);
   if (worktree) return shortenName(worktree);
   if (pr.number) return `#${pr.number}`;
   const branch = String(ctx.gitBranch || ctx.branch || "").split("/").pop();
   if (branch && branch !== "main") return shortenName(branch);
   if (row.agent && !isGenericName(row.agent)) return shortenName(row.agent);
+  if (task && !isWorktreeSlug(task) && !isEmptyResult(task)) {
+    const bits = task.split(/\s+/).filter((w) => w.length > 2).slice(0, 3).join("-");
+    if (bits) return shortenName(bits);
+  }
   return shortenName(worktree || String(row.id || "").slice(-8) || "cottage");
 }
 
@@ -214,7 +218,7 @@ function toCottage(row, now) {
   const updatedAt = saneTime(parseDbTimestampMs(row.updated_at), ended || started);
   const cottage = {
     id: row.id,
-    name: pickName(row, ctx, worktree, pr),
+    name: pickName(row, ctx, worktree, pr, task),
     town,
     role: town,
     status: mapHubStatus(row, now),
