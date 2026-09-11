@@ -1,12 +1,10 @@
 /**
- * Readonly Autohub snapshot. Reads hub-unified.db the same way
- * agent_status_query does. The browser never talks to Autohub.
+ * Optional readonly sqlite adapter. Reads an agent_runs table (same shape
+ * Autohub's hub-unified.db uses). Set AGENT_DB_PATH, or leave unset and
+ * this no-ops. The browser never talks to the database.
  */
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
 import {
@@ -21,7 +19,6 @@ import {
   shortenName,
 } from "./occupancy.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 const STALE_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS || 15 * 60 * 1000);
 const DONE_AGE_MS = 30 * 60 * 1000;
 
@@ -29,12 +26,9 @@ const SQLITE_TIMESTAMP_RE =
   /^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
 
 export function hubDbPath() {
-  const candidates = [
-    process.env.AGENT_DB_PATH,
-    join(HERE, "..", "..", "autohub", "data", "hub-unified.db"),
-    join(homedir(), "Projects", "OpenAI", "autohub", "data", "hub-unified.db"),
-  ].filter(Boolean);
-  return candidates.find((p) => existsSync(p)) || null;
+  const raw = process.env.AGENT_DB_PATH;
+  if (!raw) return null;
+  return existsSync(raw) ? raw : null;
 }
 
 function parseDbTimestampMs(value) {

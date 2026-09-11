@@ -3,13 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pixel townmap of running agents. Each cottage is one agent. Smoke means working.",
+  "description": "Pixel townmap for agent fleets. Each cottage is one agent. Smoke means working.",
   "license": "MIT",
-  "author": "Jack Arturo",
+  "author": "Jack Arturo <support@verygoodplugins.com>",
+  "keywords": [
+    "agents",
+    "agent-fleet",
+    "pixel",
+    "townmap",
+    "claude-code",
+    "observability",
+    "cottagecode"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/verygoodplugins/cottagecode.git"
   },
+  "bugs": {
+    "url": "https://github.com/verygoodplugins/cottagecode/issues"
+  },
+  "homepage": "https://github.com/verygoodplugins/cottagecode#readme",
   "bin": {
     "cottagecode": "./src/feed.mjs"
   },

@@ -7,12 +7,14 @@
  *
  * Flags:
  *   --port 8787       what to listen on
+ *   --host 127.0.0.1  bind address (use 0.0.0.0 for LAN)
  *   --window 12h      how far back to look for sessions (12h, 2d, 90m)
  *   --once            print one snapshot as JSON and exit
  *   --debug           log what each session resolved to, and why
  *
- * Reads ~/.claude/projects jsonl and, when present, Autohub's hub-unified.db
- * (readonly sqlite). The browser talks only to this process.
+ * Serves the townmap and GET /agents. Optional local adapters: Claude Code
+ * session jsonl, and a readonly sqlite snapshot if AGENT_DB_PATH is set.
+ * The browser talks only to this process.
  */
 
 import { createServer } from "node:http";
@@ -49,6 +51,7 @@ const POLL_MS = 2000;
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(n); return i === -1 ? d : argv[i + 1]; };
 const PORT = Number(flag("--port", 8787));
+const HOST = flag("--host", "127.0.0.1");
 const ONCE = argv.includes("--once");
 const DEBUG = argv.includes("--debug");
 const WINDOW = (() => {
@@ -406,10 +409,10 @@ createServer(async (req, res) => {
     }
   }
   res.writeHead(404, cors).end("not found");
-}).listen(PORT, () => {
-  console.log(`\n  CottageCode  →  http://localhost:${PORT}`);
-  console.log(`  hub db       →  ${hubLabel}`);
-  console.log(`  claude       →  ${PROJECTS}`);
+}).listen(PORT, HOST, () => {
+  console.log(`\n  CottageCode  →  http://${HOST}:${PORT}`);
   console.log(`  source       →  ${source}  (${cache.length} cottages)`);
+  if (hubLabel !== "none") console.log(`  sqlite       →  ${hubLabel}`);
+  console.log(`  claude       →  ${PROJECTS}`);
   console.log(`  window       →  last ${Math.round(WINDOW / 3600e3)}h\n`);
 });

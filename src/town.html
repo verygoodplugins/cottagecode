@@ -157,11 +157,21 @@ function normalizeTown(raw){
   if(!s) return "WildTown";
   const legacy = {dev:"HubTown", research:"MemTown", ops:"FusionTown", content:"AppTown"};
   if(legacy[s]) return legacy[s];
-  if(/town$/i.test(s)){
-    const stem = s.replace(/town$/i, "");
-    return (stem.charAt(0).toUpperCase() + stem.slice(1)) + "Town";
+  // Keep word boundaries (my-project → MyProjectTown) while stripping markup.
+  const withoutTown = s.replace(/town$/i, "");
+  const words = withoutTown.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if(!words.length) return "WildTown";
+  const stem = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("");
+  return /town$/i.test(stem) ? stem : stem + "Town";
+}
+
+function isAllowedFeedUrl(raw){
+  try{
+    const u = new URL(String(raw || "").trim(), location.href);
+    return u.protocol === "http:" || u.protocol === "https:";
+  }catch{
+    return false;
   }
-  return s.replace(/(^|[^a-zA-Z0-9]+)([a-zA-Z0-9])/g, (_, _b, c) => c.toUpperCase()).replace(/[^a-zA-Z0-9]/g, "") + "Town";
 }
 
 function shortModel(m){
@@ -175,31 +185,76 @@ function shortModel(m){
   return MODELS[s] ? s : (s || "sonnet");
 }
 
+const RECENT_MS = 2 * 60 * 60 * 1000;
+const CLAUDE_IDLE_MS = 15 * 60 * 1000;
+
+function hasShowableWork(c){
+  if(c.pr && c.pr.state && c.pr.state !== "none") return true;
+  if(c.result && String(c.result).trim() && c.result !== "-") return true;
+  const task = String(c.task || "").trim();
+  return Boolean(task && task !== "-");
+}
+
+/** Mirror of src/occupancy.mjs when a feed omits occupancy. */
+function classifyOccupancy(c, now = Date.now()){
+  if(c.status === "working" || c.status === "blocked") return "live";
+  if(c.status === "idle"){
+    if(c.source === "claude"){
+      const t = Number(c.updatedAt || c.endedAt || c.startedAt || 0);
+      if(Number.isFinite(t) && now - t > CLAUDE_IDLE_MS) return "settled";
+    }
+    return "live";
+  }
+  const t = Number(c.endedAt || c.updatedAt || 0);
+  const age = Number.isFinite(t) && t > 1e12 ? now - t : Infinity;
+  if(c.status === "done" && age <= RECENT_MS && hasShowableWork(c)) return "recent";
+  return "settled";
+}
+
 async function fetchAgents(){
   if(!ENDPOINT){ LIVE = false; return SIM.snapshot(); }
   try{
     const res = await fetch(ENDPOINT, {headers:{accept:"application/json"}});
     if(!res.ok) throw new Error("HTTP "+res.status);
     const data = await res.json();
-    const list = Array.isArray(data) ? data : (data.agents || []);
-    if(!Array.isArray(list) || !list.length) throw new Error("no cottages in response");
+    let list;
+    if (Array.isArray(data)) {
+      list = data;
+    } else if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "agents")) {
+      if (!Array.isArray(data.agents)) throw new Error("agents must be an array");
+      list = data.agents;
+    } else {
+      throw new Error("response must be an agents array or { agents: [] }");
+    }
+    const srcName = (!Array.isArray(data) && data.source) ? String(data.source) : "";
+    let bundledEmpty = false;
+    try{
+      const u = new URL(ENDPOINT, location.href);
+      bundledEmpty = !list.length && u.origin === location.origin && u.pathname === "/agents" && (!srcName || srcName === "none");
+    }catch{ /* ignore */ }
+    if(bundledEmpty){
+      // Fresh install: keep polling /agents, but show the demo until something appears.
+      LIVE = false;
+      feedNote("local feed empty. demo townmap until cottages show up.");
+      return SIM.snapshot();
+    }
+    // Empty custom feeds stay connected (valid zero-cottage snapshot).
     LIVE = true;
-    const src = (!Array.isArray(data) && data.source) ? ` (${data.source})` : "";
+    const src = srcName ? ` (${srcName})` : "";
     feedNote(`live. ${list.length} cottages${src} from ${new URL(ENDPOINT).host}`, "#79c25f");
+    const now = Date.now();
     return list.map((a,i)=>{
       const town = normalizeTown(a.town || a.role);
       const status = ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle";
-      const occupancy = a.occupancy || (status === "offline" ? "settled" : (status === "done" ? "recent" : "live"));
       const pr = a.pr && typeof a.pr === "object"
         ? { number: a.pr.number || null, url: a.pr.url || "", title: a.pr.title || "", state: a.pr.state || "none" }
         : { number: null, url: "", title: "", state: "none" };
-      return {
+      const cottage = {
         id: String(a.id ?? "n"+i),
         name: a.name ?? a.id ?? ("agent-"+i),
         town,
         role: town,
         status,
-        occupancy,
         parent: a.parent ?? null,
         task: a.task ?? "-",
         worktree: a.worktree ?? "",
@@ -214,10 +269,14 @@ async function fetchAgents(){
         dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
         startedAt: a.startedAt ?? Date.now(),
         endedAt: a.endedAt ?? 0,
+        updatedAt: a.updatedAt ?? a.endedAt ?? 0,
         tokens: a.tokens ?? 0,
         cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
-        lastLine: a.lastLine ?? ""
+        lastLine: a.lastLine ?? "",
+        source: a.source ?? ""
       };
+      cottage.occupancy = a.occupancy || classifyOccupancy(cottage, now);
+      return cottage;
     });
   }catch(err){
     LIVE = false;
@@ -1144,7 +1203,7 @@ function cursorUrl(p){
 }
 
 function esc(s){
-  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 function drawMailbox(x, y, n){
@@ -1824,7 +1883,7 @@ function renderTally(){
     const busy = vis.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
-    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key === "HubTown" ? "HubTown home" : d.key}<span class="n">${busy}/${n}</span>`;
+    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${esc(d.key === "HubTown" ? "HubTown home" : d.key)}<span class="n">${busy}/${n}</span>`;
     b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
     tally.appendChild(b);
   });
@@ -1853,6 +1912,10 @@ function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = co
 document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
   if(!v){ ENDPOINT = null; feedNote("Back on the demo townmap."); return refresh(); }
+  if(!isAllowedFeedUrl(v)){
+    feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
+    return;
+  }
   ENDPOINT = v; feedNote("connecting..."); refresh();
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
@@ -1876,7 +1939,23 @@ async function refresh(){
 
 (function boot(){
   const box = document.getElementById("endpoint");
+  const params = new URLSearchParams(location.search);
   const same = `${location.origin}/agents`;
+  if (params.has("demo")) {
+    box.value = "";
+    ENDPOINT = null;
+    feedNote("demo townmap. connect a cottage JSON feed when you have one.");
+    return;
+  }
+  const ep = params.get("endpoint") || params.get("feed");
+  if (ep) {
+    box.value = ep;
+    // Prefill only. Never auto-fetch a query-string feed (XSS / exfil risk on
+    // localhost). User must hit connect.
+    ENDPOINT = null;
+    feedNote("feed URL prefilled. hit connect when you trust it.");
+    return;
+  }
   box.value = same;
   if (location.protocol.startsWith("http")) {
     ENDPOINT = same;

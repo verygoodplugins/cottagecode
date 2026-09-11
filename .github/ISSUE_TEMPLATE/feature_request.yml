@@ -1,0 +1,18 @@
+name: Feature request
+description: An idea for the townmap or cottage feed
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is awkward today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Keep the cottage JSON contract in mind (docs/COTTAGE_FEED.md).
+    validations:
+      required: true

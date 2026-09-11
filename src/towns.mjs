@@ -2,8 +2,9 @@
  * Town names. Distinctive stem + "Town". Never hash a repo into four
  * aesthetic lanes.
  *
- * Known stems are locked. Unknown projects take PascalCase(basename) + Town.
- * Homedir / username-only paths fold into HubTown. They are not towns.
+ * A few known stems are locked as examples (Hub / Mem / Fusion / App / Vault).
+ * Unknown projects take PascalCase(basename) + Town. Homedir / username-only
+ * paths fold into HubTown. They are not towns.
  */
 
 import { homedir } from "node:os";
