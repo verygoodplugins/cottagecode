@@ -31,5 +31,6 @@ jobs:
             sleep 0.2
           done
           test -s /tmp/agents.json
-          curl -fsS http://127.0.0.1:8787/?demo=1 | head -c 200 | grep -q CottageCode
+          curl -fsS "http://127.0.0.1:8787/?demo=1" -o /tmp/demo.html
+          grep -q CottageCode /tmp/demo.html
           node -e 'const d=require("/tmp/agents.json"); if(!d.agents||!Array.isArray(d.agents)) process.exit(1)'

@@ -157,11 +157,21 @@ function normalizeTown(raw){
   if(!s) return "WildTown";
   const legacy = {dev:"HubTown", research:"MemTown", ops:"FusionTown", content:"AppTown"};
   if(legacy[s]) return legacy[s];
-  if(/town$/i.test(s)){
-    const stem = s.replace(/town$/i, "");
-    return (stem.charAt(0).toUpperCase() + stem.slice(1)) + "Town";
+  // Strip to alphanumerics only so a feed cannot smuggle markup into town keys
+  // (renderTally and friends paint labels into the DOM).
+  let stem = s.replace(/town$/i, "").replace(/[^a-zA-Z0-9]+/g, "");
+  if(!stem) return "WildTown";
+  stem = stem.charAt(0).toUpperCase() + stem.slice(1);
+  return /town$/i.test(stem) ? stem : stem + "Town";
+}
+
+function isAllowedFeedUrl(raw){
+  try{
+    const u = new URL(String(raw || "").trim(), location.href);
+    return u.protocol === "http:" || u.protocol === "https:";
+  }catch{
+    return false;
   }
-  return s.replace(/(^|[^a-zA-Z0-9]+)([a-zA-Z0-9])/g, (_, _b, c) => c.toUpperCase()).replace(/[^a-zA-Z0-9]/g, "") + "Town";
 }
 
 function shortModel(m){
@@ -1144,7 +1154,7 @@ function cursorUrl(p){
 }
 
 function esc(s){
-  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 function drawMailbox(x, y, n){
@@ -1824,7 +1834,7 @@ function renderTally(){
     const busy = vis.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
-    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${d.key === "HubTown" ? "HubTown home" : d.key}<span class="n">${busy}/${n}</span>`;
+    b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${esc(d.key === "HubTown" ? "HubTown home" : d.key)}<span class="n">${busy}/${n}</span>`;
     b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
     tally.appendChild(b);
   });
@@ -1853,6 +1863,10 @@ function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = co
 document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
   if(!v){ ENDPOINT = null; feedNote("Back on the demo townmap."); return refresh(); }
+  if(!isAllowedFeedUrl(v)){
+    feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
+    return;
+  }
   ENDPOINT = v; feedNote("connecting..."); refresh();
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
@@ -1887,8 +1901,10 @@ async function refresh(){
   const ep = params.get("endpoint") || params.get("feed");
   if (ep) {
     box.value = ep;
-    ENDPOINT = ep;
-    feedNote("connecting...");
+    // Prefill only. Never auto-fetch a query-string feed (XSS / exfil risk on
+    // localhost). User must hit connect.
+    ENDPOINT = null;
+    feedNote("feed URL prefilled. hit connect when you trust it.");
     return;
   }
   box.value = same;

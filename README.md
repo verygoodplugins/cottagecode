@@ -66,7 +66,7 @@ Pause, wake, and shut down are **simulator-only**. They do not touch a live feed
 
 The local process can also populate `/agents` without you writing a server:
 
-1. Readonly sqlite at `AGENT_DB_PATH` (an `agent_runs` table), if present
+1. Readonly sqlite at `AGENT_DB_PATH` (an `agent_runs` table), if set
 2. Claude Code session jsonl under `~/.claude/projects` (or `CLAUDE_PROJECTS_DIR`)
 3. Demo town when both are empty, or when you open `/?demo=1`
 
