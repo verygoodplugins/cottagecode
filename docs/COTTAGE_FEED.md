@@ -1,7 +1,6 @@
 # Cottage feed (GET /agents)
 
-CottageCode is a viewer. Point the connect box at any URL that returns cottages as JSON. The bundled `npm start` process serves that shape at `/agents`, and also has Optional local adapters (Claude Code transcripts, and a readonly sqlite
-`agent_runs` table when `AGENT_DB_PATH` is set). You do not need those adapters. A static JSON file behind a tiny HTTP server is enough.
+CottageCode is a viewer. Point the connect box at any URL that returns cottages as JSON. The bundled `npm start` process serves that shape at `/agents`, and also has optional local adapters (Claude Code transcripts, and a readonly sqlite `agent_runs` table when `AGENT_DB_PATH` is set). You do not need those adapters. A static JSON file behind a tiny HTTP server is enough.
 
 ## Envelope
 
