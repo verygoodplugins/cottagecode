@@ -15,6 +15,7 @@ import {
   isEmptyResult,
   isGenericName,
   isWorktreeSlug,
+  shortenFront,
   shortenName,
 } from "./occupancy.mjs";
 
@@ -158,8 +159,8 @@ function pickName(row, ctx, worktree, pr, task) {
   if (branch && branch !== "main") return shortenName(branch);
   if (row.agent && !isGenericName(row.agent)) return shortenName(row.agent);
   if (task && !isWorktreeSlug(task) && !isEmptyResult(task)) {
-    const bits = task.split(/\s+/).filter((w) => w.length > 2).slice(0, 3).join("-");
-    if (bits) return shortenName(bits);
+    const bits = shortenFront(task);
+    if (bits) return bits;
   }
   return shortenName(worktree || String(row.id || "").slice(-8) || "cottage");
 }

@@ -101,3 +101,17 @@ export function shortenName(raw, max = 14) {
   }
   return picked.join("-") || s.slice(0, max);
 }
+
+export function shortenFront(raw, max = 14) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (s.length <= max) return s;
+  const words = s.split(/[\s/_-]+/).filter((w) => w.length > 2);
+  let picked = [];
+  for (const w of words) {
+    const next = [...picked, w];
+    if (next.join("-").length > max && picked.length) break;
+    picked = next;
+  }
+  return picked.join("-") || s.slice(0, max);
+}
