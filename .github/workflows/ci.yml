@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: |
+          node --check src/feed.mjs
+          node --check src/hub.mjs
+          node --check src/towns.mjs
+          node --check src/occupancy.mjs
+      - name: Boot feed and hit /agents
+        run: |
+          node src/feed.mjs --host 127.0.0.1 --port 8787 &
+          pid=$!
+          trap 'kill $pid' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/agents >/tmp/agents.json; then
+              break
+            fi
+            sleep 0.2
+          done
+          test -s /tmp/agents.json
+          curl -fsS http://127.0.0.1:8787/?demo=1 | head -c 200 | grep -q CottageCode
+          node -e 'const d=require("/tmp/agents.json"); if(!d.agents||!Array.isArray(d.agents)) process.exit(1)'

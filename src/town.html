@@ -1876,7 +1876,21 @@ async function refresh(){
 
 (function boot(){
   const box = document.getElementById("endpoint");
+  const params = new URLSearchParams(location.search);
   const same = `${location.origin}/agents`;
+  if (params.has("demo")) {
+    box.value = "";
+    ENDPOINT = null;
+    feedNote("demo townmap. connect a cottage JSON feed when you have one.");
+    return;
+  }
+  const ep = params.get("endpoint") || params.get("feed");
+  if (ep) {
+    box.value = ep;
+    ENDPOINT = ep;
+    feedNote("connecting...");
+    return;
+  }
   box.value = same;
   if (location.protocol.startsWith("http")) {
     ENDPOINT = same;

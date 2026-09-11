@@ -1,0 +1,25 @@
+name: Bug report
+description: Something in the townmap or feed is wrong
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Expected vs actual.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Commands, URL (`/?demo=1` vs live feed), Node version.
+    validations:
+      required: true
+  - type: textarea
+    id: feed
+    attributes:
+      label: Feed source
+      description: demo / Claude jsonl / AGENT_DB_PATH / custom URL. Do not paste secrets or private paths you cannot share.
+    validations:
+      required: false

@@ -1,6 +1,7 @@
 /**
- * Readonly Autohub snapshot. Reads hub-unified.db the same way
- * agent_status_query does. The browser never talks to Autohub.
+ * Optional readonly sqlite adapter. Reads an agent_runs table (same shape
+ * Autohub's hub-unified.db uses). Set AGENT_DB_PATH, or leave unset and
+ * this no-ops. The browser never talks to the database.
  */
 
 import { existsSync } from "node:fs";
