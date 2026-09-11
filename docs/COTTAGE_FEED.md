@@ -89,10 +89,13 @@ Your feed can set `town` explicitly and skip all of that.
 
 ## Tiny example feed
 
+Save the JSON below as `agents.json`, then serve it with CORS (Python's
+`http.server` will not work cross-origin from `:8787`):
+
 ```bash
-# serve a static snapshot
-python3 -m http.server 9999 --directory .
-# open CottageCode, connect http://localhost:9999/agents.json
+# from the directory that contains agents.json
+npx --yes http-server . -p 9999 --cors
+# open CottageCode, connect http://127.0.0.1:9999/agents.json
 ```
 
 ```json
