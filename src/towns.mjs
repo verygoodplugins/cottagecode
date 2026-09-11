@@ -3,7 +3,10 @@
  * aesthetic lanes.
  *
  * Known stems are locked. Unknown projects take PascalCase(basename) + Town.
+ * Homedir / username-only paths fold into HubTown. They are not towns.
  */
+
+import { homedir } from "node:os";
 
 export const TOWN_STEMS = {
   autohub: "Hub",
@@ -42,8 +45,21 @@ function pascal(s) {
     .join("");
 }
 
+export function isJunkProject(cwdOrRepo) {
+  const raw = String(cwdOrRepo || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!raw) return true;
+  const home = homedir().replace(/\\/g, "/");
+  if (raw === home) return true;
+  const base = repoOf(cwdOrRepo);
+  const user = home.split("/").filter(Boolean).pop() || "";
+  if (user && base.toLowerCase() === user.toLowerCase()) return true;
+  if (["users", "home", "unknown", ""].includes(base.toLowerCase())) return true;
+  return false;
+}
+
 /** HubTown, MemTown, FusionTown, or {Stem}Town from the repo basename. */
 export function townName(cwdOrRepo) {
+  if (isJunkProject(cwdOrRepo)) return "HubTown";
   const repo = repoOf(cwdOrRepo);
   const key = String(repo || "").toLowerCase();
   if (TOWN_STEMS[key]) return `${TOWN_STEMS[key]}Town`;

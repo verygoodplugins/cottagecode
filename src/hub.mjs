@@ -8,7 +8,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { townName } from "./towns.mjs";
+import { townName, worktreeOf } from "./towns.mjs";
+import {
+  classifyOccupancy,
+  inferPr,
+  isEmptyResult,
+  isGenericName,
+  isWorktreeSlug,
+  shortenName,
+} from "./occupancy.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STALE_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS || 15 * 60 * 1000);
@@ -105,31 +113,67 @@ export function mapHubStatus(row, now = Date.now()) {
   return "idle";
 }
 
-function cottageName(row, ctx) {
-  const raw = String(ctx.agentName || row.agent || row.id || "cottage");
-  if (raw.length <= 14) return raw;
-  const words = raw.split(/[\s/_-]+/).filter(Boolean);
-  let picked = [];
-  for (let i = words.length - 1; i >= 0; i--) {
-    const next = [words[i], ...picked];
-    if (next.join("-").length > 14 && picked.length) break;
-    picked = next;
-  }
-  return picked.join("-") || raw.slice(0, 14);
+function pickWorktree(row, ctx) {
+  const path =
+    ctx.projectPath ||
+    ctx.workFolder ||
+    ctx.cwd ||
+    ctx.agentKernel?.route?.workspace?.root ||
+    "";
+  return worktreeOf(path);
 }
 
-function lastLine(row) {
-  return (
-    row.attention_message ||
-    row.result_summary ||
-    row.error ||
-    row.task ||
-    ""
-  )
-    .toString()
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
+function pickTask(row, ctx, worktree) {
+  const gh = ctx.githubAutoJackRequest || {};
+  if (gh.targetTitle) return String(gh.targetTitle).replace(/\s+/g, " ").trim().slice(0, 150);
+  const cr = ctx.customerRequest;
+  if (typeof cr === "string" && cr.trim() && !isEmptyResult(cr)) {
+    return cr.replace(/\s+/g, " ").trim().slice(0, 150);
+  }
+  if (cr?.text && !isEmptyResult(cr.text)) {
+    return String(cr.text).replace(/\s+/g, " ").trim().slice(0, 150);
+  }
+  const presented = ctx.lifecycle?.execution?.presentedResult?.summary;
+  const raw = row.task ? String(row.task).replace(/\s+/g, " ").trim() : "";
+  if (
+    raw &&
+    !isEmptyResult(raw) &&
+    !isWorktreeSlug(raw) &&
+    !/^AutoJack was explicitly requested/i.test(raw)
+  ) {
+    return raw.slice(0, 150);
+  }
+  if (presented && !isEmptyResult(presented)) {
+    return String(presented).replace(/\s+/g, " ").trim().slice(0, 150);
+  }
+  if (worktree) return `in ${worktree}`;
+  return raw.slice(0, 150) || "-";
+}
+
+function pickName(row, ctx, worktree, pr) {
+  if (ctx.agentName && !isGenericName(ctx.agentName)) return shortenName(ctx.agentName);
+  if (worktree) return shortenName(worktree);
+  if (pr.number) return `#${pr.number}`;
+  const branch = String(ctx.gitBranch || ctx.branch || "").split("/").pop();
+  if (branch && branch !== "main") return shortenName(branch);
+  if (row.agent && !isGenericName(row.agent)) return shortenName(row.agent);
+  return shortenName(worktree || String(row.id || "").slice(-8) || "cottage");
+}
+
+function pickResult(row, ctx) {
+  const presented = ctx.lifecycle?.execution?.presentedResult?.summary;
+  const raw = row.result_summary || presented || row.error || "";
+  if (isEmptyResult(raw)) return "";
+  return String(raw).replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function pickLastLine(row, ctx, result, task) {
+  if (row.attention_message) {
+    return String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240);
+  }
+  if (result) return result;
+  if (task && !isEmptyResult(task) && !isWorktreeSlug(task)) return task;
+  return "";
 }
 
 export function hubDedupKeys(row, ctx) {
@@ -141,37 +185,62 @@ export function hubDedupKeys(row, ctx) {
   return keys;
 }
 
+function saneTime(ms, fallback = 0) {
+  if (!Number.isFinite(ms) || ms < Date.parse("2020-01-01")) return fallback;
+  return ms;
+}
+
 function toCottage(row, now) {
   const ctx = parseContext(row.context);
   const project = projectFrom(row, ctx);
   const town = townName(project);
+  const worktree = pickWorktree(row, ctx);
+  const result = pickResult(row, ctx);
+  const pr = inferPr(`${result} ${row.task || ""}`, ctx);
+  const task = pickTask(row, ctx, worktree);
   const tokens =
     (row.input_tokens || 0) +
     (row.output_tokens || 0) +
     (row.cache_write_tokens || 0) +
     (row.cache_read_tokens || 0);
-  const started = parseDbTimestampMs(row.started_at) || parseDbTimestampMs(row.queued_at) || now;
-  return {
+  const started = saneTime(
+    parseDbTimestampMs(row.started_at) || parseDbTimestampMs(row.queued_at),
+    0
+  );
+  const ended = saneTime(
+    parseDbTimestampMs(row.completed_at) || parseDbTimestampMs(row.updated_at),
+    0
+  );
+  const updatedAt = saneTime(parseDbTimestampMs(row.updated_at), ended || started);
+  const cottage = {
     id: row.id,
-    name: cottageName(row, ctx),
+    name: pickName(row, ctx, worktree, pr),
     town,
     role: town,
     status: mapHubStatus(row, now),
-    task: row.task ? String(row.task).replace(/\s+/g, " ").slice(0, 150) : "-",
+    task,
+    worktree,
+    worktreePath: ctx.projectPath || ctx.workFolder || "",
+    result,
+    pr,
     activity: row.attention_message
       ? String(row.attention_message).slice(0, 80)
       : row.platform || "",
     model: shortModel(row.model || ctx.agentKernel?.route?.model),
-    branch: ctx.gitBranch || ctx.branch || "",
+    branch: ctx.gitBranch || ctx.branch || ctx.lifecycle?.recovery?.babysitHandoff?.baseBranch || "",
     parent: row.parent_id || null,
     dispatchedBy: row.platform || row.user || "hub",
     startedAt: started,
+    endedAt: ended,
+    updatedAt,
     tokens,
     cost: Number(row.total_cost || 0),
-    lastLine: lastLine(row),
+    lastLine: pickLastLine(row, ctx, result, task),
     sessionId: row.session_id || null,
     source: "hub",
   };
+  cottage.occupancy = classifyOccupancy(cottage, now);
+  return cottage;
 }
 
 export function readHubAgents({ limit = 80 } = {}) {

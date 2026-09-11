@@ -22,6 +22,11 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
 import { readHubAgents, shortModel } from "./hub.mjs";
+import {
+  classifyOccupancy,
+  liveCostOf,
+  stampOccupancy,
+} from "./occupancy.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
@@ -230,45 +235,64 @@ function toAgents(sessions) {
     nameCount.set(name, n);
     if (n > 1) name = `${name}-${n}`;
 
-    out.push({
+    const startedAt = S.firstTs && S.firstTs > Date.parse("2020-01-01") ? S.firstTs : 0;
+    const claude = {
       id: S.id,
-      name,
+      name: wt ? (wt.length <= 14 ? wt : name) : name,
       town,
       role: town,
       status: statusOf(S, now),
-      task: `${repo}${wt ? ` · ${wt}` : ""}`,
+      task: S.lastText && S.lastText.length > 12 ? S.lastText.slice(0, 150) : (wt ? `in ${wt}` : repo),
+      worktree: wt,
+      worktreePath: S.cwd || "",
+      result: "",
+      pr: { number: null, url: "", title: "", state: "none" },
       activity: S.lastTool || (S.turnOpen ? "thinking" : "idle"),
       model: shortModel(S.model),
       branch: S.branch,
       parent: null,
       dispatchedBy: S.entrypoint === "claude-desktop" ? "you (desktop)" : "you",
-      startedAt: S.firstTs || now,
+      startedAt,
+      endedAt: S.endedAt || S.lastTs || 0,
+      updatedAt: S.lastTs || 0,
       tokens: S.tokens,
       cost: S.cost,
-      lastLine: S.lastTool || S.lastText || ""
-    });
+      lastLine: S.lastTool || S.lastText || "",
+      source: "claude",
+    };
+    claude.occupancy = classifyOccupancy(claude, now);
+    out.push(claude);
 
     let i = 0;
     for (const sc of S.sidechains.values()) {
       i++;
       const stale = now - sc.lastTs > 5 * 60e3;
-      out.push({
+      const kid = {
         id: `${S.id}:${sc.root.slice(0, 8)}`,
         name: `${name}-${i}`,
         town,
         role: town,
         status: sc.open && !stale ? "working" : (stale ? "done" : "idle"),
-        task: `subagent of ${name}`,
+        task: `shed of ${name}`,
+        worktree: wt,
+        worktreePath: S.cwd || "",
+        result: "",
+        pr: { number: null, url: "", title: "", state: "none" },
         activity: sc.lastTool || "thinking",
         model: shortModel(sc.model || S.model),
         branch: S.branch,
         parent: S.id,
         dispatchedBy: name,
         startedAt: sc.startTs,
+        endedAt: sc.lastTs || 0,
+        updatedAt: sc.lastTs || 0,
         tokens: sc.tokens,
         cost: sc.cost,
-        lastLine: sc.lastTool || sc.lastText || ""
-      });
+        lastLine: sc.lastTool || sc.lastText || "",
+        source: "claude",
+      };
+      kid.occupancy = classifyOccupancy(kid, now);
+      out.push(kid);
     }
   }
   return out;
@@ -323,10 +347,10 @@ async function scan() {
 
   if (hub.ok && hub.agents.length) {
     const extra = claude.filter((a) => !hub.keys.has(a.id));
-    cache = sortCottages([...hub.agents, ...extra]);
+    cache = stampOccupancy(sortCottages([...hub.agents, ...extra]));
     source = extra.length ? "hub+claude" : "hub";
   } else {
-    cache = sortCottages(claude);
+    cache = stampOccupancy(sortCottages(claude));
     source = claude.length ? "claude" : "none";
   }
 
@@ -355,7 +379,15 @@ createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/agents") {
     res.writeHead(200, { ...cors, "content-type": "application/json" });
-    return res.end(JSON.stringify({ agents: cache, source }));
+    const settled = cache.filter((a) => a.occupancy === "settled").length;
+    const live = cache.filter((a) => a.occupancy !== "settled").length;
+    return res.end(JSON.stringify({
+      agents: cache,
+      source,
+      live,
+      settled,
+      liveCost: liveCostOf(cache),
+    }));
   }
   if (url.pathname === "/" || url.pathname === "/index.html") {
     try {
