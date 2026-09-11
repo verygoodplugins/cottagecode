@@ -185,6 +185,32 @@ function shortModel(m){
   return MODELS[s] ? s : (s || "sonnet");
 }
 
+const RECENT_MS = 2 * 60 * 60 * 1000;
+const CLAUDE_IDLE_MS = 15 * 60 * 1000;
+
+function hasShowableWork(c){
+  if(c.pr && c.pr.state && c.pr.state !== "none") return true;
+  if(c.result && String(c.result).trim() && c.result !== "-") return true;
+  const task = String(c.task || "").trim();
+  return Boolean(task && task !== "-");
+}
+
+/** Mirror of src/occupancy.mjs when a feed omits occupancy. */
+function classifyOccupancy(c, now = Date.now()){
+  if(c.status === "working" || c.status === "blocked") return "live";
+  if(c.status === "idle"){
+    if(c.source === "claude"){
+      const t = Number(c.updatedAt || c.endedAt || c.startedAt || 0);
+      if(Number.isFinite(t) && now - t > CLAUDE_IDLE_MS) return "settled";
+    }
+    return "live";
+  }
+  const t = Number(c.endedAt || c.updatedAt || 0);
+  const age = Number.isFinite(t) && t > 1e12 ? now - t : Infinity;
+  if(c.status === "done" && age <= RECENT_MS && hasShowableWork(c)) return "recent";
+  return "settled";
+}
+
 async function fetchAgents(){
   if(!ENDPOINT){ LIVE = false; return SIM.snapshot(); }
   try{
@@ -192,24 +218,24 @@ async function fetchAgents(){
     if(!res.ok) throw new Error("HTTP "+res.status);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.agents || []);
-    if(!Array.isArray(list) || !list.length) throw new Error("no cottages in response");
+    if(!Array.isArray(list)) throw new Error("agents must be an array");
+    // Empty array is a valid live snapshot (no runners up right now).
     LIVE = true;
     const src = (!Array.isArray(data) && data.source) ? ` (${data.source})` : "";
     feedNote(`live. ${list.length} cottages${src} from ${new URL(ENDPOINT).host}`, "#79c25f");
+    const now = Date.now();
     return list.map((a,i)=>{
       const town = normalizeTown(a.town || a.role);
       const status = ["working","idle","blocked","done","offline"].includes(a.status) ? a.status : "idle";
-      const occupancy = a.occupancy || (status === "offline" ? "settled" : (status === "done" ? "recent" : "live"));
       const pr = a.pr && typeof a.pr === "object"
         ? { number: a.pr.number || null, url: a.pr.url || "", title: a.pr.title || "", state: a.pr.state || "none" }
         : { number: null, url: "", title: "", state: "none" };
-      return {
+      const cottage = {
         id: String(a.id ?? "n"+i),
         name: a.name ?? a.id ?? ("agent-"+i),
         town,
         role: town,
         status,
-        occupancy,
         parent: a.parent ?? null,
         task: a.task ?? "-",
         worktree: a.worktree ?? "",
@@ -224,10 +250,14 @@ async function fetchAgents(){
         dispatchedBy: a.dispatchedBy ?? a.parent ?? "unknown",
         startedAt: a.startedAt ?? Date.now(),
         endedAt: a.endedAt ?? 0,
+        updatedAt: a.updatedAt ?? a.endedAt ?? 0,
         tokens: a.tokens ?? 0,
         cost: a.cost ?? ((a.tokens ?? 0) * 0.000009),
-        lastLine: a.lastLine ?? ""
+        lastLine: a.lastLine ?? "",
+        source: a.source ?? ""
       };
+      cottage.occupancy = a.occupancy || classifyOccupancy(cottage, now);
+      return cottage;
     });
   }catch(err){
     LIVE = false;

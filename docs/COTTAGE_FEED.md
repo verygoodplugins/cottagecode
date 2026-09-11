@@ -14,13 +14,13 @@ Either of these works:
 [ /* cottages */ ]
 ```
 
-Optional envelope fields the townmap understands:
+Optional envelope fields:
 
 | Field | Type | Notes |
 |---|---|---|
-| `agents` | array | Preferred. Bare array is also fine. |
+| `agents` | array | Preferred. Bare array is also fine. Empty `[]` is a valid live snapshot. |
 | `source` | string | Shown in the feed note (`live. 12 cottages (my-runner)`). |
-| `live` / `settled` / `letters` / `liveCost` | number | Optional stats. The UI recomputes occupancy if you omit them. |
+| `live` / `settled` / `letters` / `liveCost` | number | Optional producer hints. The townmap recomputes these from `agents` and does not read the envelope copies. |
 
 CORS: the browser fetches the URL you type. Serve `Access-Control-Allow-Origin: *` (or your CottageCode origin) if the feed is on another host.
 
@@ -47,7 +47,7 @@ Full shape (everything else is optional):
 | `town` | string | District. Prefer `SomethingTown`. Bare stems get `Town` appended. |
 | `role` | string | Fallback for `town` if `town` is missing. |
 | `status` | string | One of `working` `idle` `blocked` `done` `offline`. |
-| `occupancy` | string | `live` `recent` `settled`. Hide settled cottages unless the toggle is on. |
+| `occupancy` | string | `live` `recent` `settled`. Optional. If omitted, the townmap classifies from `status` + timestamps (done ages out after ~2h). |
 | `parent` | string \| null | Id of the parent cottage. Kids render as sheds in the yard. |
 | `task` | string | What it's doing. |
 | `activity` | string | Short live line under the status chip. |
