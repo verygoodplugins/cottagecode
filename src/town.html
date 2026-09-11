@@ -217,8 +217,15 @@ async function fetchAgents(){
     const res = await fetch(ENDPOINT, {headers:{accept:"application/json"}});
     if(!res.ok) throw new Error("HTTP "+res.status);
     const data = await res.json();
-    const list = Array.isArray(data) ? data : (data.agents || []);
-    if(!Array.isArray(list)) throw new Error("agents must be an array");
+    let list;
+    if (Array.isArray(data)) {
+      list = data;
+    } else if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "agents")) {
+      if (!Array.isArray(data.agents)) throw new Error("agents must be an array");
+      list = data.agents;
+    } else {
+      throw new Error("response must be an agents array or { agents: [] }");
+    }
     const srcName = (!Array.isArray(data) && data.source) ? String(data.source) : "";
     let bundledEmpty = false;
     try{
