@@ -14,6 +14,8 @@ import { createTranscriptReader } from "./transcripts.mjs";
 import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./activity.mjs";
 import { enrichAgents } from "./github.mjs";
 import { hasOutstandingPr } from "./pr.mjs";
+import { normalizeTodos } from "./todos.mjs";
+import { createHubMessenger, acceptsMessageOrigin } from "./messages.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
@@ -66,6 +68,7 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
       taskStartedAt: session.taskStartedAt,
       sessionStartedAt: session.firstTs,
       activityUrl: `/agents/${encodeURIComponent(session.id)}/activity`,
+      todos: normalizeTodos(session.todos),
       worktree, worktreePath: session.cwd || "",
       result: !session.turnOpen ? session.lastText : "",
       pr: transcriptPr(session),
@@ -97,6 +100,7 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
         originalAskTruncated: child.originalAskTruncated,
         taskStartedAt: child.taskStartedAt, sessionStartedAt: child.startTs,
         activityUrl: `/agents/${encodeURIComponent(id)}/activity`,
+        todos: normalizeTodos(child.todos),
         activity: child.lastTool || child.lastText || "Working",
         model: shortModel(child.model || session.model),
         result: !child.open ? child.lastText : "",
@@ -203,6 +207,7 @@ export function createFeed({
   let claude = { agents: [], sessions: [] };
   let hub = { agents: [], keys: new Set(), links: new Map() };
   let activity = new Map();
+  const remoteTodos = new Map();
   let lastSuccessAt = null;
   let source = "none";
   let stale = false;
@@ -228,9 +233,14 @@ export function createFeed({
     const combined = hub.agents.map(agent => {
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
-      if (!local) return agent;
+      if (!local) return { ...agent };
       const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
         !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
+      const localTodos = normalizeTodos(local.todos);
+      const currentTaskTodos = localTodos && (!agent.taskId || local.taskId === agent.taskId ||
+        (agent.taskStartedAt && localTodos.updatedAt && localTodos.updatedAt >= agent.taskStartedAt)) ? localTodos : null;
+      const hubTodos = normalizeTodos(agent.todos);
+      const todos = currentTaskTodos && (!hubTodos?.updatedAt || !currentTaskTodos.updatedAt || currentTaskTodos.updatedAt >= hubTodos.updatedAt) ? currentTaskTodos : hubTodos;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
@@ -240,12 +250,19 @@ export function createFeed({
         sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt,
         activity: local.activity || agent.activity,
         lastLine: local.lastLine || agent.lastLine,
+        todos,
       };
     });
-    for (const agent of claude.agents) if (!hub.keys?.has(agent.id)) combined.push(agent);
+    for (const agent of claude.agents) if (!hub.keys?.has(agent.id)) combined.push({ ...agent });
     const seen = new Set(combined.map(agent => agent.id));
     // A live PR outlives a transcript window or DB scan window.
     for (const old of cache) if (!seen.has(old.id) && hasOutstandingPr(old, now())) combined.push({ ...old, status: "offline" });
+    for (const agent of combined) {
+      const stored = remoteTodos.get(`${agent.id}\n${agent.taskId || ""}\n${agent.sessionId || ""}`);
+      const supplied = normalizeTodos(agent.todos);
+      agent.todos = stored && (!supplied || (stored.updatedAt && supplied.updatedAt && stored.updatedAt > supplied.updatedAt)) ? stored : supplied;
+      if (agent.todos && nextErrors.length) agent.todos = { ...agent.todos, stale: true };
+    }
     let enriched = combined;
     try { enriched = await enrich(await resolveRepos(combined)); }
     catch { nextErrors.push("PR metadata is temporarily unavailable"); }
@@ -270,6 +287,24 @@ export function createFeed({
       letters: lettersOf(cache).length, liveCost: liveCostOf(cache),
     };
   }
+
+  function rememberActivityTodos(agent, value) {
+    const identity = cottage => `${cottage.id}\n${cottage.taskId || ""}\n${cottage.sessionId || ""}`;
+    const key = identity(agent);
+    // A scan may replace the cached object while the read is in flight. Apply
+    // the result to the current object only when its task/session still match.
+    const currentAgent = cache.find(cottage => identity(cottage) === key) || agent;
+    const incoming = normalizeTodos(value);
+    const current = normalizeTodos(currentAgent.todos);
+    const todos = incoming && (!current?.updatedAt || !incoming.updatedAt || incoming.updatedAt >= current.updatedAt) ? incoming : current;
+    if (todos) {
+      agent.todos = currentAgent.todos = todos;
+      remoteTodos.set(key, todos);
+      if (remoteTodos.size > 200) remoteTodos.delete(remoteTodos.keys().next().value);
+    }
+    return todos;
+  }
+
   return {
     snapshot,
     scan() {
@@ -280,22 +315,49 @@ export function createFeed({
       const agent = cache.find(cottage => cottage.id === id);
       if (!agent) return null;
       const local = activity.get(id) || [];
-      if (local.length) return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), ...(stale ? { stale: true } : {}) };
-      if (agent.source === "hub" && timeline.configured) return timeline.read(agent.id, options);
-      return { ...pageActivity([], options), unavailable: true };
+      if (local.length) {
+        const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"
+          ? rememberActivityTodos(agent, await timeline.readTodos(agent.id))
+          : normalizeTodos(agent.todos);
+        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, ...(stale ? { stale: true } : {}) };
+      }
+      if (agent.source === "hub" && timeline.configured) {
+        const result = await timeline.read(agent.id, options);
+        const todos = rememberActivityTodos(agent, result.todos);
+        return { ...result, todos };
+      }
+      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), unavailable: true };
     },
   };
 }
 
-export function createFeedServer(feed, { directory = HERE } = {}) {
+export function createFeedServer(feed, { directory = HERE, messages = createHubMessenger() } = {}) {
   return createServer(async (req, res) => {
     const cors = { "access-control-allow-origin": "*", "cache-control": "no-store" };
     const json = (status, body) => { res.writeHead(status, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
       if (req.method === "OPTIONS") { res.writeHead(204, { ...cors, "access-control-allow-methods": "GET, OPTIONS" }); return res.end(); }
-      if (req.method !== "GET" && req.method !== "HEAD") return json(405, { error: "Read-only endpoint" });
       const url = new URL(req.url, "http://localhost");
-      if (url.pathname === "/agents") return json(200, feed.snapshot());
+      const messageRoute = url.pathname.match(/^\/agents\/([^/]+)\/messages$/);
+      if (req.method === "POST" && messageRoute) {
+        if (!acceptsMessageOrigin(req)) return json(403, { error: "Messages require a local connection from this CottageCode origin.", delivery: "not_sent" });
+        if (Number(req.headers["content-length"]) > 65536) { req.resume(); return json(413, { error: "Message too large", delivery: "not_sent" }); }
+        const chunks = []; let length = 0;
+        for await (const chunk of req) { length += chunk.length; if (length > 65536) return json(413, { error: "Message too large", delivery: "not_sent" }); chunks.push(chunk); }
+        let payload;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(400, { error: "Invalid message JSON", delivery: "not_sent" }); }
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return json(400, { error: "Invalid message", delivery: "not_sent" });
+        if (feed.scan) await feed.scan();
+        const snapshot = feed.snapshot(), agent = snapshot.agents.find(agent => agent.id === decodeURIComponent(messageRoute[1]));
+        if (!agent) return json(404, { error: "Cottage not found", delivery: "not_sent" });
+        const sent = await messages.send(agent, payload, { stale: !!snapshot.stale, checkedAt: snapshot.checkedAt });
+        return json(sent.status, sent.body);
+      }
+      if (req.method !== "GET" && req.method !== "HEAD") return json(405, { error: "Read-only endpoint" });
+      if (url.pathname === "/agents") {
+        const snapshot = feed.snapshot();
+        return json(200, { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, conversation: messages.capability(agent, { stale: !!snapshot.stale, checkedAt: snapshot.checkedAt }) })) });
+      }
       const match = url.pathname.match(/^\/agents\/([^/]+)\/activity$/);
       if (match) {
         const after = url.searchParams.get("after") || "";

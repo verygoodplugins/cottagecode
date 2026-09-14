@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInterior, isWalkable, renderInterior, renderResident } from '../src/interiors.mjs';
+import { createInterior, isWalkable, renderInterior, renderResident, reviewSignal } from '../src/interiors.mjs';
 
 const agent = { id: 'bolt-1', taskId: 'task-42', name: 'Bolt', town: 'HubTown', status: 'working' };
 const required = ['request', 'clock', 'workbench', 'review', 'shelf', 'exit'];
@@ -181,4 +181,74 @@ test('reduced motion freezes scene animation while resident sprites support scal
   const scaled = recordingContext();
   renderResident(scaled, 120, 100, room.resident, { scale: 2, time: 400, walking: true });
   assert.equal(scaled.depth, 0);
+});
+
+function prFor(stage, now) {
+  if (stage === 'unknown') return undefined;
+  if (stage === 'none') return { state: 'none', source: 'feed', checkedAt: now };
+  return {
+    number: 42, url: 'https://github.com/example/cottage/pull/42',
+    state: ['merged', 'closed'].includes(stage) ? stage : 'open',
+    source: 'github', checkedAt: now, headSha: 'abc123', reviewedHeadSha: 'abc123',
+    labels: ['open', 'merged', 'closed'].includes(stage) ? [] : ['babysit:' + stage],
+  };
+}
+
+test('every PR stage has an accurate, visibly rendered light with its own icon', () => {
+  const now = Date.now();
+  const room = createInterior(agent);
+  const before = structuredClone(room);
+  const shapes = new Set();
+  for (const stage of ['none', 'open', 'active', 'waiting-codex', 'waiting-ci', 'blocked', 'ready', 'merged', 'closed', 'unknown']) {
+    const pr = prFor(stage, now);
+    const signal = reviewSignal(pr, now);
+    assert.equal(signal.stage, stage);
+    assert.ok(signal.label && signal.shortLabel && signal.color && signal.shape);
+    shapes.add(signal.shape);
+    const ctx = recordingContext();
+    renderInterior(ctx, room, { agent: { ...agent, pr }, reduce: true });
+    // A dynamic drawer light plus the signal plaque/icon use this exact color.
+    assert.ok(ctx.rects.filter((rect) => rect[4] === signal.color).length >= 3, stage);
+    assert.deepEqual(room, before, `${stage} changed the room instead of its live signal`);
+  }
+  assert.equal(shapes.size, 10, 'stage must also be readable without relying on color');
+});
+
+test('stale, conflicting, draft and changed-head readiness never light the ready signal', () => {
+  const now = Date.now();
+  const ready = prFor('ready', now);
+  const readyColor = reviewSignal(ready, now).color;
+  const cases = [
+    { ...ready, stale: true },
+    { ...ready, checkedAt: now - 120001 },
+    { ...ready, checkedAt: null },
+    { ...ready, labels: ['babysit:ready', 'babysit:active'] },
+    { ...ready, headSha: 'new-head' },
+    { ...ready, isDraft: true },
+    { ...ready, reviewState: 'blocked' },
+  ];
+  for (const pr of cases) {
+    const signal = reviewSignal(pr, now);
+    assert.equal(signal.stage, 'unknown');
+    assert.equal(signal.shape, 'question');
+    assert.notEqual(signal.color, readyColor);
+  }
+});
+
+test('conversation pose and bubble leave the room intact and freeze under reduced motion', () => {
+  const room = createInterior({ ...agent, town: 'AppTown' });
+  const before = structuredClone(room);
+  const idle = recordingContext();
+  const talking = recordingContext();
+  const later = recordingContext();
+  renderInterior(idle, room, { agent, reduce: true });
+  renderInterior(talking, room, { agent, talking: true, reduce: true, time: 0 });
+  renderInterior(later, room, { agent, talking: true, reduce: true, time: 9999 });
+  assert.ok(talking.rects.length > idle.rects.length, 'speaking has a visible acknowledgement');
+  assert.deepEqual(talking.rects, later.rects);
+  assert.deepEqual(room, before);
+  const a = recordingContext(), b = recordingContext();
+  renderResident(a, 100, 100, room.resident, { talking: true, walking: true, reduce: true, time: 0 });
+  renderResident(b, 100, 100, room.resident, { talking: true, walking: true, reduce: true, time: 170 });
+  assert.deepEqual(a.rects, b.rects);
 });

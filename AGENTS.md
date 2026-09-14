@@ -32,9 +32,11 @@ duck. Check direct inspector controls, the connect box, and stale-feed recovery.
 | `src/observatory.mjs` | Walking, interiors, inspector, journals, filters, wildlife interactions |
 | `src/interiors.mjs` / `src/world.mjs` | Seeded rooms/residents, walkability, stable plots, explicit paths/handoffs |
 | `src/feed-client.mjs` | Browser feed normalization and incremental activity merging |
+| `src/interaction.mjs` / `src/conversation.mjs` | Door crossings and browser message capability checks |
 | `src/feed.mjs` | HTTP server, snapshot cache, adapter integration, activity routes |
 | `src/transcripts.mjs` / `src/activity.mjs` | Incremental transcript parsing and public activity; optional Hub timeline |
 | `src/hub.mjs` | Optional readonly sqlite `agent_runs` adapter |
+| `src/todos.mjs` / `src/messages.mjs` | Explicit checklist snapshots and user-submitted AutoHub messages |
 | `src/pr.mjs` / `src/github.mjs` | Shared PR classifier/counts and cached read-only GitHub observations |
 | `src/occupancy.mjs` | live / recent / settled, letters, conservative PR identity inference |
 | `src/history.mjs` / `src/sound.mjs` | Bounded browser-local milestones/replay and opt-in Web Audio |
@@ -47,12 +49,18 @@ Keep task identity and task start separate from session identity and session
 start. Missing data stays unavailable. Preserve genuine requests separately
 from assistant updates; never export raw private thinking blocks. A missing PR
 is unknown, not confirmed none. Shared PRs count once, and stale or conflicting
-evidence cannot show ready. External integrations remain read-only.
+evidence cannot show ready. GitHub and transcript adapters remain read-only.
+Task writes require an explicit user Send through a supported messaging route;
+never send autonomous test messages to real agents. Recheck identity, status,
+and transport before sending. Preserve receipt deduplication across restarts;
+uncertain delivery must not be retried automatically. Todo lists come only from
+structured snapshots, never prose inference.
 
 Seed interiors from stable cottage/task identity. Feed updates must preserve
 visited rooms and cottage positions. Only explicit relationships and recorded
 handoffs create paths and couriers. Sound starts off. Scrapbook replay is limited
-to locally observed history.
+to locally observed history. Walk into doors to enter/leave; E talks to a nearby
+resident or inspects an object. Direct buttons and Escape remain available.
 
 Naming lock (also in `.cursor/rules/naming.mdc`):
 

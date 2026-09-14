@@ -15,6 +15,25 @@ const SKINS = ['#f2c899', '#dfaa78', '#c38d61', '#a96e49', '#845639', '#61412f']
 const HAIR = ['#483227', '#75513a', '#ab7547', '#d3b273', '#cecbc1', '#353137'];
 const CLOTHES = ['#5d8597', '#6b9672', '#c08563', '#9a789c', '#ba9b58', '#6c8c8c'];
 
+const REVIEW_SIGNALS = Object.freeze({
+  none: { label: 'No PR yet', shortLabel: 'NO PR', color: '#a5aa98', shape: 'tray' },
+  open: { label: 'PR opened', shortLabel: 'OPEN', color: '#dfad68', shape: 'parcel' },
+  active: { label: 'Babysitting', shortLabel: 'FIXING', color: '#87b4d8', shape: 'hammer' },
+  'waiting-codex': { label: 'Waiting for Codex review', shortLabel: 'REVIEW', color: '#bd9bd9', shape: 'magnifier' },
+  'waiting-ci': { label: 'Waiting for CI', shortLabel: 'CI', color: '#83bfb9', shape: 'hourglass' },
+  blocked: { label: 'Review blocked', shortLabel: 'BLOCK', color: '#e78773', shape: 'exclamation' },
+  ready: { label: 'Ready to merge', shortLabel: 'READY', color: '#f5d66b', shape: 'star' },
+  merged: { label: 'PR merged', shortLabel: 'MERGED', color: '#9dc58a', shape: 'check' },
+  closed: { label: 'PR closed without merge', shortLabel: 'CLOSED', color: '#ada4ab', shape: 'cross' },
+  unknown: { label: 'PR state unverified', shortLabel: 'CHECK?', color: '#91a0ab', shape: 'question' },
+});
+
+/** Use the shared evidence rules: stale, conflicting, or changed-head ready is never gold. */
+export function reviewSignal(pr, now = Date.now()) {
+  const stage = prStage(pr, now);
+  return { stage, ...REVIEW_SIGNALS[stage] };
+}
+
 const PALETTES = [
   { wall: '#eee0bc', wallShade: '#d5c39a', floor: '#bc925f', board: '#c49b6a', grain: '#a67d51', rug: '#77928b', rugDark: '#526d68', trim: '#e1c89b' },
   { wall: '#e3e5c9', wallShade: '#c1c9ab', floor: '#b7895d', board: '#c3956a', grain: '#9e744f', rug: '#ae7568', rugDark: '#85544c', trim: '#f0d49b' },
@@ -641,10 +660,57 @@ function parcel(p, x, y, stage, time) {
   }
 }
 
-function review(ctx, object, room, time, stage) {
+function drawSignalIcon(p, x, y, shape, color) {
+  if (shape === 'tray') {
+    p(x, y + 3, 1, 3, color); p(x + 6, y + 3, 1, 3, color); p(x, y + 6, 7, 1, color);
+  } else if (shape === 'parcel') {
+    frame(p, x, y + 1, 7, 6, color);
+    p(x + 3, y + 2, 1, 4, '#34433b');
+    p(x + 1, y + 4, 5, 1, '#34433b');
+  } else if (shape === 'hammer') {
+    p(x + 1, y, 6, 3, color); p(x + 3, y + 2, 2, 5, color);
+  } else if (shape === 'magnifier') {
+    frame(p, x, y, 5, 5, '#34433b', color);
+    p(x + 4, y + 4, 2, 2, color); p(x + 6, y + 6, 1, 1, color);
+  } else if (shape === 'hourglass') {
+    p(x, y, 7, 1, color); p(x, y + 6, 7, 1, color);
+    p(x + 1, y + 1, 5, 1, color); p(x + 2, y + 2, 3, 1, color);
+    p(x + 3, y + 3, 1, 1, color); p(x + 2, y + 4, 3, 1, color); p(x + 1, y + 5, 5, 1, color);
+  } else if (shape === 'exclamation') {
+    p(x + 2, y, 3, 4, color); p(x + 2, y + 6, 3, 1, color);
+  } else if (shape === 'star') {
+    p(x + 3, y, 1, 7, color); p(x, y + 3, 7, 1, color); p(x + 1, y + 1, 5, 5, color);
+    p(x + 2, y + 2, 3, 3, '#fff0b8');
+  } else if (shape === 'check') {
+    p(x, y + 3, 2, 2, color); p(x + 1, y + 4, 2, 2, color);
+    p(x + 2, y + 5, 2, 2, color); p(x + 3, y + 3, 2, 2, color); p(x + 5, y + 1, 2, 2, color);
+  } else if (shape === 'cross') {
+    for (let i = 0; i < 7; i++) { p(x + i, y + i, 1, 1, color); p(x + 6 - i, y + i, 1, 1, color); }
+  } else {
+    p(x + 1, y, 5, 1, color); p(x + 5, y + 1, 2, 2, color);
+    p(x + 3, y + 3, 3, 1, color); p(x + 3, y + 4, 1, 1, color); p(x + 3, y + 6, 1, 1, color);
+  }
+}
+
+function reviewLamp(ctx, object, signal) {
   const p = painter(ctx);
   const { x, y, w } = object;
-  desk(p, object, room.palette.rugDark);
+  // The light is attached to the existing desk, leaving its collision footprint
+  // untouched. A word and a distinct pixel icon accompany every color.
+  p(x + 5, y - 3, 2, 8, WOOD_DARK);
+  p(x + w - 8, y - 3, 2, 8, WOOD_DARK);
+  frame(p, x + 2, y - 12, w - 4, 11, '#34433b');
+  p(x + 3, y - 11, w - 6, 1, signal.color);
+  drawSignalIcon(p, x + 5, y - 10, signal.shape, signal.color);
+  smallText(ctx, signal.shortLabel, x + 15, y - 9, signal.color, 5);
+  p(x + 3, y - 1, w - 6, 3, signal.color + '28');
+}
+
+function review(ctx, object, room, time, signal) {
+  const p = painter(ctx);
+  const { x, y, w } = object;
+  const stage = signal.stage;
+  desk(p, object, signal.color);
   p(x + 6, y + 1, 16, 15, '#e2d4b7');
   p(x + 5, y, 16, 14, PAPER);
   for (let row = 0; row < 4; row++) p(x + 8, y + 3 + row * 2, 9 - (row % 2) * 2, 1, '#c4b494');
@@ -667,6 +733,7 @@ function review(ctx, object, room, time, stage) {
     p(x + 3, y + 18, 18, 1, '#dfc694');
   }
   parcel(p, x + w - 22, y + 2, stage, time);
+  reviewLamp(ctx, object, signal);
 }
 
 function shelf(ctx, object, room, agent, stage) {
@@ -855,13 +922,13 @@ function drawExit(p, room) {
 }
 
 /** Draw a 12×18 resident about a foot-center point. Animation time is milliseconds. */
-export function renderResident(ctx, x, y, resident = {}, { time = 0, walking = false, scale = 1 } = {}) {
+export function renderResident(ctx, x, y, resident = {}, { time = 0, walking = false, scale = 1, talking = false, reduce = false } = {}) {
   const skin = resident.skin || SKINS[0];
   const hair = resident.hair || HAIR[0];
   const clothing = resident.clothing || CLOTHES[0];
   const trousers = resident.trousers || '#4c5963';
   const accent = resident.accent || '#dcc795';
-  const step = walking ? Math.floor(time / 150) % 2 : 0;
+  const step = walking && !reduce ? Math.floor(time / 150) % 2 : 0;
   ctx.save();
   ctx.translate(Math.round(x), Math.round(y));
   ctx.scale(scale, scale);
@@ -965,11 +1032,31 @@ export function renderResident(ctx, x, y, resident = {}, { time = 0, walking = f
     draw(4, -4, 2, 3, '#a87a56');
     draw(3, -5, 2, 2, skin);
   }
+  if (talking) {
+    // A small raised hand and a mouth movement acknowledge Jack without moving
+    // the resident or fabricating any text. Reduced motion holds a still pose.
+    const syllable = !reduce && Math.floor(time / 150) % 2;
+    draw(0, -9, 2, syllable ? 2 : 1, '#674934');
+    draw(-6, -8, 2, 3, skin);
+    draw(-5, -6, 2, 2, clothing);
+  }
   ctx.restore();
 }
 
+function conversationBubble(p, room, time, reduce) {
+  const x = Math.max(16, Math.min(room.width - 38, room.resident.x - 12));
+  const y = Math.max(16, room.resident.y - 36);
+  frame(p, x, y, 28, 14, '#fff1cc', '#594c38');
+  p(x + 9, y + 13, 5, 3, '#594c38');
+  p(x + 10, y + 13, 3, 2, '#fff1cc');
+  for (let i = 0; i < 3; i++) {
+    const lift = !reduce && Math.floor(time / 180) % 3 === i ? 1 : 0;
+    p(x + 6 + i * 7, y + 6 - lift, 3, 3, '#75603f');
+  }
+}
+
 /** Render into a 240×176 coordinate space; the caller owns camera/scaling. */
-export function renderInterior(ctx, room, { time = 0, agent = {}, player = null, selectedObject = null, reduce = false } = {}) {
+export function renderInterior(ctx, room, { time = 0, agent = {}, player = null, selectedObject = null, reduce = false, talking = false } = {}) {
   const frameTime = reduce ? 0 : time;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
@@ -978,14 +1065,15 @@ export function renderInterior(ctx, room, { time = 0, agent = {}, player = null,
   drawWallAccents(p, room, frameTime);
   drawRug(p, room);
   drawExit(p, room);
-  const stage = prStage(agent.pr);
+  const signal = reviewSignal(agent.pr);
+  const stage = signal.stage;
   const layers = room.objects.filter((object) => object.id !== 'exit').map((object) => ({ y: object.y + object.h, object }));
   layers.push({ y: room.resident.y, resident: room.resident });
   if (player) layers.push({ y: player.y, player });
   layers.sort((a, b) => a.y - b.y);
   for (const layer of layers) {
     if (layer.resident) {
-      renderResident(ctx, room.resident.x, room.resident.y, room.resident, { time: frameTime });
+      renderResident(ctx, room.resident.x, room.resident.y, room.resident, { time: frameTime, talking, reduce });
     } else if (layer.player) {
       renderResident(ctx, player.x, player.y, {
         skin: SKINS[0], hair: HAIR[0], clothing: '#345670', trousers: '#46505c', headgear: 'cap', accent: '#ce6554',
@@ -1003,7 +1091,7 @@ export function renderInterior(ctx, room, { time = 0, agent = {}, player = null,
       if (object.id === 'request') request(ctx, object);
       else if (object.id === 'clock') clock(ctx, object, agent);
       else if (object.id === 'workbench') workbench(ctx, object, room, frameTime, agent);
-      else if (object.id === 'review') review(ctx, object, room, frameTime, stage);
+      else if (object.id === 'review') review(ctx, object, room, frameTime, signal);
       else if (object.id === 'shelf') shelf(ctx, object, room, agent, stage);
       else if (object.id === 'theme') themeFurniture(ctx, object, room);
       else if (object.id === 'hearth') hearth(p, object, frameTime, room);
@@ -1011,6 +1099,7 @@ export function renderInterior(ctx, room, { time = 0, agent = {}, player = null,
       else if (object.id === 'plant') plant(p, object);
     }
   }
+  if (talking) conversationBubble(p, room, frameTime, reduce);
   const selectedId = typeof selectedObject === 'object' ? selectedObject?.id : selectedObject;
   const selected = room.objects.find((object) => object.id === selectedId);
   if (selected) {

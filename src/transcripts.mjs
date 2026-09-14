@@ -3,6 +3,7 @@ import { open, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { normalizeActivityEvent, timestampMs } from "./activity.mjs";
+import { normalizeTodos, todosFromTool } from "./todos.mjs";
 
 // Existing estimated prices; these are not a billing source of truth.
 const PRICE = {
@@ -17,7 +18,7 @@ export function blankSession(path = "") {
     path, id: "", slug: "", cwd: "", branch: "", model: "", version: "", entrypoint: "",
     firstTs: null, lastTs: null, taskId: null, taskStartedAt: null,
     originalAsk: "", originalAskSource: "session", originalAskTruncated: false,
-    pr: null, finalization: null,
+    pr: null, finalization: null, todos: null,
     tokens: 0, cost: 0, lastText: "", lastTool: "", lastSkill: "",
     turnOpen: false, endedAt: null, events: [], eventMap: new Map(),
     sidechains: new Map(), uuidRoot: new Map(), seen: new Set(), usageByMessage: new Map(),
@@ -63,6 +64,18 @@ function addEvents(target, line, ts) {
   const incoming = [];
   const base = eventBase(line);
   const blocks = blocksOf(line.message?.content);
+  const suppliedTodos = normalizeTodos(line.todos, { source: "transcript:todos", updatedAt: ts });
+  if (suppliedTodos) incoming.push({ id: `${base}:todos`, timestamp: ts, kind: "summary", text: "Task checklist updated", todos: suppliedTodos });
+  const codexCall = line.type === "response_item" && line.payload?.type === "function_call" ? line.payload : null;
+  if (codexCall) {
+    const todos = todosFromTool(codexCall.name, codexCall.arguments, { source: "codex:update_plan", updatedAt: ts });
+    if (todos) incoming.push({ id: `${base}:plan`, timestamp: ts, kind: "tool", text: "Update plan", todos });
+  }
+  const codexItem = line.item || line.params?.item;
+  if (["item.completed", "item/completed"].includes(line.type || line.method) && codexItem?.type === "todo_list") {
+    const todos = normalizeTodos(codexItem.items ?? codexItem.todos, { source: "codex:todo_list", updatedAt: ts });
+    if (todos) incoming.push({ id: `${base}:plan`, timestamp: ts, kind: "summary", text: "Task checklist updated", todos });
+  }
   const request = genuineRequest(line);
   if (request) incoming.push({ id: `${base}:request`, timestamp: ts, kind: "request", text: request });
   blocks.forEach((block, index) => {
@@ -73,7 +86,8 @@ function addEvents(target, line, ts) {
     } else if (line.type === "assistant" && ["summary", "reasoning_summary"].includes(block.type)) {
       incoming.push({ ...event, kind: "summary", text: block.text || block.summary || "" });
     } else if (line.type === "assistant" && block.type === "tool_use") {
-      incoming.push({ ...event, kind: "tool", text: toolLabel(block) });
+      const todos = todosFromTool(block.name, block.input, { source: `claude-transcript:${block.name}`, updatedAt: ts });
+      incoming.push({ ...event, kind: "tool", text: toolLabel(block), ...(todos ? { todos } : {}) });
     } else if (line.type === "user" && block.type === "tool_result") {
       const result = textOf(block.content);
       incoming.push({ ...event, kind: "result", text: `${block.is_error ? "Tool failed" : "Tool result"}${result ? `: ${result}` : ""}` });
@@ -83,6 +97,7 @@ function addEvents(target, line, ts) {
   for (const raw of incoming) {
     const event = normalizeActivityEvent(raw);
     if (!event) continue;
+    if (event.todos && (!target.todos?.updatedAt || !event.todos.updatedAt || event.todos.updatedAt >= target.todos.updatedAt)) target.todos = event.todos;
     const old = target.eventMap.get(event.id);
     if (old) Object.assign(old, event);
     else { target.events.push(event); target.eventMap.set(event.id, event); }
@@ -131,6 +146,7 @@ function trackPrMetadata(target, line) {
 
 export function applyLine(session, line) {
   if (!line || typeof line !== "object") return;
+  if (line.isSidechain && !line.uuid) return;
   // Only exact record duplicates are skipped; streamed revisions may share message ids.
   const fingerprint = createHash("sha256").update(JSON.stringify(line)).digest("hex");
   if (session.seen.has(fingerprint)) return;
@@ -170,6 +186,7 @@ export function applyLine(session, line) {
     target.endedAt = null;
     target.pr = null;
     target.finalization = null;
+    target.todos = null;
   }
   trackPrMetadata(target, line);
   if (target.taskId && timestampMs(line.taskStartedAt)) target.taskStartedAt = timestampMs(line.taskStartedAt);

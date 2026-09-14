@@ -34,6 +34,29 @@ test("feed cottage request and task/session clocks remain distinct", () => {
   assert.equal(unknown.status, "offline");
 });
 
+test("feed and incremental activity expose the same explicit latest todo snapshot", async () => {
+  const session = parseTranscript(JSON.stringify({ type: "assistant", sessionId: "todo-session", timestamp: new Date(now).toISOString(), message: {
+    content: [{ type: "tool_use", name: "TodoWrite", input: { todos: [{ content: "Run tests", status: "in_progress" }] } }],
+  } }));
+  let failed = false;
+  const feed = createFeed({ ...feedOptions, scanClaude: async () => {
+    if (failed) throw new Error("Temporary scan failure");
+    return { ok: true, agents: toAgents([session], { now }), sessions: [session] };
+  } });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Run tests");
+  const journal = await feed.getActivity("todo-session");
+  const incremental = await feed.getActivity("todo-session", { after: journal.cursor });
+  assert.deepEqual(incremental.events, []);
+  assert.deepEqual(incremental.todos, feed.snapshot().agents[0].todos);
+  failed = true;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.stale, true);
+  failed = false;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.stale, undefined);
+});
+
 test("transcript PRs remain unknown until explicit identity or absence evidence is available", () => {
   const [unknown] = toAgents([sampleSession()], { now });
   assert.equal(unknown.pr.state, "unknown");
@@ -96,6 +119,27 @@ test("Hub external sessions never treat an assistant status label as the origina
   const missing = toCottage({ id: "missing", record_kind: "logical_task", context: {}, started_at: "0", queued_at: 0, status: "pending" }, now);
   assert.equal(missing.startedAt, 0);
   assert.equal(missing.taskStartedAt, null);
+});
+
+test("Hub conversation targets expose factual identity and transport without inventing support", () => {
+  const base = { id: "hub-run", record_kind: "logical_task", status: "running", context: { lifecycle: { execution: { sessionMode: "tmux", supportsRedirection: true, tmuxSession: "private-runtime-session" } } } };
+  assert.deepEqual(toCottage(base, now).conversationTarget, { taskId: "hub-run", taskStatus: "running", recordKind: "logical_task", transport: "tmux", supportsRedirection: true });
+  const direct = toCottage({ ...base, context: { lifecycle: { execution: { sessionMode: "direct", supportsRedirection: false } } } }, now);
+  assert.equal(direct.conversationTarget.transport, "direct");
+  assert.equal(direct.conversationTarget.supportsRedirection, false);
+  const unknown = toCottage({ id: "observed-session", status: "completed", context: {} }, now);
+  assert.deepEqual(unknown.conversationTarget, { taskId: "observed-session", taskStatus: "completed", recordKind: "unknown", transport: "unknown", supportsRedirection: null });
+});
+
+test("local session todos from a previous logical task do not leak into a newer Hub task", async () => {
+  const local = { ...sampleSession(), todos: { items: [{ id: "old", text: "Previous task", status: "completed" }], source: "fixture", updatedAt: now - 3600000 } };
+  const hubAgent = toCottage({ id: "new-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 1000, status: "running", task: "New task", context: {} }, now);
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([local], { now }), sessions: [local] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["new-run", new Set(["session-1"])]]) }),
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos, null);
 });
 
 test("scan failures retain the last live snapshot and mark it stale, then recover", async () => {
@@ -183,6 +227,81 @@ test("configured Hub timeline is used when a local transcript is unavailable", a
   assert.equal(await feed.getActivity("missing"), null);
 });
 
+test("remote todo observations survive subsequent feed polls and explicit clearing", async () => {
+  let items = [{ id: "one", text: "Inspect results", status: "pending" }];
+  let clock = now;
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => ({ ...emptyHub(), agents: [{ id: "hub-run", taskId: "hub-run", name: "Hub", source: "hub", status: "working", todos: null }] }),
+    timeline: { configured: true, read: async () => ({ events: [], source: "hub:codex", todos: { items, source: "hub:todo", updatedAt: clock }, hasMore: false, cursor: null }) },
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos, null);
+  await feed.getActivity("hub-run");
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Inspect results");
+  items = []; clock++;
+  await feed.getActivity("hub-run");
+  await feed.scan();
+  assert.deepEqual(feed.snapshot().agents[0].todos.items, []);
+});
+
+test("Hub cottages with local journals refresh dedicated todos without reading the remote timeline", async () => {
+  const session = sampleSession();
+  const hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 20000, status: "running", task: "Current task", context: {} }, now);
+  let todos = { items: [{ id: "one", text: "Inspect results", status: "pending" }], source: "hub:todo", updatedAt: now };
+  const calls = [];
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([session], { now }), sessions: [session] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-run", new Set(["session-1"])]]) }),
+    timeline: { configured: true, read: () => assert.fail("Local journals must not fetch a full remote timeline"), readTodos: async id => { calls.push(id); return todos; } },
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos, null);
+  const journal = await feed.getActivity("hub-run");
+  assert.equal(journal.source, "claude-transcript");
+  assert.deepEqual(journal.events.map(event => event.kind), ["request", "progress"]);
+  assert.equal(journal.todos.items[0].text, "Inspect results");
+  assert.deepEqual(feed.snapshot().agents[0].todos, journal.todos);
+  await feed.scan();
+  assert.deepEqual(feed.snapshot().agents[0].todos, journal.todos);
+  todos = { ...todos, stale: true };
+  const staleChecklist = await feed.getActivity("hub-run", { after: journal.cursor });
+  assert.deepEqual(staleChecklist.events, []);
+  assert.equal(staleChecklist.todos.stale, true);
+  assert.equal(staleChecklist.stale, undefined, "todo failures do not mark the local journal stale");
+  todos = { items: [], source: "hub:todo", updatedAt: now + 1000 };
+  const cleared = await feed.getActivity("hub-run", { after: journal.cursor });
+  assert.deepEqual(cleared.todos.items, []);
+  assert.equal(cleared.todos.stale, undefined);
+  await feed.scan();
+  assert.deepEqual(feed.snapshot().agents[0].todos.items, []);
+  todos = { items: [{ id: "old", text: "Earlier work", status: "pending" }], source: "hub:todo", updatedAt: now - 1000 };
+  assert.deepEqual((await feed.getActivity("hub-run")).todos.items, [], "older remote snapshots cannot undo a later clear");
+  assert.deepEqual(calls, ["hub-run", "hub-run", "hub-run", "hub-run"]);
+});
+
+test("pending todo reads only update the matching cottage task and session identity", async () => {
+  const session = sampleSession();
+  let hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 20000, status: "running", task: "Current task", context: {} }, now);
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([session], { now }), sessions: [session] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-run", new Set(["session-1"])]]) }),
+    timeline: { configured: true, read: () => assert.fail("Local journals have priority"), readTodos: async () => pending },
+  });
+  await feed.scan();
+  const request = feed.getActivity("hub-run");
+  await feed.scan();
+  release({ items: [{ text: "Task one work", status: "pending" }], source: "hub:todo", updatedAt: now });
+  await request;
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Task one work", "a scan during the read must not lose the current snapshot update");
+  hubAgent = { ...hubAgent, taskId: "task-two", sessionId: "session-two" };
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos, null, "the persisted snapshot cannot cross task/session identities");
+});
+
 test("remote repository lookup is exact, read-only, and cached", async () => {
   assert.equal(repoFromRemote("git@github.com:owner/project.git"), "owner/project");
   assert.equal(repoFromRemote("https://github.com/owner/project.git"), "owner/project");
@@ -265,5 +384,13 @@ test("Hub database adapter accepts older schemas without optional task columns",
   assert.equal(result.agents[0].originalAsk, "Original request");
   assert.equal(result.agents[0].taskStartedAt, null);
   assert.equal(result.links.get("old-task").has("old-task"), true);
+  const writable = new DatabaseSync(path);
+  writable.exec("CREATE TABLE agent_checkpoints (id INTEGER PRIMARY KEY, run_id TEXT, kind TEXT, data TEXT, created_at TEXT)");
+  writable.prepare("INSERT INTO agent_checkpoints(run_id,kind,data,created_at) VALUES (?,?,?,?)").run("old-task", "todo", JSON.stringify({ list: { items: [{ id: "todo-1", title: "Check the result", status: "done" }], updatedAt: now - 10000 } }), new Date(now).toISOString());
+  writable.close();
+  const withTodos = readHubAgents({ dbPath: path }).agents[0].todos;
+  assert.equal(withTodos.items[0].status, "completed");
+  assert.equal(withTodos.source, "hub:checkpoint");
+  assert.equal(withTodos.updatedAt, now);
   assert.equal(readHubAgents({ dbPath: join(directory, "missing.db") }).ok, false);
 });

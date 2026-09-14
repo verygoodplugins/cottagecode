@@ -54,6 +54,51 @@ test("only explicit task identities create a new task request and timeline", () 
   assert.equal(observedMidTask.taskStartedAt, null);
 });
 
+test("explicit todo snapshots stay isolated by task and child, and empty means cleared", () => {
+  const session = blankSession();
+  const todo = (content, status = "pending") => ({ type: "tool_use", name: "TodoWrite", input: { todos: [{ content, status }] } });
+  applyLine(session, line("assistant", [todo("Parent work", "in_progress")], 1, { taskId: "parent-task" }));
+  assert.equal(session.todos.items[0].text, "Parent work");
+  assert.equal(session.todos.source, "claude-transcript:TodoWrite");
+  assert.equal(session.todos.updatedAt, start + 1000);
+  applyLine(session, line("assistant", [todo("Child work")], 2, { isSidechain: true, uuid: "child-todos" }));
+  assert.equal(session.sidechains.get("child-todos").todos.items[0].text, "Child work");
+  assert.equal(session.todos.items[0].text, "Parent work");
+  applyLine(session, line("assistant", [todo("Unidentified child")], 3, { isSidechain: true, uuid: undefined }));
+  assert.equal(session.todos.items[0].text, "Parent work");
+  applyLine(session, line("assistant", [{ type: "tool_use", name: "TodoWrite", input: { todos: [] } }], 4));
+  assert.deepEqual(session.todos.items, []);
+  assert.deepEqual(session.events.at(-1).todos.items, []);
+  applyLine(session, line("user", "A new explicit task", 5, { taskId: "new-task" }));
+  assert.equal(session.todos, null);
+  applyLine(session, line("assistant", "- [x] Everything is done", 6));
+  assert.equal(session.todos, null);
+});
+
+test("Codex update_plan and completed todo_list records preserve structured task state", () => {
+  const session = blankSession();
+  applyLine(session, { type: "response_item", timestamp: new Date(start).toISOString(), sessionId: "codex-session", payload: {
+    type: "function_call", name: "update_plan", arguments: JSON.stringify({ plan: [{ step: "Inspect the handler", status: "in_progress" }] }),
+  } });
+  const id = session.todos.items[0].id;
+  assert.equal(session.todos.items[0].status, "in_progress");
+  applyLine(session, { type: "item.completed", timestamp: new Date(start + 1000).toISOString(), item: {
+    id: "todo-update", type: "todo_list", items: [{ text: "Inspect the handler", completed: true }],
+  } });
+  assert.equal(session.todos.items[0].id, id);
+  assert.equal(session.todos.items[0].status, "completed");
+  assert.equal(session.todos.source, "codex:todo_list");
+});
+
+test("activity preserves structured plan arrays without parsing flattened checklist prose", () => {
+  const structured = normalizeActivityEvent({ id: "plan", kind: "plan", items: [{ step: "Run tests", status: "pending" }], ts: start });
+  assert.equal(structured.todos.items[0].text, "Run tests");
+  assert.equal(structured.timestamp, start);
+  assert.equal(normalizeActivityEvent({ id: "preview", kind: "plan", detail: "Run tests (completed)" }).todos, undefined);
+  const tool = normalizeActivityEvent({ id: "tool-plan", kind: "tool_call", tool: "TodoWrite", title: "TodoWrite", input_preview: JSON.stringify({ todos: [{ content: "Run tests", status: "completed" }] }), ts: start });
+  assert.equal(tool.todos.items[0].status, "completed");
+});
+
 test("public activity drops private thought blocks and retains explicit summaries", () => {
   const session = blankSession();
   const record = line("assistant", [
@@ -165,6 +210,7 @@ test("Hub timeline forwards only safe records, supports increments, and retains 
   const timeline = createHubTimelineReader({
     baseUrl: "http://hub.local/v1", token: "server-only-test-token", now: () => clock,
     fetchFn: async (url, options) => {
+      if (url.pathname.endsWith("/todo")) return { ok: true, json: async () => ({ list: null }) };
       calls++;
       assert.equal(url.pathname, "/v1/tasks/agent-one/timeline");
       assert.equal(options.headers.authorization, "Bearer server-only-test-token");
@@ -189,6 +235,87 @@ test("Hub timeline forwards only safe records, supports increments, and retains 
   assert.equal(failed.stale, true);
   assert.equal(failed.events.length, 2);
   assert.doesNotMatch(JSON.stringify(failed), /server-only-test-token|internal thought/);
+});
+
+test("Hub structured plan snapshots remain available when an incremental page has no new events", async () => {
+  const timeline = createHubTimelineReader({ baseUrl: "http://hub.local", now: () => start,
+    fetchFn: async url => ({ ok: true, json: async () => url.pathname.endsWith("/todo") ? { list: null } : {
+      source: "codex", events: [{ id: "plan-one", kind: "plan", items: [{ step: "Run regression tests", status: "in_progress" }], ts: start }], has_more: false,
+    } }),
+  });
+  const first = await timeline.read("one");
+  assert.equal(first.todos.items[0].status, "in_progress");
+  assert.equal(first.todos.source, "hub:codex");
+  const after = await timeline.read("one", { after: first.cursor });
+  assert.deepEqual(after.events, []);
+  assert.equal(after.todos.items[0].text, "Run regression tests");
+});
+
+test("Hub dedicated todo snapshots preserve source time, explicit empty, and stale fallback", async () => {
+  let clock = start;
+  let state = "populated";
+  const timeline = createHubTimelineReader({ baseUrl: "http://hub.local", now: () => clock,
+    fetchFn: async url => {
+      if (url.pathname.endsWith("/todo")) {
+        if (state === "error") throw new Error("temporary failure");
+        return { ok: true, json: async () => ({ list: { items: state === "empty" ? [] : [{ id: "one", title: "Check audio", status: "done" }], updatedAt: start - 5000 }, createdAt: clock }) };
+      }
+      return { ok: true, json: async () => ({ source: "codex", events: [{ id: "flat-plan", kind: "plan", detail: "Old flattened plan (pending)", ts: start - 10000 }], has_more: false }) };
+    },
+  });
+  const first = await timeline.read("one");
+  assert.equal(first.todos.source, "hub:todo");
+  assert.equal(first.todos.updatedAt, start);
+  assert.equal(first.todos.items[0].status, "completed");
+  clock += 2000; state = "error";
+  const stale = await timeline.read("one");
+  assert.equal(stale.todos.stale, true);
+  assert.equal(stale.todos.updatedAt, start);
+  assert.equal(stale.stale, undefined, "an optional todo failure does not mark a healthy activity stream stale");
+  clock += 2000; state = "empty";
+  const cleared = await timeline.read("one");
+  assert.deepEqual(cleared.todos.items, []);
+  assert.equal(cleared.todos.updatedAt, clock);
+  assert.equal(cleared.todos.stale, undefined);
+});
+
+test("dedicated Hub todo reads are independently cached and never fetch a timeline", async () => {
+  let clock = start;
+  let state = "populated";
+  const calls = [];
+  const timeline = createHubTimelineReader({ baseUrl: "http://hub.local/v1", token: "test-server-token", now: () => clock,
+    fetchFn: async (url, options) => {
+      calls.push(url.pathname);
+      assert.equal(options.headers.authorization, "Bearer test-server-token");
+      assert.equal(options.redirect, "error");
+      assert.equal(options.method, undefined, "the dedicated read uses GET");
+      if (state === "error") throw new Error("test-server-token must stay private");
+      return { ok: true, json: async () => ({ list: { items: state === "empty" ? [] : [{ title: "Check the work", status: "pending" }] }, createdAt: clock }) };
+    },
+  });
+  const [first, concurrent] = await Promise.all([timeline.readTodos("one"), timeline.readTodos("one")]);
+  assert.deepEqual(concurrent, first);
+  assert.equal(first.source, "hub:todo");
+  assert.equal(first.updatedAt, start);
+  assert.deepEqual(calls, ["/v1/tasks/one/todo"]);
+  await timeline.readTodos("one");
+  assert.equal(calls.length, 1);
+  clock += 2000; state = "error";
+  const stale = await timeline.readTodos("one");
+  assert.equal(stale.stale, true);
+  assert.equal(stale.updatedAt, start);
+  assert.doesNotMatch(JSON.stringify(stale), /test-server-token/);
+  assert.equal(await timeline.readTodos("two"), null, "another task cannot inherit the cached checklist");
+  clock += 2000; state = "empty";
+  const cleared = await timeline.readTodos("one");
+  assert.deepEqual(cleared.items, []);
+  assert.equal(cleared.stale, undefined);
+  assert.equal(cleared.updatedAt, clock);
+  const count = calls.length;
+  for (const taskId of [undefined, null, "", " ", "..", ".", 42, {}, "bad\nidentity"])
+    assert.equal(await timeline.readTodos(taskId), null);
+  assert.equal(calls.length, count);
+  assert.equal(await createHubTimelineReader({ baseUrl: "", fetchFn: () => assert.fail("Unconfigured reads cannot fetch") }).readTodos("one"), null);
 });
 
 test("unconfigured and unsupported Hub timelines have explicit unavailable results", async () => {

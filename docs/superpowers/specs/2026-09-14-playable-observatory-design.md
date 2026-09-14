@@ -6,7 +6,7 @@ Approved by Jack on 2026-09-14. CottageCode remains a zero-dependency Node viewe
 
 The map exposes PR stages independently of agent activity: no PR, opened, babysit active, waiting for Codex, waiting for CI, blocked, ready to merge, merged, closed, and unknown. Dispatch stands and deduplicated counts share one classifier. Open PRs remain visible when an agent finishes. Live labels and structured receipts provide evidence; stale/conflicting evidence cannot declare readiness. This viewer never merges or controls agents.
 
-Arrow keys/WASD move Jack when the map is focused. E interacts and enters; Escape exits. Clicking and accessible controls provide the same diagnostics. Roofs lift and the camera transitions to cutaway rooms; leaving restores the doorway. Polls preserve cottage positions and interior identity.
+Arrow keys/WASD move Jack when the map is focused. Walking into doors enters and exits; E talks to nearby agents or inspects objects, and Escape also exits. Clicking and accessible controls provide the same diagnostics. Roofs lift and the camera transitions to cutaway rooms; leaving restores the doorway. Polls preserve cottage positions and interior identity. These door controls follow the user's September 15 refinement.
 
 Every room includes the original request, separate task/session clocks, a live activity workbench, PR review desk, and artifact shelves. Display actual progress summaries, tool activity, and outcomes. Missing data is explicit. Outside bubbles use the same activity.
 

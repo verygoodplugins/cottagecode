@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
 import { timestampMs } from "./activity.mjs";
+import { normalizeTodos } from "./todos.mjs";
 import {
   classifyOccupancy,
   inferPr,
@@ -209,6 +210,10 @@ export function toCottage(row, now = Date.now()) {
   const explicitRequest = ctx.originalAsk || requestSpec.request || ctx.customerRequest?.text || ctx.customerRequest || ctx.originalTask;
   const original = typeof explicitRequest === "string" ? explicitRequest.trim() : !externalSession ? String(row.task || "").trim() : "";
   const originalAsk = original && !isEmptyResult(original) && !isWorktreeSlug(original) ? original.slice(0, 32768) : "";
+  const suppliedTodos = normalizeTodos(ctx.todos ?? ctx.cottage?.todos ?? durableResult.todos, { source: "hub:context", updatedAt: ctx.todosUpdatedAt });
+  const checkpointTodos = normalizeTodos(row.todo_snapshot, { source: "hub:checkpoint", updatedAt: row.todo_updated_at });
+  const todos = checkpointTodos && (!suppliedTodos?.updatedAt || !checkpointTodos.updatedAt || checkpointTodos.updatedAt >= suppliedTodos.updatedAt) ? checkpointTodos : suppliedTodos;
+  const execution = ctx.lifecycle?.execution || {};
   const attention = row.attention_message
     ? String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240)
     : "";
@@ -240,6 +245,14 @@ export function toCottage(row, now = Date.now()) {
     taskStartedAt: externalSession ? null : timestampMs(row.started_at),
     sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) || (externalSession ? started || null : null),
     activityUrl: `/agents/${encodeURIComponent(row.id)}/activity`,
+    todos,
+    conversationTarget: {
+      taskId: row.id,
+      taskStatus: String(row.status || "unknown"),
+      recordKind: ["logical_task", "external_session"].includes(row.record_kind) ? row.record_kind : "unknown",
+      transport: ["tmux", "direct"].includes(execution.sessionMode) ? execution.sessionMode : "unknown",
+      supportsRedirection: typeof execution.supportsRedirection === "boolean" ? execution.supportsRedirection : null,
+    },
     repo: [ctx.githubAutoJackRequest?.repo, ctx.repo, ctx.repository].find(value => typeof value === "string" && /^[\w.-]+\/[\w.-]+$/.test(value)) || "",
     defaultBranch: typeof ctx.defaultBranch === "string" ? ctx.defaultBranch : "",
     worktree,
@@ -304,11 +317,21 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
     const now = Date.now();
     const keys = new Set();
     const links = new Map();
+    const checkpointColumns = new Set(db.prepare("PRAGMA table_info(agent_checkpoints)").all().map(column => column.name));
+    const todoQuery = ["run_id", "kind", "data", "created_at"].every(name => checkpointColumns.has(name))
+      ? db.prepare("SELECT data, created_at FROM agent_checkpoints WHERE run_id = ? AND kind = 'todo' ORDER BY created_at DESC LIMIT 1")
+      : null;
     const agents = rows.map((row) => {
       const ctx = parseContext(row.context);
       const related = hubDedupKeys(row, ctx);
       links.set(row.id, related);
       for (const k of related) keys.add(k);
+      const checkpoint = todoQuery?.get(row.id);
+      if (checkpoint) {
+        const data = parseContext(checkpoint.data);
+        row.todo_snapshot = data.todos ?? data.list;
+        row.todo_updated_at = checkpoint.created_at;
+      }
       return toCottage(row, now);
     });
     return { ok: true, dbPath, agents, keys, links };
