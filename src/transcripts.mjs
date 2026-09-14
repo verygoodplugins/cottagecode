@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { normalizeActivityEvent, timestampMs } from "./activity.mjs";
 import { normalizeTodos, todosFromTool } from "./todos.mjs";
+import { normalizeInputRequest, inputRequestFromTool } from "./input-request.mjs";
 
 // Existing estimated prices; these are not a billing source of truth.
 const PRICE = {
@@ -18,7 +19,7 @@ export function blankSession(path = "") {
     path, id: "", slug: "", cwd: "", branch: "", model: "", version: "", entrypoint: "",
     firstTs: null, lastTs: null, taskId: null, taskStartedAt: null,
     originalAsk: "", originalAskSource: "session", originalAskTruncated: false,
-    pr: null, finalization: null, todos: null,
+    pr: null, finalization: null, todos: null, inputRequest: null, resolvedInputRequests: new Set(),
     tokens: 0, cost: 0, lastText: "", lastTool: "", lastSkill: "",
     turnOpen: false, endedAt: null, events: [], eventMap: new Map(),
     sidechains: new Map(), uuidRoot: new Map(), seen: new Set(), usageByMessage: new Map(),
@@ -144,6 +145,57 @@ function trackPrMetadata(target, line) {
   }
 }
 
+function trackInputRequest(target, line, ts) {
+  if (line.isMeta || line.isCompactSummary) return;
+  const idOf = value => typeof value === "string" && value.trim() ? value.trim() : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+  function resolve(id) {
+    id = idOf(id);
+    if (!id) return;
+    target.resolvedInputRequests.add(id);
+    if (target.resolvedInputRequests.size > 500) target.resolvedInputRequests.delete(target.resolvedInputRequests.values().next().value);
+    if (target.inputRequest?.id === id) target.inputRequest = null;
+  }
+  function remember(request) {
+    if (request && !target.resolvedInputRequests.has(request.id)) target.inputRequest = request;
+  }
+  if (Object.hasOwn(line, "inputRequest")) {
+    const value = line.inputRequest;
+    if (value === null) resolve(target.inputRequest?.id);
+    else if (value?.resolved === true || value?.pending === false || value?.resolvedAt || value?.resolved_at)
+      resolve(idOf(value.id) || target.inputRequest?.id);
+    else if (idOf(value?.id)) remember(normalizeInputRequest(value, { source: "transcript:input", updatedAt: ts }));
+  }
+  for (const block of blocksOf(line.message?.content)) {
+    if (line.type === "assistant" && block?.type === "tool_use")
+      remember(inputRequestFromTool(block.name, block.input, { id: idOf(block.id), source: `claude-transcript:${block.name}`, updatedAt: ts }));
+    else if (line.type === "user" && block?.type === "tool_result") resolve(block.tool_use_id);
+  }
+  if (line.type === "response_item" && line.payload?.type === "function_call") {
+    const call = line.payload;
+    remember(inputRequestFromTool(call.name, call.arguments, { id: idOf(call.call_id), source: `codex:${call.name}`, updatedAt: ts }));
+  } else if (line.type === "response_item" && line.payload?.type === "function_call_output") resolve(line.payload.call_id);
+  if (line.method === "item/tool/requestUserInput")
+    remember(inputRequestFromTool("request_user_input", line.params, { id: idOf(line.id), source: "codex:requestUserInput", updatedAt: ts }));
+  else if (!line.method && idOf(line.id) && (Object.hasOwn(line, "result") || Object.hasOwn(line, "error"))) resolve(line.id);
+
+  // Official hook payloads explicitly distinguish a permission prompt from an
+  // ordinary tool in flight. A tool without a pending hook is never blocked.
+  const hook = String(line.hook_event_name || "").toLowerCase();
+  const toolId = idOf(line.tool_use_id);
+  if (["posttooluse", "posttoolusefailure"].includes(hook)) resolve(toolId);
+  else if (hook === "pretooluse") remember(inputRequestFromTool(line.tool_name, line.tool_input, { id: toolId, source: "claude-hook:PreToolUse", updatedAt: ts }));
+  else if (hook === "permissionrequest" && toolId) {
+    const plan = inputRequestFromTool(line.tool_name, line.tool_input, { id: toolId, source: "claude-hook:PermissionRequest", updatedAt: ts });
+    const description = typeof line.tool_input?.description === "string" ? line.tool_input.description : "";
+    const path = typeof line.tool_input?.file_path === "string" ? line.tool_input.file_path : "";
+    const command = String(line.tool_name || "").toLowerCase() === "bash" && typeof line.tool_input?.command === "string"
+      ? line.tool_input.command.trim().slice(0, 16000) : "";
+    remember(plan || normalizeInputRequest({ id: toolId, kind: "permission",
+      prompt: typeof line.message === "string" ? line.message : description || `Permission requested for ${String(line.tool_name || "tool").slice(0, 100)}`,
+      detail: [command, path].filter(Boolean).join("\n") }, { source: "claude-hook:PermissionRequest", updatedAt: ts }));
+  }
+}
+
 export function applyLine(session, line) {
   if (!line || typeof line !== "object") return;
   if (line.isSidechain && !line.uuid) return;
@@ -160,6 +212,7 @@ export function applyLine(session, line) {
   for (const [key, source] of [["id", "sessionId"], ["slug", "slug"], ["cwd", "cwd"], ["branch", "gitBranch"], ["version", "version"], ["entrypoint", "entrypoint"], ["lastSkill", "attributionSkill"]]) {
     if (typeof line[source] === "string" && line[source]) session[key] = line[source];
   }
+  if (!line.sessionId && typeof line.session_id === "string" && line.session_id) session.id = line.session_id;
 
   let target = session;
   if (line.isSidechain && line.uuid) {
@@ -187,8 +240,11 @@ export function applyLine(session, line) {
     target.pr = null;
     target.finalization = null;
     target.todos = null;
+    target.inputRequest = null;
+    target.resolvedInputRequests.clear();
   }
   trackPrMetadata(target, line);
+  trackInputRequest(target, line, ts);
   if (target.taskId && timestampMs(line.taskStartedAt)) target.taskStartedAt = timestampMs(line.taskStartedAt);
   const request = genuineRequest(line);
   if (request && !target.originalAsk) {

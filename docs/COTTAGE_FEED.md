@@ -69,6 +69,7 @@ Full shape (everything else is optional):
 | `events` | array | Optional inline activity events. When supplied, including `[]`, this takes precedence over `activityUrl`. |
 | `todos` | object \| null | Latest explicit checklist snapshot; null is unavailable, an empty `items` array is known empty. |
 | `conversation` | object | Explicit message capability, route, freshness, or an unavailable reason. |
+| `inputRequest` | object \| null | Actual pending question, permission, plan, or attention detail, with choices and stable request identity. |
 | `activitySource` | string | Source label for inline events. Falls back to the cottage's `source`, then the feed/demo label. |
 | `source` | string | Cottage adapter label, such as `claude` or `hub`. |
 | `worktree` | string | Short worktree / checkout label. |
@@ -172,6 +173,47 @@ The bundled parser accepts structured `TodoWrite` and `update_plan` inputs, Code
 
 E near a resident, clicking the resident, or the **Talk to agent** button opens their recorded activity and message composer. The greeting is locally synthesized nonspeech, enabled only with sound. No response or reasoning is fabricated. Drafts are kept in page memory per feed/cottage/task and preserved during refreshes; they are not saved across page reloads.
 
+Pending input appears above the composer. Supply the actual prompt rather than
+inferring a question from a blocked status:
+
+```json
+{
+  "inputRequest": {
+    "id": "question-round-3",
+    "kind": "question",
+    "prompt": "Should I include the related cleanup?",
+    "detail": "The requested change is ready; the neighboring code could also be simplified.",
+    "questions": [{
+      "id": "scope",
+      "prompt": "Choose the scope.",
+      "options": [
+        {"label": "Keep it focused", "description": "Finish the requested change."},
+        {"label": "Include cleanup", "description": "Also tidy the neighboring code."}
+      ],
+      "multiSelect": false
+    }],
+    "source": "hub:attention",
+    "updatedAt": 1789387200000
+  }
+}
+```
+
+Kinds are `question`, `permission`, `plan`, and `attention`. `null` clears the
+pending request. Prefer a real tool request ID or question-round ID; identical
+wording in a new round must get a new ID. Without an explicit ID, the normalizer
+uses a content hash. Optional `stale: true` disables replies. Up to eight
+questions and twenty options per question are retained. Option buttons fill a
+draft; only **Send reply** submits it. Drafts are isolated by request identity,
+while delivery receipts remain visible for the task after a question resolves.
+
+The bundled adapter reads explicit Hub attention fields and structured pending
+questions, Claude `AskUserQuestion` / `ExitPlanMode` tool calls, Codex input
+requests, and explicit permission hooks. Matching replies clear their requests.
+An ordinary completed assistant turn becomes idle; it does not imply a need for
+input. Blocked feeds without question details show their supplied `attention`
+or an honest missing-detail message. Transcript-only sessions can display a
+question but require responding through their original session.
+
 Observing an agent does not imply permission or capability to steer it. A message-capable feed explicitly supplies:
 
 ```json
@@ -198,7 +240,19 @@ X-CottageCode-Request: user-message
 
 Messages contain 1–8,000 characters. Request IDs contain 8–100 letters, digits, hyphens, or underscores. The browser uses a fresh UUID per message. A successful response is `{ "ok": true, "delivery": "submitted" | "accepted", "requestId": "…" }`; submission to a terminal is distinct from an agent answering. Responses stream through the existing activity source when available. Errors may return `delivery: "not_sent"` for a definite rejection or `"unconfirmed"` when a write may have happened. Neither the browser nor bundled service retries uncertain delivery automatically.
 
-The bundled server derives targets from its own Hub database snapshot, then verifies `GET /v1/tasks/:id` immediately before sending. It uses `/redirect` only for known logical tasks running in a supported tmux transport, and `/respond` only for logical tasks waiting for input. AutoHub retains its authorization checks. The interface does not redirect direct sessions, dispatch new tasks, or resume completed work. A reply may resume the existing waiting task through AutoHub's normal response handler.
+When responding to an `inputRequest`, include `inputRequestId` with the displayed
+ID and `inputRequestVersion` from the exported `inputRequestVersion()` normalizer
+in the message payload. This content revision changes when the prompt or choices
+change, even if the source keeps the same request ID. Timestamps and source
+freshness do not reset a draft. The bundled server derives targets from its own Hub
+database snapshot, then verifies `GET /v1/tasks/:id?context=raw` immediately
+before sending. Raw context remains server-side. It compares the request ID,
+question round, prompt, and options, and rejects an answer if the question has
+changed or resolved. It uses `/redirect` only for known logical tasks running in
+a supported tmux transport, and `/respond` only for logical tasks waiting for
+input. AutoHub retains its authorization checks. The interface does not redirect
+direct sessions, dispatch new tasks, or resume completed work. A reply may resume
+the existing waiting task through AutoHub's normal response handler.
 
 Bundled message writes require a loopback socket connection, a matching browser Origin and an IP-address or `localhost` host, plus the JSON/header contract above. Binding the viewer to `0.0.0.0` does not grant remote clients messaging authority. Cross-origin viewing remains supported; sending to the bundled adapter requires opening CottageCode locally at that adapter's origin. Custom remote message routes must provide their own authentication, authorization, idempotency, and CORS policy; the browser sends no cookies or credentials to them. The bundled bearer token stays server-side.
 

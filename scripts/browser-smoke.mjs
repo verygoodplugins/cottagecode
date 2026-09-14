@@ -7,6 +7,7 @@ import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {createFeedServer} from '../src/feed.mjs';
 import {pageActivity} from '../src/activity.mjs';
+import {inputRequestVersion} from '../src/input-request.mjs';
 
 const run=promisify(execFile),page='cottagecode-browser-smoke';
 const stamp=Date.now(),pr={number:123,url:'https://github.com/example/observatory/pull/123',state:'open',labels:['babysit:ready'],headSha:'head-one',source:'browser-fixture',checkedAt:stamp};
@@ -18,7 +19,11 @@ let events=Array.from({length:130},(_,i)=>({id:'event-'+i,timestamp:stamp-130000
 let handoffs=[],stale=false,fail=false;
 const feed={snapshot:()=>{if(fail)throw new Error('Simulated source outage');return {source:'browser-fixture',agents,stale,relationships:[{from:'HubTown',to:'AppTown',label:'Explicit test contract'}],handoffs};},getActivity:async(id,options)=>pageActivity(events,{...options,source:'browser-fixture'})};
 const sent=[];let unconfirmed=false;
-const messages={capability:(agent,{stale})=>agent.id==='host'&&!stale?{available:true,mode:'redirect',source:'browser-fixture',messageUrl:'/agents/host/messages',checkedAt:Date.now()}:{available:false,reason:'This fixture only observes the other cottages.'},send:async(agent,payload)=>{sent.push({agentId:agent.id,...payload});return unconfirmed?{status:409,body:{ok:false,delivery:'unconfirmed'}}:{status:200,body:{ok:true,delivery:'submitted',requestId:payload.requestId}};}};
+const messages={capability:(agent,{stale})=>agent.id==='host'&&!stale?{available:true,mode:agent.inputRequest?'respond':'redirect',source:'browser-fixture',messageUrl:'/agents/host/messages',checkedAt:Date.now()}:{available:false,reason:'This fixture only observes the other cottages.'},send:async(agent,payload)=>{
+  sent.push({agentId:agent.id,...payload});
+  if(agent.inputRequest){assert.equal(payload.inputRequestId,agent.inputRequest.id);assert.equal(payload.inputRequestVersion,inputRequestVersion(agent.inputRequest));agents[0]={...agents[0],inputRequest:null,status:'working',attention:''};return {status:200,body:{ok:true,delivery:'accepted',requestId:payload.requestId}};}
+  return unconfirmed?{status:409,body:{ok:false,delivery:'unconfirmed'}}:{status:200,body:{ok:true,delivery:'submitted',requestId:payload.requestId}};
+}};
 const app=createFeedServer(feed,{messages}),html=await readFile(new URL('../src/town.html',import.meta.url),'utf8');
 // Emulate the browser preference before scene modules load, without changing macOS settings.
 const preference='<script>const nativeMedia=window.matchMedia.bind(window);window.matchMedia=q=>q.includes("prefers-reduced-motion")?Object.assign(new EventTarget(),{matches:true,media:q}):nativeMedia(q);</script>';
@@ -107,6 +112,27 @@ try{
   await click('[data-action="send-message"]');await until('document.getElementById(\'message-status\').textContent.includes(\'unconfirmed\')','Uncertain delivery did not remain explicit');
   assert.equal(sent.length,2);assert.equal(await evaluate('document.querySelector(\'[data-action="send-message"]\').disabled'),true);
   await evaluate('document.getElementById(\'agent-conversation\').dispatchEvent(new Event(\'submit\',{bubbles:true,cancelable:true}))');assert.equal(sent.length,2,'An uncertain message must not be resubmitted');unconfirmed=false;
+  agents[0]={...agents[0],status:'blocked',inputRequest:{id:'scope-question-1',kind:'question',prompt:'Should I include the related cleanup?',source:'browser-fixture',updatedAt:Date.now(),questions:[{id:'scope',prompt:'Choose the scope.',options:[{label:'Keep it focused',description:'Finish only the requested change.'},{label:'Include cleanup',description:'Also tidy the neighboring code.'}]}]}};
+  await until('document.querySelector(\'.input-request\')?.dataset.requestId===\'scope-question-1\'','Needs-input question did not appear when talking');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'','The new question must not inherit an unrelated draft');
+  await browser('snapshot');
+  await click('[data-action="input-choice:0:1"]');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'Include cleanup');assert.equal(sent.length,2,'Choosing an option must not send automatically');
+  agents[0].inputRequest={...agents[0].inputRequest,source:'browser-fixture-refreshed',updatedAt:Date.now()};
+  await until('document.querySelector(\'.input-request\').textContent.includes(\'browser-fixture-refreshed\')','Question freshness did not refresh');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'Include cleanup','Freshness updates preserve a draft');
+  agents[0].inputRequest={...agents[0].inputRequest,questions:[{...agents[0].inputRequest.questions[0],options:[{label:'Focused preview'},{label:'Full implementation'}]}]};
+  await until('document.querySelector(\'.input-request\').textContent.includes(\'Focused preview\')','Revised choices did not appear');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'','Revised choices under the same request ID must discard the old answer');
+  await click('[data-action="input-choice:0:1"]');
+  agents[0].inputRequest={...agents[0].inputRequest,id:'scope-question-2',prompt:'The request changed: which scope should I use?'};
+  await until('document.querySelector(\'.input-request\')?.dataset.requestId===\'scope-question-2\'','New input request did not replace the previous question');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'','An answer to the old question must not carry into a new one');
+  await click('[data-action="input-choice:0:0"]');
+  await click('[data-action="send-message"]');
+  await until('!document.querySelector(\'.input-request\')&&document.querySelector(\'.sent-messages\')?.textContent.includes(\'Accepted by task source\')','Answered question did not clear while retaining its receipt');
+  assert.equal(sent.length,3);assert.equal(sent[2].message,'Focused preview');assert.equal(sent[2].inputRequestId,'scope-question-2');assert.match(sent[2].inputRequestVersion,/^[0-9a-f]{16}$/);
+  pass('pending question and choices, isolated drafts, explicit answer, resolved prompt and retained receipt');
   agents[0].todos={source:'browser-fixture',updatedAt:Date.now(),items:[]};
   await click('[data-action="tab:todos"]');await until('document.getElementById(\'panel\').textContent.includes(\'list is empty\')','Explicit empty checklist did not clear the old list');
   agents[0].todos=null;await until('document.getElementById(\'panel\').textContent.includes(\'not supplied a to-do list\')','Unknown checklist appeared empty');

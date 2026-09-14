@@ -7,6 +7,7 @@ import {once} from 'node:events';
 import {request as httpRequest} from 'node:http';
 import {createHubMessenger,acceptsMessageOrigin} from '../src/messages.mjs';
 import {createFeedServer} from '../src/feed.mjs';
+import {inputRequestFromHub,inputRequestVersion} from '../src/input-request.mjs';
 
 const now=Date.now();
 const agent={id:'cottage-1',taskId:'task-1',source:'hub',conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'logical_task',transport:'tmux',supportsRedirection:true}};
@@ -26,6 +27,7 @@ test('only supported logical task transports advertise messages; terminal, unkno
   for(const overrides of [{recordKind:'external_session'},{recordKind:'unknown'},{taskStatus:'completed'},{taskStatus:'queued'},{taskStatus:'failed'},{transport:'direct'},{transport:'unknown'},{supportsRedirection:false},{taskId:'other'}])
     assert.equal(messenger.capability({...agent,conversationTarget:{...agent.conversationTarget,...overrides}}).available,false,JSON.stringify(overrides));
   assert.equal(messenger.capability(agent,{stale:true}).available,false);
+  assert.equal(messenger.capability({...agent,inputRequest:{stale:true}}).available,false);
   assert.equal(messenger.capability(agent,{checkedAt:now-121000}).available,false);
   assert.equal(createHubMessenger({baseUrl:''}).capability(agent).available,false);
 });
@@ -33,7 +35,7 @@ test('explicit messages verify current task then submit exact text, with concurr
   const {messenger,calls}=fixture();
   const [one,two]=await Promise.all([messenger.send(agent,message),messenger.send(agent,message)]);
   assert.equal(one.body.delivery,'submitted');assert.deepEqual(two,one);assert.equal(calls.length,2);
-  assert.equal(calls[0].url,'http://hub.test/v1/tasks/task-1');
+  assert.equal(calls[0].url,'http://hub.test/v1/tasks/task-1?context=raw');
   assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/redirect');
   assert.deepEqual(JSON.parse(calls[1].body),{instruction:message.message});
   assert.equal(calls[1].headers.authorization,'Bearer fixture-token');assert.equal(calls[1].redirect,'error');
@@ -46,6 +48,34 @@ test('waiting input uses respond and never invokes resume or dispatch',async()=>
   assert.equal((await messenger.send(waiting,message)).body.delivery,'accepted');
   assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/respond');
   assert.deepEqual(JSON.parse(calls[1].body),{response:message.message});
+});
+test('a reply is bound to the displayed question and the current Hub question round',async()=>{
+  const pending={...task,status:'awaiting_input',attentionMessage:'Which scope should I use?',attentionType:'question',attentionOptions:['Focused','Cleanup'],context:{...task.context,orchestrator:{currentQuestionRound:3}}};
+  const waiting={...agent,inputRequest:inputRequestFromHub(pending),conversationTarget:{...agent.conversationTarget,taskStatus:'awaiting_input'}};
+  const reply={...message,inputRequestId:waiting.inputRequest.id,inputRequestVersion:inputRequestVersion(waiting.inputRequest),message:'Focused'};
+  const correct=fixture({current:pending,reply:{id:'task-1',status:'running'},status:202});
+  assert.equal((await correct.messenger.send(waiting,reply)).body.delivery,'accepted');
+  assert.deepEqual(JSON.parse(correct.calls[1].body),{response:'Focused'});
+  for(const current of [
+    {...pending,attentionMessage:'Which release should I use?'},
+    {...pending,context:{...pending.context,orchestrator:{currentQuestionRound:4}}},
+    {...pending,attentionResolvedAt:new Date(now).toISOString()},
+  ]){
+    const {messenger,calls}=fixture({current});
+    assert.equal((await messenger.send(waiting,reply)).body.delivery,'not_sent');
+    assert.equal(calls.filter(call=>call.method==='POST').length,0,'Never deliver an answer to a different or resolved question');
+  }
+  for(const inputRequestId of [undefined,'an-older-question']){
+    const {messenger,calls}=fixture({current:pending});
+    assert.equal((await messenger.send(waiting,{...reply,inputRequestId})).status,409);
+    assert.equal(calls.length,0,'Reject a mismatched displayed question before querying upstream');
+  }
+  for(const current of [{...pending,attentionMessage:'Which environment should I change?'},{...pending,attentionOptions:['Staging','Production']}]){
+    const newest={...waiting,inputRequest:inputRequestFromHub(current)},check=fixture({current});
+    assert.equal((await check.messenger.send(newest,reply)).body.delivery,'not_sent');
+    assert.equal(check.calls.length,0,'A stale browser reply is rejected even when both server and Hub already have the revised question');
+  }
+  assert.equal((await correct.messenger.send(waiting,{...reply,inputRequestVersion:'different-version'})).status,409,'Receipt IDs also belong to a particular question revision');
 });
 test('fresh validation rejects changed task states and direct sessions before any write',async()=>{
   for(const current of [{...task,status:'completed'},{...task,id:'other'},{...task,isStale:true},{...task,archived:true},{...task,recordKind:'external_session'},{...task,context:{lifecycle:{execution:{sessionMode:'direct'}}}}]){

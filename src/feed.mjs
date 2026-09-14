@@ -15,18 +15,18 @@ import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./ac
 import { enrichAgents } from "./github.mjs";
 import { hasOutstandingPr } from "./pr.mjs";
 import { normalizeTodos } from "./todos.mjs";
+import { normalizeInputRequest } from "./input-request.mjs";
 import { createHubMessenger, acceptsMessageOrigin } from "./messages.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
-const NEEDS_YOU_MS = 2 * 60 * 1000;
 const POLL_MS = 2000;
 const execFileAsync = promisify(execFile);
 
 function statusOf(session, now, windowMs) {
   if (!session.lastTs || now - session.lastTs > windowMs) return "offline";
+  if (session.inputRequest) return "blocked";
   if (session.turnOpen) return "working";
-  if (session.endedAt && now - session.endedAt < NEEDS_YOU_MS) return "blocked";
   return "idle";
 }
 
@@ -69,10 +69,11 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
       sessionStartedAt: session.firstTs,
       activityUrl: `/agents/${encodeURIComponent(session.id)}/activity`,
       todos: normalizeTodos(session.todos),
+      inputRequest: normalizeInputRequest(session.inputRequest),
       worktree, worktreePath: session.cwd || "",
       result: !session.turnOpen ? session.lastText : "",
       pr: transcriptPr(session),
-      attention: "", handoffUrl: "",
+      attention: session.inputRequest?.prompt || "", handoffUrl: "",
       activity: session.lastTool || session.lastText || (session.turnOpen ? "Working" : "Idle"),
       model: shortModel(session.model), branch: session.branch, parent: null,
       dispatchedBy: session.entrypoint === "claude-desktop" ? "you (desktop)" : "you",
@@ -93,7 +94,7 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
       const cottage = {
         ...agent,
         id, name: `${name}-${index}`, parent: session.id, dispatchedBy: name,
-        status: child.open && !stale ? "working" : stale ? "done" : "idle",
+        status: stale ? "done" : child.inputRequest ? "blocked" : child.open ? "working" : "idle",
         task: child.originalAsk.replace(/\s+/g, " ").slice(0, 150) || `shed of ${name}`,
         taskId: child.taskId,
         originalAsk: child.originalAsk, originalAskSource: child.originalAskSource,
@@ -101,6 +102,8 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
         taskStartedAt: child.taskStartedAt, sessionStartedAt: child.startTs,
         activityUrl: `/agents/${encodeURIComponent(id)}/activity`,
         todos: normalizeTodos(child.todos),
+        inputRequest: normalizeInputRequest(child.inputRequest),
+        attention: child.inputRequest?.prompt || "",
         activity: child.lastTool || child.lastText || "Working",
         model: shortModel(child.model || session.model),
         result: !child.open ? child.lastText : "",
@@ -225,15 +228,28 @@ export function createFeed({
     else nextErrors.push("Hub database is temporarily unavailable");
 
     const localById = new Map(claude.agents.map(agent => [agent.id, agent]));
+    const previousById = new Map(cache.map(agent => [agent.id, agent]));
     const nextActivity = new Map();
+    const inputStates = new Map();
     for (const session of claude.sessions || []) {
       nextActivity.set(session.id, session.events);
-      for (const child of session.sidechains.values()) nextActivity.set(`${session.id}:${child.root.slice(0, 8)}`, child.events);
+      inputStates.set(session.id, session);
+      for (const child of session.sidechains.values()) {
+        const id = `${session.id}:${child.root.slice(0, 8)}`;
+        nextActivity.set(id, child.events);
+        inputStates.set(id, child);
+      }
     }
     const combined = hub.agents.map(agent => {
+      const previous = previousById.get(agent.id);
+      const hubInput = normalizeInputRequest(agent.inputRequest);
+      // Keep an observed resolution across the Hub's later field cleanup while
+      // a linked transcript may still contain the unanswered tool-use record.
+      const inputRequestResolution = agent.inputRequestResolution || (!hubInput &&
+        previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId ? previous?.inputRequestResolution : null) || null;
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
-      if (!local) return { ...agent };
+      if (!local) return { ...agent, inputRequestResolution };
       const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
         !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
       const localTodos = normalizeTodos(local.todos);
@@ -241,6 +257,15 @@ export function createFeed({
         (agent.taskStartedAt && localTodos.updatedAt && localTodos.updatedAt >= agent.taskStartedAt)) ? localTodos : null;
       const hubTodos = normalizeTodos(agent.todos);
       const todos = currentTaskTodos && (!hubTodos?.updatedAt || !currentTaskTodos.updatedAt || currentTaskTodos.updatedAt >= hubTodos.updatedAt) ? currentTaskTodos : hubTodos;
+      const localInput = normalizeInputRequest(local.inputRequest);
+      const inputInTask = localInput && (!agent.taskId || local.taskId === agent.taskId ||
+        (!local.taskId && agent.taskStartedAt && localInput.updatedAt && localInput.updatedAt >= agent.taskStartedAt));
+      const inputAfterResolution = !inputRequestResolution || (localInput &&
+        localInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+        localInput.updatedAt && localInput.updatedAt > inputRequestResolution.resolvedAt);
+      const resolvedLocally = hubInput && [...keys].some(key => inputStates.get(key)?.resolvedInputRequests?.has(hubInput.id));
+      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
+      const inputRequest = terminal || resolvedLocally ? null : hubInput || (inputInTask && inputAfterResolution ? localInput : null);
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
@@ -251,6 +276,10 @@ export function createFeed({
         activity: local.activity || agent.activity,
         lastLine: local.lastLine || agent.lastLine,
         todos,
+        inputRequest,
+        inputRequestResolution,
+        ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+          resolvedLocally ? { status: local.status, attention: "" } : {}),
       };
     });
     for (const agent of claude.agents) if (!hub.keys?.has(agent.id)) combined.push({ ...agent });
@@ -262,6 +291,8 @@ export function createFeed({
       const supplied = normalizeTodos(agent.todos);
       agent.todos = stored && (!supplied || (stored.updatedAt && supplied.updatedAt && stored.updatedAt > supplied.updatedAt)) ? stored : supplied;
       if (agent.todos && nextErrors.length) agent.todos = { ...agent.todos, stale: true };
+      agent.inputRequest = normalizeInputRequest(agent.inputRequest);
+      if (agent.inputRequest && nextErrors.length) agent.inputRequest = { ...agent.inputRequest, stale: true };
     }
     let enriched = combined;
     try { enriched = await enrich(await resolveRepos(combined)); }
@@ -305,6 +336,12 @@ export function createFeed({
     return todos;
   }
 
+  function currentInputRequest(agent) {
+    const current = cache.find(cottage => cottage.id === agent.id &&
+      cottage.taskId === agent.taskId && cottage.sessionId === agent.sessionId);
+    return normalizeInputRequest(current?.inputRequest);
+  }
+
   return {
     snapshot,
     scan() {
@@ -319,14 +356,14 @@ export function createFeed({
         const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"
           ? rememberActivityTodos(agent, await timeline.readTodos(agent.id))
           : normalizeTodos(agent.todos);
-        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, ...(stale ? { stale: true } : {}) };
+        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: currentInputRequest(agent), ...(stale ? { stale: true } : {}) };
       }
       if (agent.source === "hub" && timeline.configured) {
         const result = await timeline.read(agent.id, options);
         const todos = rememberActivityTodos(agent, result.todos);
-        return { ...result, todos };
+        return { ...result, todos, inputRequest: currentInputRequest(agent) };
       }
-      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), unavailable: true };
+      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: currentInputRequest(agent), unavailable: true };
     },
   };
 }
