@@ -14,6 +14,8 @@ Every room includes the original request, separate task/session clocks, a live a
 
 Generate valid walkable room footprints, furniture, plants, rugs, windows, hearths, and resident sprite parts from cottage and explicit task identity. A new task gets a fresh home/resident; revisits retain their layout. Without explicit task identity, keep the cottage identity. Known project accents: HubTown switchboards and pigeonholes; AppTown phones and sketches; MemTown books and index drawers; VaultTown keys and stamped papers. Unknown projects receive neutral homes unless metadata supplies a theme. Ambient steam, light, and pets vary without pretending to represent progress.
 
+Jack's implementation feedback strengthens those accents across the whole room: HubTown supplies the cozy base style; AppTown becomes a device workshop with computers, phones and charging leads; MemTown fills its free walls with bookshelves; VaultTown becomes a clock-and-lock repair shop. These accents must leave the operational objects and walking routes accessible.
+
 ## A living village
 
 Ducks react to Jack and flee into a real pond, with splashes and later return. Cats and geese have simple ambient reactions. Opt-in proximity sounds cover steps, doors, wildlife, and important state transitions. Apprentices arrive at sheds. Only explicit project relationships create signed paths; only recorded handoffs create couriers.

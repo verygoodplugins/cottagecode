@@ -28,7 +28,9 @@
   },
   "scripts": {
     "start": "node src/feed.mjs",
-    "once": "node src/feed.mjs --once"
+    "once": "node src/feed.mjs --once",
+    "test": "node --test",
+    "test:browser": "node scripts/browser-smoke.mjs"
   },
   "engines": {
     "node": ">=22.13"

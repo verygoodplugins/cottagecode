@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
+import { timestampMs } from "./activity.mjs";
 import {
   classifyOccupancy,
   inferPr,
@@ -22,9 +23,6 @@ import {
 const STALE_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS || 15 * 60 * 1000);
 const DONE_AGE_MS = 30 * 60 * 1000;
 
-const SQLITE_TIMESTAMP_RE =
-  /^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
-
 export function hubDbPath() {
   const raw = process.env.AGENT_DB_PATH;
   if (!raw) return null;
@@ -32,21 +30,15 @@ export function hubDbPath() {
 }
 
 function parseDbTimestampMs(value) {
-  if (value === null || value === undefined || value === "") return NaN;
-  if (typeof value === "number") return value;
-  const str = String(value).trim();
-  const sqliteMatch = str.match(SQLITE_TIMESTAMP_RE);
-  if (sqliteMatch) {
-    return new Date(`${sqliteMatch[1]}T${sqliteMatch[2]}Z`).getTime();
-  }
-  return new Date(str).getTime();
+  return timestampMs(value) ?? NaN;
 }
 
 function parseContext(raw) {
   if (!raw) return {};
-  if (typeof raw === "object") return raw;
+  if (typeof raw === "object") return !Array.isArray(raw) ? raw : {};
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -135,7 +127,6 @@ function pickTask(row, ctx, worktree) {
   if (cr?.text && !isEmptyResult(cr.text)) {
     return String(cr.text).replace(/\s+/g, " ").trim().slice(0, 150);
   }
-  const presented = ctx.lifecycle?.execution?.presentedResult?.summary;
   const raw = row.task ? String(row.task).replace(/\s+/g, " ").trim() : "";
   if (
     raw &&
@@ -144,9 +135,6 @@ function pickTask(row, ctx, worktree) {
     !/^AutoJack was explicitly requested/i.test(raw)
   ) {
     return raw.slice(0, 150);
-  }
-  if (presented && !isEmptyResult(presented)) {
-    return String(presented).replace(/\s+/g, " ").trim().slice(0, 150);
   }
   if (worktree) return `in ${worktree}`;
   return raw.slice(0, 150) || "-";
@@ -196,8 +184,18 @@ function saneTime(ms, fallback = 0) {
   return ms;
 }
 
-function toCottage(row, now) {
-  const ctx = parseContext(row.context);
+export function toCottage(row, now = Date.now()) {
+  const ctx = { ...parseContext(row.context) };
+  const durableResult = parseContext(row.result);
+  const receipt = durableResult.finalization || ctx.finalization;
+  // Only carry PR evidence; never serialize the execution context or credentials.
+  if (receipt && typeof receipt === "object") {
+    ctx.finalization = Object.fromEntries([
+      "status", "pullRequestNumber", "pullRequestUrl", "branchHeadSha", "terminalLabel",
+    ].filter(key => typeof receipt[key] === "string" || typeof receipt[key] === "number").map(key => [key, receipt[key]]));
+    ctx.finalization.checkedAt = timestampMs(receipt.checkedAt) || timestampMs(row.completed_at);
+  }
+  if (durableResult.pullRequest && typeof durableResult.pullRequest === "object") ctx.pullRequest = durableResult.pullRequest;
   const project = projectFrom(row, ctx);
   const town = townName(project);
   const worktreePath = pickWorktreePath(ctx);
@@ -205,6 +203,12 @@ function toCottage(row, now) {
   const result = pickResult(row, ctx);
   const pr = inferPr(`${result} ${row.task || ""}`, ctx);
   const task = pickTask(row, ctx, worktree);
+  const externalSession = row.record_kind === "external_session" ||
+    (!row.record_kind && /external_agent_status|claude_hook|claude_code_status|codex_status/.test(ctx.source || ""));
+  const requestSpec = parseContext(row.request_spec);
+  const explicitRequest = ctx.originalAsk || requestSpec.request || ctx.customerRequest?.text || ctx.customerRequest || ctx.originalTask;
+  const original = typeof explicitRequest === "string" ? explicitRequest.trim() : !externalSession ? String(row.task || "").trim() : "";
+  const originalAsk = original && !isEmptyResult(original) && !isWorktreeSlug(original) ? original.slice(0, 32768) : "";
   const attention = row.attention_message
     ? String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240)
     : "";
@@ -229,6 +233,15 @@ function toCottage(row, now) {
     role: town,
     status: mapHubStatus(row, now),
     task,
+    taskId: externalSession ? null : row.id,
+    originalAsk,
+    originalAskSource: externalSession ? "session" : "task",
+    originalAskTruncated: original.length > 32768,
+    taskStartedAt: externalSession ? null : timestampMs(row.started_at),
+    sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) || (externalSession ? started || null : null),
+    activityUrl: `/agents/${encodeURIComponent(row.id)}/activity`,
+    repo: [ctx.githubAutoJackRequest?.repo, ctx.repo, ctx.repository].find(value => typeof value === "string" && /^[\w.-]+\/[\w.-]+$/.test(value)) || "",
+    defaultBranch: typeof ctx.defaultBranch === "string" ? ctx.defaultBranch : "",
     worktree,
     worktreePath,
     result,
@@ -255,13 +268,14 @@ function toCottage(row, now) {
   return cottage;
 }
 
-export function readHubAgents({ limit = 80 } = {}) {
-  const dbPath = hubDbPath();
-  if (!dbPath) return { ok: false, missing: true, agents: [], keys: new Set() };
+export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH || null } = {}) {
+  if (!dbPath) return { ok: true, missing: true, agents: [], keys: new Set() };
 
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const columns = new Set(db.prepare("PRAGMA table_info(agent_runs)").all().map(column => column.name));
+    const optional = ["record_kind", "request_spec", "result"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
     const cap = Math.min(Math.max(limit, 1), 500);
     const rows = db
       .prepare(
@@ -269,10 +283,14 @@ export function readHubAgents({ limit = 80 } = {}) {
            id, agent, status, task, user, platform, model, parent_id, session_id,
            context, queued_at, started_at, completed_at, updated_at, archived,
            input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
-           total_cost, error, result_summary, attention_type, attention_message
+           total_cost, error, result_summary, attention_type, attention_message,
+           ${optional}
          FROM agent_runs
          WHERE updated_at > datetime('now', '-24 hours')
             OR status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')
+            OR context LIKE '%"pullRequest"%'
+            OR context LIKE '%"babysitHandoff"%'
+            ${columns.has("result") ? `OR result LIKE '%"pullRequest"%'` : ""}
          ORDER BY
            CASE
              WHEN status IN ('running', 'awaiting_input', 'needs_input', 'pending', 'queued', 'awaiting_review') THEN 0
@@ -285,12 +303,15 @@ export function readHubAgents({ limit = 80 } = {}) {
 
     const now = Date.now();
     const keys = new Set();
+    const links = new Map();
     const agents = rows.map((row) => {
       const ctx = parseContext(row.context);
-      for (const k of hubDedupKeys(row, ctx)) keys.add(k);
+      const related = hubDedupKeys(row, ctx);
+      links.set(row.id, related);
+      for (const k of related) keys.add(k);
       return toCottage(row, now);
     });
-    return { ok: true, dbPath, agents, keys };
+    return { ok: true, dbPath, agents, keys, links };
   } catch (err) {
     return { ok: false, error: err.message, agents: [], keys: new Set() };
   } finally {
