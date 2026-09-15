@@ -249,7 +249,10 @@ export function createFeed({
       const currentTaskTodos = localTodos && (!agent.taskId ||
         (localTaskId ? localTaskId === agent.taskId : agent.taskStartedAt && localTodos.updatedAt && localTodos.updatedAt >= agent.taskStartedAt)) ? localTodos : null;
       const hubTodos = normalizeTodos(agent.todos);
-      const todos = currentTaskTodos && (!hubTodos?.updatedAt || !currentTaskTodos.updatedAt || currentTaskTodos.updatedAt >= hubTodos.updatedAt) ? currentTaskTodos : hubTodos;
+      const localTodosAreCurrent = currentTaskTodos && (!hubTodos ||
+        (currentTaskTodos.updatedAt !== null && (hubTodos.updatedAt === null || currentTaskTodos.updatedAt >= hubTodos.updatedAt)) ||
+        (currentTaskTodos.updatedAt === null && hubTodos.updatedAt === null));
+      const todos = localTodosAreCurrent ? currentTaskTodos : hubTodos;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
