@@ -3,7 +3,7 @@ import { createTownLayout, advanceDuck } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
-import { blankFeedMeta, createLatestRefresh, readCurrentFeed } from "./live-feed.mjs";
+import { createLatestRefresh, readCurrentFeed } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
@@ -1866,7 +1866,7 @@ document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
   if(!v){
     if(ENDPOINT!==null){
-      activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META=blankFeedMeta();
+      activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META={source:"none",relationships:[],handoffs:[]};
     }
     ENDPOINT=null;builtInDemo=true;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
   }
@@ -1876,7 +1876,7 @@ document.getElementById("connect").onclick = ()=>{
   }
   const nextEndpoint=new URL(v,location.href).href;
   if(nextEndpoint!==ENDPOINT){
-    activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META=blankFeedMeta();
+    activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META={source:"none",relationships:[],handoffs:[]};
   }
   ENDPOINT=nextEndpoint;builtInDemo=false;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh({latest:true});
 };
