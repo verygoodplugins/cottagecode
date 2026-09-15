@@ -234,7 +234,12 @@ export function toCottage(row, now = Date.now()) {
   const originalAsk = original && !isEmptyResult(original) && !isWorktreeSlug(original) ? original.slice(0, 32768) : "";
   const suppliedTodos = normalizeTodos(ctx.todos ?? ctx.cottage?.todos ?? durableResult.todos, { source: "hub:context", updatedAt: ctx.todosUpdatedAt });
   const checkpointTodos = normalizeTodos(row.todo_snapshot, { source: "hub:checkpoint", updatedAt: row.todo_updated_at });
-  const todos = checkpointTodos && (!suppliedTodos?.updatedAt || !checkpointTodos.updatedAt || checkpointTodos.updatedAt >= suppliedTodos.updatedAt) ? checkpointTodos : suppliedTodos;
+  const checkpointWins = checkpointTodos && (!suppliedTodos || (
+    checkpointTodos.updatedAt !== null
+      ? suppliedTodos.updatedAt === null || checkpointTodos.updatedAt >= suppliedTodos.updatedAt
+      : suppliedTodos.updatedAt === null
+  ));
+  const todos = checkpointWins ? checkpointTodos : suppliedTodos;
   const execution = ctx.lifecycle?.execution || {};
   const inputRequest = inputRequestFromHub(row);
   const mappedStatus = mapHubStatus(row, now);
@@ -332,6 +337,14 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
             OR (json_valid(context) AND (
               lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
               OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
+              -- Keep completed tasks whose durable context identifies a PR. These
+              -- forms are intentionally aligned with inferPr()/toCottage().
+              OR json_extract(context, '$.finalization.pullRequestNumber') IS NOT NULL
+              OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
+              OR json_extract(context, '$.pr.number') IS NOT NULL
+              OR json_extract(context, '$.pr.url') IS NOT NULL
+              OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
+              OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
             ))
             OR context LIKE '%"babysitHandoff"%'
             ${columns.has("result") ? `OR CASE WHEN json_valid(result) THEN

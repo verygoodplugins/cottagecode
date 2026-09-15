@@ -6,7 +6,7 @@ import { normalizeCottage } from "./feed-client.mjs";
 import { createLatestRefresh, readCurrentFeed } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
-import { createBedtimeRoutine, paintCoop, routineForAgent, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
+import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 
 
 /* =======================================================================
@@ -1499,7 +1499,7 @@ function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
   const villageLight=observatory?.lightAt(t);
-  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce});
+  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents});
   const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
   if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
@@ -1576,10 +1576,6 @@ function draw(){
         if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1,talking:observatory.isTalking(ag.id),reduce});
         else drawPerson(Math.round(a.x),Math.round(a.y)+bob,townStyle(ag).roof,step);
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
-        if(ag.status === "blocked" || ag.status === "done"){
-          const bb = reduce ? 0 : Math.round(Math.sin(t*3 + p.x));
-          drawBubble(Math.round(a.x)+9, Math.round(a.y)-15+bb, ag.status);
-        }
       }
     }
     (p.kids||[]).forEach(k=>{
@@ -1638,7 +1634,8 @@ function draw(){
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
     observatory?.drawDispatch(ctx,p,t);
-    if(bedtimeFrames.get(p.agent.id)?.settled&&['blocked','done'].includes(p.agent.status))drawBubble(p.x+47,p.y+22,p.agent.status);
+    const bubble=statusBubbleAnchor({agent:p.agent,plot:p,routine:bedtimeFrames.get(p.agent.id),actor:actors.get(p.agent.id),time:t,reduce});
+    if(bubble)drawBubble(bubble.x,bubble.y,bubble.status);
     for(const kid of p.kids||[])if(['blocked','done'].includes(kid.agent.status)){
       px(kid.x+6,kid.y-3,5,5,C.outline);px(kid.x+7,kid.y-2,3,3,kid.agent.status==='blocked'?C.alert:C.ok);
     }
@@ -1905,7 +1902,7 @@ const refresh=createLatestRefresh(async ()=>{
 });
 
 observatory=createObservatory({
-  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
+  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
   getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>{
     const arrival=observatory?.apprenticeArrival(k.id,t);

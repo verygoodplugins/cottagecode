@@ -39,14 +39,13 @@ export function createBedtimeRoutine() {
   const homes = new Map();
   let evening = null, started = 0, cycle = 0;
   return {
-    update(plots, light, { time = 0, reduce = false } = {}) {
+    update(plots, light, { time = 0, reduce = false, present = plots } = {}) {
       time = Number.isFinite(time) ? time : 0;
       const nextEvening = isBedtime(light);
       if (evening !== nextEvening) { evening = nextEvening; started = time; cycle++; }
-      const frames = new Map(), present = new Set();
+      const frames = new Map();
       for (const plot of plots) {
         const agent = plot.agent || {}, key = JSON.stringify([agent.id, agent.taskId ?? null]);
-        present.add(key);
         if (!homes.has(key)) homes.set(key, { seed: hash(key), arrived: time });
         const home = homes.get(key), seed = home.seed;
         const elapsed = reduce || home.tuckedCycle === cycle ? 100 : Math.max(0, time - Math.max(started, home.arrived) - (seed % 17) / 10);
@@ -72,10 +71,31 @@ export function createBedtimeRoutine() {
         });
         frames.set(agent.id, { key, mode, evening, settled, parent, kids, hens, coop, door, progress: evening ? clamp(elapsed / 12) : 0 });
       }
-      for (const key of homes.keys()) if (!present.has(key)) homes.delete(key);
+      // A filtered town can temporarily omit a settled cottage. Its family is
+      // still part of the feed, so retain the home until the task itself goes
+      // away; otherwise revealing the settled filter restarts homecoming.
+      const active = new Set();
+      for (const source of Array.isArray(present) ? present : []) {
+        const agent = source?.agent || source;
+        if (agent?.id) active.add(JSON.stringify([agent.id, agent.taskId ?? null]));
+      }
+      for (const key of homes.keys()) if (!active.has(key)) homes.delete(key);
       return frames;
     },
   };
+}
+
+/**
+ * Return the semantic blocked/done marker's screen anchor. The town paints it
+ * after the night palette so its red/green meaning survives both the moving
+ * homecoming and the tucked-in state.
+ */
+export function statusBubbleAnchor({ agent, plot, routine, actor, time = 0, reduce = false } = {}) {
+  if (!['blocked', 'done'].includes(agent?.status) || !plot) return null;
+  if (routine?.settled) return { x: plot.x + 47, y: plot.y + 22, status: agent.status };
+  if (!actor || actor.indoors) return null;
+  const bob = reduce ? 0 : Math.round(Math.sin((Number.isFinite(time) ? time : 0) * 3 + plot.x));
+  return { x: Math.round(actor.x) + 9, y: Math.round(actor.y) - 15 + bob, status: agent.status };
 }
 
 /** A shed apprentice returns with its recorded family, while retaining its own work status indoors. */

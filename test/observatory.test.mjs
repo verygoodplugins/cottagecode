@@ -4,11 +4,11 @@ import {isPracticeDemo,button,appendInlineHandoffs,isApprenticeArrivalActive,app
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
-test('practice replies require the built-in demo, not a feed source label', () => {
-  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, null), true);
-  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, 'https://feed.example/agents'), false);
-  assert.equal(isPracticeDemo({ source: 'hub', inputRequest: pending }, null), false);
-  assert.equal(isPracticeDemo({ source: 'demo' }, null), false);
+test('practice replies require the built-in demo state, not a feed source label', () => {
+  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, true), true);
+  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, false), false);
+  assert.equal(isPracticeDemo({ source: 'hub', inputRequest: pending }, true), false);
+  assert.equal(isPracticeDemo({ source: 'demo' }, true), false);
 });
 
 test('history jump actions escape untrusted cottage identifiers in button markup',()=>{

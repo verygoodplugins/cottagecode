@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBedtimeRoutine,isBedtime,roomRest,paintBed,routineForAgent,villageLifeLabel,visibleBedtimeKids} from '../src/bedtime.mjs';
+import {createBedtimeRoutine,isBedtime,roomRest,paintBed,routineForAgent,statusBubbleAnchor,villageLifeLabel,visibleBedtimeKids} from '../src/bedtime.mjs';
 import {isApprenticeArrivalActive} from '../src/observatory.mjs';
 import {createInterior,isWalkable} from '../src/interiors.mjs';
 
@@ -45,6 +45,26 @@ test('feed order, text, and status changes preserve the routine and stable flock
     assert.equal(b.get(id).settled,true);
     assert.equal(b.get(id).mode,'working-late');
   }
+});
+
+test('hidden settled cottages retain their homecoming state until the task leaves the feed',()=>{
+  const routine=createBedtimeRoutine();
+  routine.update(plots,night,{time:0,reduce:true,present:plots.map(plot=>plot.agent)});
+  routine.update([],night,{time:4,present:plots.map(plot=>plot.agent)});
+  const returned=routine.update(plots,night,{time:5,present:plots.map(plot=>plot.agent)});
+  assert.ok([...returned.values()].every(frame=>frame.settled),'hiding a cottage must not discard its tucked-in family');
+
+  routine.update([],night,{time:6,present:[]});
+  const replacement=routine.update(plots,night,{time:7,present:plots.map(plot=>plot.agent)});
+  assert.equal(replacement.get('home-0').settled,false,'a real task removal gets a fresh arrival when it returns');
+});
+
+test('blocked and done bubbles retain their moving or tucked-in anchors for a post-palette repaint',()=>{
+  const plot={x:80,y:100},actor={x:93.2,y:134.6,indoors:false};
+  assert.deepEqual(statusBubbleAnchor({agent:{status:'blocked'},plot,routine:{settled:false},actor,time:1,reduce:true}),{x:102,y:120,status:'blocked'});
+  assert.deepEqual(statusBubbleAnchor({agent:{status:'done'},plot,routine:{settled:true},actor,time:1}),{x:127,y:122,status:'done'});
+  assert.equal(statusBubbleAnchor({agent:{status:'idle'},plot,routine:{settled:false},actor}),null);
+  assert.equal(statusBubbleAnchor({agent:{status:'blocked'},plot,routine:{settled:false},actor:{...actor,indoors:true}}),null);
 });
 
 test('day wakes the village; another evening and explicit new tasks have fresh arrivals',()=>{
