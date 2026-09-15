@@ -558,8 +558,14 @@ test("bundled music supports native ranges, HEAD, and rejects missing or escapin
   const full = await fetch(base + "day.mp3");
   assert.equal(full.headers.get("content-type"), "audio/mpeg");
   assert.equal(full.headers.get("accept-ranges"), "bytes");
-  assert.equal(full.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.equal(full.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+  const etag = full.headers.get("etag");
+  assert.match(etag, /^"[a-f0-9]{64}"$/);
   assert.deepEqual(Buffer.from(await full.arrayBuffer()), bytes);
+  const cached = await fetch(base + "day.mp3", { headers: { "if-none-match": etag } });
+  assert.equal(cached.status, 304);
+  assert.equal(cached.headers.get("etag"), etag);
+  assert.equal((await cached.arrayBuffer()).byteLength, 0);
   for (const [range, start, end] of [["bytes=0-9", 0, 9], ["bytes=10-", 10, 35], ["bytes=-3", 33, 35], ["bytes=30-900", 30, 35], ["bytes=-90", 0, 35]]) {
     const response = await fetch(base + "day.mp3", { headers: { range } });
     assert.equal(response.status, 206);

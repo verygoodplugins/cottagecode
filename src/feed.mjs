@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Zero-dependency CottageCode feed: local transcripts, optional Hub DB, read-only PRs. */
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { readdir, stat, readFile, realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -437,10 +438,18 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         const body = await readFile(path);
         const headers = { ...cors, "content-type": contentType, "content-length": body.length };
         if (contentType === "audio/mpeg") {
-          // Bundled tracks are immutable deployment assets; media loop overlap
-          // must be able to reuse them while JSON endpoints remain no-store.
-          headers["cache-control"] = "public, max-age=31536000, immutable";
+          // Tracks can change under a stable path, so retain their cached body
+          // but revalidate it before media loops select it again.
+          const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+          headers["cache-control"] = "public, max-age=0, must-revalidate";
           headers["accept-ranges"] = "bytes";
+          headers.etag = etag;
+          if (req.headers["if-none-match"]?.split(",").some(value => [etag, "*"].includes(value.trim()))) {
+            const notModified = { ...headers };
+            delete notModified["content-length"];
+            res.writeHead(304, notModified);
+            return res.end();
+          }
           // A single byte range supports native media seeking and loop overlap.
           // HEAD describes the full resource and ignores Range per HTTP semantics.
           if (req.method === "GET" && req.headers.range) {
