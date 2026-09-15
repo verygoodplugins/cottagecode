@@ -1902,7 +1902,7 @@ const refresh=createLatestRefresh(async ()=>{
 });
 
 observatory=createObservatory({
-  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
+  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
   getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>{
     const arrival=observatory?.apprenticeArrival(k.id,t);
