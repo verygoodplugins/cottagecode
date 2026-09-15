@@ -6,6 +6,7 @@ import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
+import { residentTargets } from "./interaction.mjs";
 
 
 /* =======================================================================
@@ -1867,7 +1868,7 @@ const refresh=createLatestRefresh(async ()=>{
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
-  getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})),
+  getResidents:()=>residentTargets(actors,plots),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh
