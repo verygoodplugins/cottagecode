@@ -41,6 +41,17 @@ export function isPracticeDemo(agent, endpoint){
   return !endpoint && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
 }
 
+function activeArrivalEntry(arrival, time, duration=8){
+  const age=time-arrival?.start;
+  return Number.isFinite(age)&&age>=0&&age<duration;
+}
+
+/** Arrival sprites own the child until their short walk to the shed completes. */
+export function isApprenticeArrivalActive(arrivals, id, time, duration=8){
+  if(!Array.isArray(arrivals)||!id||!Number.isFinite(time))return false;
+  return arrivals.some(arrival=>arrival?.id===id&&activeArrivalEntry(arrival,time,duration));
+}
+
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
@@ -514,7 +525,7 @@ export function createObservatory(api){
       const f=lengths[index]?traveled/lengths[index]:0,x=pts[index].x+(pts[index+1].x-pts[index].x)*f,y=pts[index].y+(pts[index+1].y-pts[index].y)*f;
       ctx.fillStyle='#eed19b';ctx.fillRect(x-3,y-8,7,6);ctx.strokeStyle='#564431';ctx.strokeRect(x-3,y-8,7,6);
     }
-    apprentices=apprentices.filter(e=>time-e.start<8);
+    apprentices=apprentices.filter(e=>activeArrivalEntry(e,time));
     for(const kid of apprentices){
       const from=plotFor(kid.parent),to=plotFor(kid.id);if(!from||!to)continue;
       const f=reduce?1:Math.min(1,(time-kid.start)/6),x=from.x+27+(to.x-from.x-19)*f,y=from.y+76+(to.y-from.y-60)*f;
@@ -580,6 +591,7 @@ export function createObservatory(api){
     drawAtmosphere:(ctx,world,time)=>extras.drawTown(ctx,world,time,reduce),
     lightAt:time=>extras.lightAt(time),
     resident:a=>roomFor(a).resident,sound,
+    isApprenticeArriving:(id,time=performance.now()/1000)=>isApprenticeArrivalActive(apprentices,id,time),
     isTalking:id=>talkingId===id&&performance.now()<talkingUntil,
     get player(){return player;},get mode(){return mode;},
     get state(){return {mode,selected,interiorId,roomSeed:room?.seed,roomPlayer,resident:room?{...room.resident,...roomHost()}:null,resting:!!restForRoom(),roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(interiorId||selected),...extras.state};}

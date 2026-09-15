@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBedtimeRoutine,isBedtime,roomRest,paintBed,routineForAgent,villageLifeLabel} from '../src/bedtime.mjs';
+import {createBedtimeRoutine,isBedtime,roomRest,paintBed,routineForAgent,villageLifeLabel,visibleBedtimeKids} from '../src/bedtime.mjs';
+import {isApprenticeArrivalActive} from '../src/observatory.mjs';
 import {createInterior,isWalkable} from '../src/interiors.mjs';
 
 const plots=Array.from({length:8},(_,i)=>({x:80+i*80,y:100,agent:{id:'home-'+i,taskId:'task-one',status:i===0?'working':i===1?'blocked':'idle'},
@@ -73,6 +74,17 @@ test('child sprites only represent recorded parent relationships',()=>{
   const frames=createBedtimeRoutine().update(plots,day);
   assert.deepEqual([...frames.values()].flatMap(r=>r.kids.map(k=>k.id)),['child']);
   assert.ok([...frames.values()].every(r=>r.hens.length<=2));
+});
+
+test('a newly arrived apprentice is not also drawn by the family routine',()=>{
+  const routine=createBedtimeRoutine();
+  const daytime=routine.update(plots,day,{time:100}).get('home-0');
+  const gathering=routine.update(plots,night,{time:101}).get('home-0');
+  const arrivals=[{id:'child',start:100}];
+  const arriving=id=>isApprenticeArrivalActive(arrivals,id,101);
+  assert.deepEqual(visibleBedtimeKids(daytime,arriving),[],'daytime shed position yields to the arrival walk');
+  assert.deepEqual(visibleBedtimeKids(gathering,arriving),[],'evening family return yields to the arrival walk');
+  assert.deepEqual(visibleBedtimeKids(gathering,id=>isApprenticeArrivalActive(arrivals,id,108)).map(kid=>kid.id),['child'],'the family routine resumes after the arrival walk');
 });
 
 test('disabling reduced motion does not bring a tucked family back outside',()=>{

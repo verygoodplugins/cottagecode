@@ -84,6 +84,11 @@ export function routineForAgent(routines, agent) {
   return routines.get(agent.id) || (agent.parent ? routines.get(agent.parent) || null : null);
 }
 
+/** A visible arrival sprite takes precedence over the family's regular child position. */
+export function visibleBedtimeKids(routine, isArriving = () => false) {
+  return (routine?.kids || []).filter(kid => !kid.hidden && !isArriving(kid.id));
+}
+
 /** The armchair's footprint becomes a little bed; authored walking lanes stay put. */
 export function roomRest(room, agent, light, routine) {
   const bed = room?.objects?.find(object => object.id === 'chair');
