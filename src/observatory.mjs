@@ -7,6 +7,8 @@ import {activityAddress,mergeActivity,elapsedMs,validTime} from './feed-client.m
 import {cottageDoors,crossedDoor} from './interaction.mjs';
 import {normalizeTodos} from './todos.mjs';
 import {conversationCapability,MAX_MESSAGE_LENGTH} from './conversation.mjs';
+import {normalizeInputRequest,inputRequestVersion} from './input-request.mjs';
+import {PUBLIC_DEMO} from './runtime.mjs';
 
 export const STAGES={
   none:{label:'No PR',color:'#a3a99d',symbol:'—'},
@@ -60,10 +62,15 @@ export function activityCacheFor(cache,a={}){
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
+export function isPracticeDemo(agent, builtInDemo = false){
+  return builtInDemo && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
+}
+
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
   const conversations=new Map();
+  const messageReceipts=new Map();
   let mode='town',selected=null,interiorId=null,room=null,roomPlayer=null,player=null,returnTo=null,tab='overview',prFilter=null;
   let followId=null,lastFrame=0,transition=1,latestAgents=[],relationships=[],handoffs=[],couriers=[],apprentices=[],knownKids=new Set();
   let sourceKey='',history=null,historyInitialized=false,stageSignature='',rosterSignature='',panelKey='',lastHint='',replayIndex=-1,replaying=false,replayTimer=0,replayEvents=[];
@@ -75,7 +82,14 @@ export function createObservatory(api){
   const byId=id=>latestAgents.find(a=>a.id===id);
   const plotFor=id=>{for(const p of api.getPlots()){if(p.agent.id===id)return p;const k=p.kids?.find(k=>k.agent.id===id);if(k)return {...k,agent:k.agent,parentPlot:p};}return null;};
   const roomFor=a=>{const key=a.id+'|'+(a.taskId||'');if(!rooms.has(key))rooms.set(key,createInterior(a));return rooms.get(key);};
-  const conversationFor=a=>{const key=sourceKey+'|'+a.id+'|'+(a.taskId||'');if(!conversations.has(key))conversations.set(key,{text:'',phase:'idle',notice:'',sent:[],requestId:null,payload:''});return conversations.get(key);};
+  const conversationFor=a=>{
+    const taskKey=sourceKey+'|'+a.id+'|'+(a.taskId||''),request=normalizeInputRequest(a.inputRequest);
+    const key=taskKey+'|'+(inputRequestVersion(request)||'conversation');
+    if(!messageReceipts.has(taskKey))messageReceipts.set(taskKey,[]);
+    if(!conversations.has(key))conversations.set(key,{text:'',phase:'idle',notice:'',sent:messageReceipts.get(taskKey),answers:{},requestId:null,payload:''});
+    return conversations.get(key);
+  };
+  const capabilityFor=a=>isPracticeDemo(a,api.isBuiltInDemo?.())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
   const visible=a=>!prFilter||prStage(a.pr)===prFilter;
   const hint=text=>{if(text!==lastHint){$('scene-status').textContent=text;lastHint=text;}};
   function placePlayer(){
@@ -294,25 +308,38 @@ export function createObservatory(api){
     return '<p class="hint">'+done+' / '+todos.items.length+' done · '+esc(todos.source||'Task source')+' · '+esc(clock(todos.updatedAt))+(todos.stale||cache.stale||feedStale?' · stale':'')+'</p>'+(todos.items.length?'<ul class="todo-list" aria-label="Agent to-do list">'+todos.items.map(item=>'<li data-todo-status="'+item.status+'"><span class="todo-mark" aria-hidden="true">'+({pending:'○',in_progress:'◉',completed:'✓',cancelled:'×'})[item.status]+'</span><span><small>'+labels[item.status]+'</small>'+esc(item.text)+'</span></li>').join('')+'</ul>':'<p class="hint">The agent’s list is empty.</p>')+(todos.truncated?'<p class="hint">Showing the first 100 items supplied.</p>':'');
   }
   function talkHtml(a,cache){
-    const conversation=conversationFor(a),capability=conversationCapability(a,api.getEndpoint(),{stale:feedStale});
+    const conversation=conversationFor(a),capability=capabilityFor(a),request=normalizeInputRequest(a.inputRequest);
     const pending=conversation.phase==='sending',uncertain=conversation.phase==='unconfirmed';
     const enabled=capability.available&&!pending&&!uncertain&&!!conversation.text.trim()&&conversation.text.trim()!==conversation.uncertainPayload;
     const receipts=conversation.sent.map(message=>'<li><p>'+esc(message.text)+'</p><small>'+esc(clock(message.timestamp))+' · '+esc(message.label)+'</small></li>').join('');
-    return '<h3>A word with '+esc(a.name)+'</h3><p class="hint">'+(sound.enabled?'Your host answers with a little murmur.':'Enable sound to hear your host’s little murmur.')+' Activity below comes from the task’s recorded updates.</p>'+
-      '<form id="agent-conversation"><label for="agent-message">'+(capability.mode==='respond'?'Reply to the agent’s question':'Ask, clarify, or steer the work')+'</label><textarea id="agent-message" maxlength="'+MAX_MESSAGE_LENGTH+'" rows="3" placeholder="What would you like your agent to know?" '+(pending?'readonly':'')+'>'+esc(conversation.text)+'</textarea><p class="hint" id="message-capability">'+esc(capability.available?(capability.mode==='respond'?'Your reply will go to the task waiting for input.':'Your message will be submitted to the running agent’s terminal.')+' · '+(capability.source||'Connected feed'):capability.reason)+'</p><button type="submit" data-action="send-message" '+(enabled?'':'disabled')+'>'+(pending?'Sending…':capability.mode==='respond'?'Send reply':'Send to agent')+'</button><p id="message-status" role="status">'+esc(conversation.notice)+'</p></form>'+
+    let input='';
+    if(request){
+      input='<section class="input-request" data-request-id="'+esc(request.id)+'" aria-label="Agent input request"><h3>'+(['question','permission','plan'].includes(request.kind)?esc(a.name)+' needs your input':'Needs attention')+'</h3><p class="input-prompt">'+esc(request.prompt)+'</p>'+(request.detail&&request.detail!==request.prompt?'<div class="input-detail">'+esc(request.detail)+'</div>':'')+request.questions.map((q,qi)=>'<fieldset><legend>'+esc(q.prompt)+'</legend>'+(q.multiSelect?'<p class="hint">Choose any that apply.</p>':'')+'<div class="input-options">'+q.options.map((option,oi)=>button('input-choice:'+qi+':'+oi,'<strong>'+esc(option.label)+'</strong>'+(option.description?'<span>'+esc(option.description)+'</span>':''),'class="input-option" aria-pressed="'+!!conversation.answers[q.id]?.includes(option.label)+'" '+(pending?'disabled':''))).join('')+'</div></fieldset>').join('')+'<p class="hint">'+esc(request.source)+' · '+esc(clock(request.updatedAt))+(request.stale||feedStale?' · stale':'')+'</p></section>';
+    }else if(a.status==='blocked')input='<section class="input-request"><h3>Needs attention</h3><p class="input-prompt">'+esc(a.attention||'The source marked this agent blocked, but has not supplied its question or blocker.')+'</p><p class="hint">A blocked status can indicate a dependency or failure. A reply is available when the task source supplies a supported input route.</p></section>';
+    else if(prStage(a.pr)==='blocked')input='<section class="input-request"><h3>The PR needs attention</h3><p class="input-prompt">'+esc(a.pr?.reason||'The pull request is blocked. Its review desk shows the available evidence.')+'</p>'+button('tab:review','Open PR desk')+'</section>';
+    const composer=PUBLIC_DEMO&&!capability.demo?'<p class="hint">This is a sample village. Find a resident marked “needs input” to try a practice conversation.</p>':
+      '<form id="agent-conversation"><label for="agent-message">'+(capability.mode==='respond'?'Your reply':'Ask, clarify, or steer the work')+'</label><textarea id="agent-message" maxlength="'+MAX_MESSAGE_LENGTH+'" rows="3" placeholder="'+(request?'Reply to the request above…':'What would you like your agent to know?')+'" '+(pending?'readonly':'')+'>'+esc(conversation.text)+'</textarea><p class="hint" id="message-capability">'+esc(capability.demo?'Practice reply — this changes only the sample village.':capability.available?(capability.mode==='respond'?'Your reply will go to the task waiting for input.':'Your message will be submitted to the running agent’s terminal.')+' · '+(capability.source||'Connected feed'):capability.reason)+'</p><button type="submit" data-action="send-message" '+(enabled?'':'disabled')+'>'+(pending?'Sending…':capability.demo?'Try this reply':capability.mode==='respond'?'Send reply':'Send to agent')+'</button><p id="message-status" role="status">'+esc(conversation.notice)+'</p></form>';
+    return '<h3>A word with '+esc(a.name)+'</h3><p class="hint">'+(sound.enabled?'Your host answers with a little murmur.':'Enable sound to hear your host’s little murmur.')+' Activity below comes from the task’s recorded updates.</p>'+input+composer+
       (receipts?'<ol class="sent-messages" aria-label="Your messages this visit">'+receipts+'</ol>':'')+
       '<details class="talk-todos"><summary>Agent’s to-do list</summary>'+todosHtml(a,cache)+'</details>'+
       '<div class="section-head"><h3>From the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint">'+esc(cache.source)+(cache.stale?' · stale — '+esc(cache.error||'connection interrupted'):' · recorded activity')+'</p><ol class="journal" tabindex="0" aria-label="Agent conversation activity">'+eventHtml(cache.events)+'</ol>';
   }
   async function sendMessage(){
     const a=byId(interiorId||selected);if(!a)return;
-    const conversation=conversationFor(a),capability=conversationCapability(a,api.getEndpoint(),{stale:feedStale});
+    const conversation=conversationFor(a),capability=capabilityFor(a),inputRequest=normalizeInputRequest(a.inputRequest);
     if(!capability.available||['sending','unconfirmed'].includes(conversation.phase)||!conversation.text.trim()||conversation.text.trim()===conversation.uncertainPayload)return;
     const text=conversation.text.trim();if(text.length>MAX_MESSAGE_LENGTH)return;
+    if(capability.demo){
+      if(api.answerDemo?.(a.id,text,inputRequest.id)){
+        conversation.sent.push({text,timestamp:Date.now(),label:'Practice reply · sample village only'});
+        conversation.text='';conversation.answers={};conversation.phase='sent';api.refresh?.();
+      }
+      return;
+    }
     conversation.requestId ||= crypto.randomUUID();conversation.payload=text;conversation.phase='sending';conversation.notice='Submitting your message…';
     const epoch=sourceKey,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);renderPanel(selected);
     try{
-      const response=await fetch(capability.url,{method:'POST',credentials:'omit',redirect:'error',signal:controller.signal,headers:{'content-type':'application/json','x-cottagecode-request':'user-message'},body:JSON.stringify({taskId:a.taskId,message:text,requestId:conversation.requestId})});
+      const response=await fetch(capability.url,{method:'POST',credentials:'omit',redirect:'error',signal:controller.signal,headers:{'content-type':'application/json','x-cottagecode-request':'user-message'},body:JSON.stringify({taskId:a.taskId,message:text,requestId:conversation.requestId,...(capability.mode==='respond'&&inputRequest?{inputRequestId:inputRequest.id,inputRequestVersion:inputRequestVersion(inputRequest)}:{})})});
       const result=await response.json();
       if(result.delivery==='unconfirmed')throw new Error('Delivery is unconfirmed. Check the task before sending this message again.');
       if(!response.ok){
@@ -321,7 +348,7 @@ export function createObservatory(api){
       }
       if(!result.ok||!['submitted','accepted'].includes(result.delivery))throw new Error('The source did not confirm delivery. Check the task before sending again.');
       const label=result.delivery==='submitted'?'Submitted to agent terminal':'Accepted by task source';
-      conversation.sent.push({text,timestamp:Date.now(),label});conversation.sent=conversation.sent.slice(-20);
+      conversation.sent.push({text,timestamp:Date.now(),label});conversation.sent.splice(0,Math.max(0,conversation.sent.length-20));
       conversation.text='';conversation.requestId=null;conversation.phase='sent';conversation.notice=label+'. Replies appear in the recorded activity when the source supplies them.';
       if(epoch===sourceKey)ensureActivity(a);
     }catch(error){conversation.phase='unconfirmed';conversation.uncertainPayload=text;conversation.notice=error.name==='AbortError'?'Delivery is unconfirmed after a timeout. Check the task before sending again.':error.message||'Delivery is unconfirmed. Check the task before sending again.';}
@@ -380,7 +407,7 @@ export function createObservatory(api){
       const a=byId(interiorId||selected);if(!a)return;
       const conversation=conversationFor(a);conversation.text=e.target.value;
       if(conversation.phase!=='sending'&&conversation.text.trim()!==conversation.payload){conversation.phase='idle';conversation.requestId=null;conversation.notice='';}
-      const send=panel.querySelector('[data-action="send-message"]');if(send)send.disabled=!conversationCapability(a,api.getEndpoint(),{stale:feedStale}).available||!conversation.text.trim()||['sending','unconfirmed'].includes(conversation.phase)||conversation.text.trim()===conversation.uncertainPayload;
+      const send=panel.querySelector('[data-action="send-message"]');if(send)send.disabled=!capabilityFor(a).available||!conversation.text.trim()||['sending','unconfirmed'].includes(conversation.phase)||conversation.text.trim()===conversation.uncertainPayload;
     }
   });
   panel.addEventListener('submit',e=>{if(e.target.id==='agent-conversation'){e.preventDefault();sendMessage();}});
@@ -390,6 +417,15 @@ export function createObservatory(api){
     else if(action==='leave')leave();
     else if(action==='follow')follow(interiorId||selected);
     else if(action==='talk')talk(interiorId||selected);
+    else if(action.startsWith('input-choice:')){
+      const a=byId(interiorId||selected),request=normalizeInputRequest(a?.inputRequest);if(!request)return;
+      const conversation=conversationFor(a);if(conversation.phase==='sending')return;
+      const [,qi,oi]=action.split(':'),question=request.questions[Number(qi)],option=question?.options[Number(oi)];if(!option)return;
+      const chosen=conversation.answers[question.id]||[];
+      conversation.answers[question.id]=question.multiSelect?(chosen.includes(option.label)?chosen.filter(label=>label!==option.label):[...chosen,option.label]):[option.label];
+      conversation.text=request.questions.filter(q=>conversation.answers[q.id]?.length).map(q=>(request.questions.length>1?q.prompt+'\n':'')+conversation.answers[q.id].join(', ')).join('\n\n');
+      conversation.phase='idle';conversation.notice='';conversation.requestId=null;renderPanel(selected);$('agent-message')?.focus({preventScroll:true});
+    }
     else if(action.startsWith('tab:')){tab=action.slice(4);selectedObject=({request:'request',journal:'workbench',review:'review',artifacts:'shelf',overview:'clock'})[tab];renderPanel(selected);if(['journal','todos'].includes(tab))ensureActivity(byId(interiorId||selected));}
     else if(action==='older')await ensureActivity(byId(interiorId||selected),{older:true});
     else if(action==='copy'){try{await navigator.clipboard.writeText(byId(interiorId||selected).worktreePath);e.target.textContent='Copied';}catch{e.target.textContent='Copy unavailable';}}

@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appendFile,mkdtemp,readFile,rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {once} from 'node:events';
 import {request as httpRequest} from 'node:http';
 import {createHubMessenger,acceptsMessageOrigin} from '../src/messages.mjs';
 import {createFeedServer} from '../src/feed.mjs';
+import {inputRequestFromHub,inputRequestVersion} from '../src/input-request.mjs';
 
 const now=Date.now();
 const agent={id:'cottage-1',taskId:'task-1',source:'hub',conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'logical_task',transport:'tmux',supportsRedirection:true}};
@@ -26,14 +28,49 @@ test('only supported logical task transports advertise messages; terminal, unkno
   for(const overrides of [{recordKind:'external_session'},{recordKind:'unknown'},{taskStatus:'completed'},{taskStatus:'queued'},{taskStatus:'failed'},{transport:'direct'},{transport:'unknown'},{supportsRedirection:false},{supportsRedirection:null},{taskId:'other'}])
     assert.equal(messenger.capability({...agent,conversationTarget:{...agent.conversationTarget,...overrides}}).available,false,JSON.stringify(overrides));
   assert.equal(messenger.capability(agent,{stale:true}).available,false);
+  assert.equal(messenger.capability({...agent,inputRequest:{stale:true}}).available,false);
   assert.equal(messenger.capability(agent,{checkedAt:now-121000}).available,false);
   assert.equal(createHubMessenger({baseUrl:''}).capability(agent).available,false);
+});
+test('resolved input is unavailable even while the raw Hub status still awaits input',async()=>{
+  const resolved={...agent,inputRequestResolution:{id:'question-a',resolvedAt:now,source:'hub:attention'},conversationTarget:{...agent.conversationTarget,taskStatus:'needs_input',transport:'direct'}};
+  const {messenger,calls}=fixture({current:{...task,status:'needs_input',canRespond:true}});
+  assert.equal(messenger.capability(resolved).available,false);
+  assert.equal((await messenger.send(resolved,message)).body.delivery,'not_sent');
+  assert.equal(calls.length,0,'A resolved question must not be verified or posted again.');
+  const newer={...resolved,inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[]}};
+  assert.equal(messenger.capability(newer).mode,'respond','A distinct current question stays answerable.');
+});
+test('a transcript question proven newer than an unidentified resolution is answerable',()=>{
+  const newer={...agent,
+    inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[],updatedAt:now+1},
+    inputRequestResolution:{id:null,resolvedAt:now,source:'hub:attention'},
+    conversationTarget:{...agent.conversationTarget,taskStatus:'needs_input',transport:'direct'},
+  };
+  assert.equal(fixture().messenger.capability(newer).mode,'respond');
+});
+test('a pending Hub input is never redirected while its raw status is still running',async()=>{
+  const transitional={...agent,
+    inputRequest:{id:'question-b',kind:'question',prompt:'Which target?',detail:'',questions:[]},
+    conversationTarget:{...agent.conversationTarget,taskStatus:'running',transport:'tmux'},
+  };
+  const {messenger,calls}=fixture();
+  assert.equal(messenger.capability(transitional).available,false);
+  assert.equal((await messenger.send(transitional,message)).body.delivery,'not_sent');
+  assert.equal(calls.length,0,'Do not verify or redirect a pending answer through a running task.');
+});
+test('a resolved prior question does not block redirecting guidance to a resumed tmux task',async()=>{
+  const resumed={...agent,inputRequestResolution:{id:'question-a',resolvedAt:now,source:'hub:attention'}};
+  const {messenger,calls}=fixture();
+  assert.equal(messenger.capability(resumed).mode,'redirect');
+  assert.equal((await messenger.send(resumed,message)).body.delivery,'submitted');
+  assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/redirect');
 });
 test('explicit messages verify current task then submit exact text, with concurrent duplicate protection',async()=>{
   const {messenger,calls}=fixture();
   const [one,two]=await Promise.all([messenger.send(agent,message),messenger.send(agent,message)]);
   assert.equal(one.body.delivery,'submitted');assert.deepEqual(two,one);assert.equal(calls.length,2);
-  assert.equal(calls[0].url,'http://hub.test/v1/tasks/task-1');
+  assert.equal(calls[0].url,'http://hub.test/v1/tasks/task-1?context=raw');
   assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/redirect');
   assert.deepEqual(JSON.parse(calls[1].body),{instruction:message.message});
   assert.equal(calls[1].headers.authorization,'Bearer fixture-token');assert.equal(calls[1].redirect,'error');
@@ -46,6 +83,34 @@ test('waiting input uses respond and never invokes resume or dispatch',async()=>
   assert.equal((await messenger.send(waiting,message)).body.delivery,'accepted');
   assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/respond');
   assert.deepEqual(JSON.parse(calls[1].body),{response:message.message});
+});
+test('a reply is bound to the displayed question and the current Hub question round',async()=>{
+  const pending={...task,status:'awaiting_input',attentionMessage:'Which scope should I use?',attentionType:'question',attentionOptions:['Focused','Cleanup'],context:{...task.context,orchestrator:{currentQuestionRound:3}}};
+  const waiting={...agent,inputRequest:inputRequestFromHub(pending),conversationTarget:{...agent.conversationTarget,taskStatus:'awaiting_input'}};
+  const reply={...message,inputRequestId:waiting.inputRequest.id,inputRequestVersion:inputRequestVersion(waiting.inputRequest),message:'Focused'};
+  const correct=fixture({current:pending,reply:{id:'task-1',status:'running'},status:202});
+  assert.equal((await correct.messenger.send(waiting,reply)).body.delivery,'accepted');
+  assert.deepEqual(JSON.parse(correct.calls[1].body),{response:'Focused'});
+  for(const current of [
+    {...pending,attentionMessage:'Which release should I use?'},
+    {...pending,context:{...pending.context,orchestrator:{currentQuestionRound:4}}},
+    {...pending,attentionResolvedAt:new Date(now).toISOString()},
+  ]){
+    const {messenger,calls}=fixture({current});
+    assert.equal((await messenger.send(waiting,reply)).body.delivery,'not_sent');
+    assert.equal(calls.filter(call=>call.method==='POST').length,0,'Never deliver an answer to a different or resolved question');
+  }
+  for(const inputRequestId of [undefined,'an-older-question']){
+    const {messenger,calls}=fixture({current:pending});
+    assert.equal((await messenger.send(waiting,{...reply,inputRequestId})).status,409);
+    assert.equal(calls.length,0,'Reject a mismatched displayed question before querying upstream');
+  }
+  for(const current of [{...pending,attentionMessage:'Which environment should I change?'},{...pending,attentionOptions:['Staging','Production']}]){
+    const newest={...waiting,inputRequest:inputRequestFromHub(current)},check=fixture({current});
+    assert.equal((await check.messenger.send(newest,reply)).body.delivery,'not_sent');
+    assert.equal(check.calls.length,0,'A stale browser reply is rejected even when both server and Hub already have the revised question');
+  }
+  assert.equal((await correct.messenger.send(waiting,{...reply,inputRequestVersion:'different-version'})).status,409,'Receipt IDs also belong to a particular question revision');
 });
 test('fresh validation rejects changed task states and direct sessions before any write',async()=>{
   for(const current of [{...task,status:'completed'},{...task,id:'other'},{...task,isStale:true},{...task,archived:true},{...task,recordKind:'external_session'},{...task,context:{lifecycle:{execution:{sessionMode:'direct'}}}},{...task,context:{lifecycle:{execution:{sessionMode:'tmux'}}}}]){
@@ -81,6 +146,19 @@ test('a prior receipt is returned when the cottage has advanced to another task'
     assert.equal(retry.calls.length,0,'a durable receipt is checked using the original payload task before current task validation');
   }finally{await rm(directory,{recursive:true,force:true});}
 });
+test('a receipt written before input request fields remains a durable retry match',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+  try{
+    const prior={status:200,body:{ok:true,delivery:'accepted',requestId:message.requestId,source:'autohub',timestamp:now}};
+    const legacyHash=createHash('sha256').update(JSON.stringify([agent.id,message.taskId,message.message])).digest('hex');
+    await appendFile(ledgerPath,JSON.stringify({id:message.requestId,hash:legacyHash,at:now,response:prior})+'\n');
+    const retry=fixture({ledgerPath});
+    const currentPayload={...message,inputRequestId:'question-a',inputRequestVersion:'question-a-v1'};
+    assert.deepEqual(await retry.messenger.send(agent,currentPayload),prior);
+    assert.equal(retry.calls.length,0,'the old durable receipt must prevent a second delivery');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
 test('HTTP retries return durable success and unconfirmed receipts after the cottage disappears',async()=>{
   for(const {throws,delivery,status} of [{throws:false,delivery:'submitted',status:200},{throws:true,delivery:'unconfirmed',status:409}]){
     const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');

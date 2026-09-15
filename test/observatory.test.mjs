@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
+
+const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
+
+test('practice replies require the built-in demo state, not a feed source label', () => {
+  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, true), true);
+  assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, false), false);
+  assert.equal(isPracticeDemo({ source: 'hub', inputRequest: pending }, true), false);
+  assert.equal(isPracticeDemo({ source: 'demo' }, true), false);
+});
 
 test('history jump actions escape untrusted cottage identifiers in button markup',()=>{
   const html=button('jump:agent" onfocus="alert(1)','Open cottage');

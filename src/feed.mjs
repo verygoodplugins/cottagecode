@@ -15,18 +15,18 @@ import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./ac
 import { enrichAgents } from "./github.mjs";
 import { hasOutstandingPr } from "./pr.mjs";
 import { normalizeTodos } from "./todos.mjs";
+import { normalizeInputRequest } from "./input-request.mjs";
 import { createHubMessenger, acceptsMessageOrigin } from "./messages.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
-const NEEDS_YOU_MS = 2 * 60 * 1000;
 const POLL_MS = 2000;
 const execFileAsync = promisify(execFile);
 
 function statusOf(session, now, windowMs) {
+  if (session.inputRequest) return "blocked";
   if (!session.lastTs || now - session.lastTs > windowMs) return "offline";
   if (session.turnOpen) return "working";
-  if (session.endedAt && now - session.endedAt < NEEDS_YOU_MS) return "blocked";
   return "idle";
 }
 
@@ -69,10 +69,11 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
       sessionStartedAt: session.firstTs,
       activityUrl: `/agents/${encodeURIComponent(session.id)}/activity`,
       todos: normalizeTodos(session.todos),
+      inputRequest: normalizeInputRequest(session.inputRequest),
       worktree, worktreePath: session.cwd || "",
       result: !session.turnOpen ? session.lastText : "",
       pr: transcriptPr(session),
-      attention: "", handoffUrl: "",
+      attention: session.inputRequest?.prompt || "", handoffUrl: "",
       activity: session.lastTool || session.lastText || (session.turnOpen ? "Working" : "Idle"),
       model: shortModel(session.model), branch: session.branch, parent: null,
       dispatchedBy: session.entrypoint === "claude-desktop" ? "you (desktop)" : "you",
@@ -89,11 +90,15 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
     for (const child of session.sidechains.values()) {
       index++;
       const stale = !child.lastTs || now - child.lastTs > 5 * 60e3;
+      const childInput = normalizeInputRequest(child.inputRequest);
       const id = `${session.id}:${child.root.slice(0, 8)}`;
       const cottage = {
         ...agent,
         id, name: `${name}-${index}`, parent: session.id, dispatchedBy: name,
-        status: child.open && !stale ? "working" : stale ? "done" : "idle",
+        // A child can be quiet for longer than the live window while still
+        // waiting on an explicit AskUserQuestion. Keep that request visible
+        // and letter-worthy until the transcript records its resolution.
+        status: childInput ? "blocked" : stale ? "done" : child.open ? "working" : "idle",
         task: child.originalAsk.replace(/\s+/g, " ").slice(0, 150) || `shed of ${name}`,
         taskId: child.taskId,
         originalAsk: child.originalAsk, originalAskSource: child.originalAskSource,
@@ -101,6 +106,8 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
         taskStartedAt: child.taskStartedAt, sessionStartedAt: child.startTs,
         activityUrl: `/agents/${encodeURIComponent(id)}/activity`,
         todos: normalizeTodos(child.todos),
+        inputRequest: childInput,
+        attention: childInput?.prompt || "",
         activity: child.lastTool || child.lastText || "Working",
         model: shortModel(child.model || session.model),
         result: !child.open ? child.lastText : "",
@@ -235,16 +242,43 @@ export function createFeed({
     else nextErrors.push("Hub database is temporarily unavailable");
 
     const localById = new Map(claude.agents.map(agent => [agent.id, agent]));
+    const previousById = new Map(cache.map(agent => [agent.id, agent]));
     const nextActivity = new Map();
+    const inputStates = new Map();
     for (const session of claude.sessions || []) {
       nextActivity.set(session.id, session.events);
-      for (const child of session.sidechains.values()) nextActivity.set(`${session.id}:${child.root.slice(0, 8)}`, child.events);
+      inputStates.set(session.id, session);
+      for (const child of session.sidechains.values()) {
+        const id = `${session.id}:${child.root.slice(0, 8)}`;
+        nextActivity.set(id, child.events);
+        inputStates.set(id, child);
+      }
     }
     const suppressedLocalIds = new Set();
     const combined = hub.agents.map(agent => {
+      const previous = previousById.get(agent.id);
+      const hubInput = normalizeInputRequest(agent.inputRequest);
+      // Keep an observed resolution across the Hub's later field cleanup while
+      // a linked transcript may still contain the unanswered tool-use record.
+      const sameCachedTask = previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId;
+      // Hub rows can keep reporting an old awaiting-input status after their
+      // response fields disappear. Keep its observed resolution until a
+      // distinct request proves it was asked later.
+      const inputRequestResolution = agent.inputRequestResolution || (sameCachedTask ? previous?.inputRequestResolution : null) || null;
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
-      if (!local) return { ...agent };
+      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
+      if (!local) {
+        const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+          hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+          hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+        const inputRequest = terminal ? null : hubInput && hubInputAfterResolution ? hubInput : null;
+        return {
+          ...agent, inputRequest, inputRequestResolution,
+          ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+            inputRequestResolution ? { status: agent.status === "blocked" ? "idle" : agent.status, attention: "" } : {}),
+        };
+      }
       const hubHasExplicitTask = Boolean(agent.taskId);
       const sameExplicitTask = hubHasExplicitTask && Boolean(local.taskId) &&
         String(agent.taskId) === String(local.taskId);
@@ -253,7 +287,16 @@ export function createFeed({
         // logical task. Its timing is session-scoped; its request, activity,
         // and journal are not safe to attribute to the Hub task.
         nextActivity.set(agent.id, []);
-        return { ...agent, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
+        const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+          hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+          hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+        const inputRequest = terminal ? null : hubInput && hubInputAfterResolution ? hubInput : null;
+        return {
+          ...agent, inputRequest, inputRequestResolution,
+          sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt,
+          ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+            inputRequestResolution ? { status: agent.status === "blocked" ? "idle" : agent.status, attention: "" } : {}),
+        };
       }
       // An external-session row intentionally represents the transcript as a
       // whole. A logical Hub task can take a local cottage's place only when
@@ -270,6 +313,22 @@ export function createFeed({
         (currentTaskTodos.updatedAt !== null && (hubTodos.updatedAt === null || currentTaskTodos.updatedAt >= hubTodos.updatedAt)) ||
         (currentTaskTodos.updatedAt === null && hubTodos.updatedAt === null));
       const todos = localTodosAreCurrent ? currentTaskTodos : hubTodos;
+      const localInput = normalizeInputRequest(local.inputRequest);
+      const inputInTask = localInput && (!agent.taskId || local.taskId === agent.taskId ||
+        (!local.taskId && agent.taskStartedAt && localInput.updatedAt && localInput.updatedAt >= agent.taskStartedAt));
+      const inputAfterResolution = !inputRequestResolution || (localInput &&
+        localInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+        localInput.updatedAt && localInput.updatedAt > inputRequestResolution.resolvedAt);
+      const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+        hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+        hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+      const resolvedLocally = hubInput && [...keys].some(key => inputStates.get(key)?.resolvedInputRequests?.has(hubInput.id));
+      const localReplacement = inputInTask && localInput &&
+        (!hubInput || localInput.id !== hubInput.id) && inputAfterResolution ? localInput : null;
+      const inputRequest = terminal ? null : !resolvedLocally && hubInput && hubInputAfterResolution ? hubInput : localReplacement;
+      const hasResolvedInput = !inputRequest && (resolvedLocally || inputRequestResolution);
+      const statusAfterResolution = resolvedLocally && local?.status && local.status !== "blocked" ? local.status :
+        agent.status === "blocked" ? "idle" : agent.status;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
@@ -280,6 +339,10 @@ export function createFeed({
         activity: local.activity || agent.activity,
         lastLine: local.lastLine || agent.lastLine,
         todos,
+        inputRequest,
+        inputRequestResolution,
+        ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+          hasResolvedInput ? { status: statusAfterResolution, attention: "" } : {}),
       };
     });
     for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push({ ...agent });
@@ -291,6 +354,8 @@ export function createFeed({
       const supplied = normalizeTodos(agent.todos);
       agent.todos = newestTodos(stored, supplied);
       if (agent.todos && nextErrors.length) agent.todos = { ...agent.todos, stale: true };
+      agent.inputRequest = normalizeInputRequest(agent.inputRequest);
+      if (agent.inputRequest && nextErrors.length) agent.inputRequest = { ...agent.inputRequest, stale: true };
     }
     let enriched = combined;
     try { enriched = await enrich(await resolveRepos(combined)); }
@@ -334,6 +399,12 @@ export function createFeed({
     return todos;
   }
 
+  function currentInputRequest(agent) {
+    const current = cache.find(cottage => cottage.id === agent.id &&
+      cottage.taskId === agent.taskId && cottage.sessionId === agent.sessionId);
+    return normalizeInputRequest(current?.inputRequest);
+  }
+
   return {
     snapshot,
     scan() {
@@ -353,14 +424,14 @@ export function createFeed({
         const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"
           ? rememberActivityTodos(agent, await timeline.readTodos(agent.id))
           : normalizeTodos(agent.todos);
-        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, ...(stale ? { stale: true } : {}) };
+        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: currentInputRequest(agent), ...(stale ? { stale: true } : {}) };
       }
       if (agent.source === "hub" && timeline.configured) {
         const result = await timeline.read(agent.id, options);
         const todos = rememberActivityTodos(agent, result.todos);
-        return { ...result, todos };
+        return { ...result, todos, inputRequest: currentInputRequest(agent) };
       }
-      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), unavailable: true };
+      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: currentInputRequest(agent), unavailable: true };
     },
   };
 }

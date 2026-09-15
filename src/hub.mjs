@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
 import { timestampMs } from "./activity.mjs";
 import { normalizeTodos } from "./todos.mjs";
+import { inputRequestFromHub } from "./input-request.mjs";
 import { hasOutstandingPr } from "./pr.mjs";
 import {
   classifyOccupancy,
@@ -76,6 +77,11 @@ export function shortModel(m) {
   return s.split(/[^a-z0-9]+/).filter(Boolean)[0] || "sonnet";
 }
 
+function attentionResolved(row) {
+  return Boolean(row.attention_resolved_at || row.attentionResolvedAt ||
+    String(row.attention_response ?? row.attentionResponse ?? "").trim());
+}
+
 export function mapHubStatus(row, now = Date.now()) {
   if (row.archived) return "offline";
   const status = String(row.status || "").toLowerCase();
@@ -91,13 +97,14 @@ export function mapHubStatus(row, now = Date.now()) {
     status === "needs_input" ||
     status === "awaiting_review"
   ) {
+    if (attentionResolved(row)) return "idle";
     return "blocked";
   }
   if (status === "completed") {
     return aged(completed || updated) ? "offline" : "done";
   }
   if (status === "failed" || status === "cancelled" || status === "interrupted") {
-    if (row.attention_type || row.attention_message) return "blocked";
+    if (!attentionResolved(row) && (row.attention_type || row.attention_message)) return "blocked";
     return aged(updated) ? "offline" : "done";
   }
   if (status === "stale") return "offline";
@@ -163,6 +170,21 @@ function pickResult(row, ctx) {
   return String(raw).replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
+function inputResolutionFrom(row, ctx) {
+  const resolved = row.attentionResolvedAt ?? row.attention_resolved_at;
+  const response = row.attentionResponse ?? row.attention_response;
+  if (!resolved && !(typeof response === "string" && response.trim())) return null;
+  const request = inputRequestFromHub({ ...row, attentionResolvedAt: null, attention_resolved_at: null,
+    attentionResponse: null, attention_response: null });
+  const round = ctx.orchestrator?.currentQuestionRound;
+  const explicitId = [ctx.attention?.requestId, ctx.integration?.requestId,
+    ctx.orchestrator?.pendingQuestion?.id, ctx.lifecycle?.execution?.pendingQuestion?.id, ctx.pendingQuestion?.id]
+    .find(value => (typeof value === "string" && value.trim()) || (typeof value === "number" && Number.isFinite(value)));
+  const id = Number.isFinite(round) && round > 0 ? `hub:${row.id}:question:${round}` : request?.id ||
+    (explicitId !== undefined ? String(explicitId).trim().slice(0, 400) : null);
+  return { id, resolvedAt: timestampMs(resolved) || timestampMs(row.updatedAt ?? row.updated_at), source: "hub:attention" };
+}
+
 function pickLastLine(row, ctx, result, task) {
   if (row.attention_message) {
     return String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240);
@@ -220,8 +242,11 @@ export function toCottage(row, now = Date.now()) {
   ));
   const todos = checkpointWins ? checkpointTodos : suppliedTodos;
   const execution = ctx.lifecycle?.execution || {};
-  const attention = row.attention_message
-    ? String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240)
+  const inputRequest = inputRequestFromHub(row);
+  const mappedStatus = mapHubStatus(row, now);
+  const attentionText = inputRequest?.prompt || (mappedStatus === "blocked" ? row.attention_message || row.attentionMessage : "");
+  const attention = attentionText
+    ? String(attentionText).replace(/\s+/g, " ").trim().slice(0, 240)
     : "";
   const tokens =
     (row.input_tokens || 0) +
@@ -242,7 +267,7 @@ export function toCottage(row, now = Date.now()) {
     name: pickName(row, ctx, worktree, pr, task),
     town,
     role: town,
-    status: mapHubStatus(row, now),
+    status: inputRequest ? "blocked" : mappedStatus,
     terminal: terminalHubRun(row),
     task,
     taskId: externalSession ? null : row.id,
@@ -253,6 +278,8 @@ export function toCottage(row, now = Date.now()) {
     sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) || (externalSession ? started || null : null),
     activityUrl: `/agents/${encodeURIComponent(row.id)}/activity`,
     todos,
+    inputRequest,
+    inputRequestResolution: inputResolutionFrom(row, ctx),
     conversationTarget: {
       taskId: row.id,
       taskStatus: String(row.status || "unknown"),
@@ -280,7 +307,7 @@ export function toCottage(row, now = Date.now()) {
     updatedAt,
     tokens,
     cost: Number(row.total_cost || 0),
-    lastLine: pickLastLine(row, ctx, result, task),
+    lastLine: pickLastLine({ ...row, attention_message: attention }, ctx, result, task),
     sessionId: row.session_id || null,
     source: "hub",
   };
@@ -326,7 +353,7 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     const columns = new Set(db.prepare("PRAGMA table_info(agent_runs)").all().map(column => column.name));
-    const optional = ["record_kind", "request_spec", "result"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
+    const optional = ["record_kind", "request_spec", "result", "attention_options", "attention_questions", "attention_detail", "attention_plan", "attention_response", "attention_resolved_at"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
     const cap = Math.min(Math.max(limit, 1), 500);
     const numberAt = (column, path) => `CAST(json_extract(${column}, '${path}') AS INTEGER) > 0`;
     const urlAt = (column, path) => `json_extract(${column}, '${path}') LIKE '%/pull/%'`;

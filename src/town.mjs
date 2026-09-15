@@ -5,6 +5,7 @@ import { createObservatory } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
+import { PUBLIC_DEMO } from "./runtime.mjs";
 import { residentTargets } from "./interaction.mjs";
 
 
@@ -87,7 +88,8 @@ function classifyOccupancy(c, now = Date.now()){
 }
 
 async function fetchAgents(){
-  if(!ENDPOINT){
+  if(PUBLIC_DEMO||!ENDPOINT){
+    if(PUBLIC_DEMO)ENDPOINT=null;
     builtInDemo=true;LIVE=false;feedStale=false;FEED_META=DEMO_META;
     return SIM.snapshot();
   }
@@ -163,6 +165,14 @@ const demoTodos=(a,stamp)=>({source:'demo',updatedAt:stamp,items:[
   {id:'change',text:a.task,status:['done','offline'].includes(a.status)?'completed':a.status==='idle'?'pending':'in_progress'},
   {id:'check',text:'Verify the result and leave a reviewable handoff',status:a.status==='done'?'completed':'pending'}
 ]});
+const demoInput=(a,stamp)=>({
+  id:a.id+':question:'+stamp,kind:'question',source:'demo',updatedAt:stamp,
+  prompt:'Before I continue with “'+a.task+'”, how much should I include?',
+  questions:[{id:'scope',header:'Scope',prompt:'Choose the scope of this practice task.',multiSelect:false,options:[
+    {label:'Keep it focused',description:'Finish the requested change and verify it.'},
+    {label:'Include related cleanup',description:'Also tidy the nearby code while I’m here.'}
+  ]}]
+});
 
 const DEMO_META={source:"demo",relationships:[
   {id:"hub-app",from:"HubTown",to:"AppTown",label:"Application API"},
@@ -212,6 +222,8 @@ const SIM = (() => {
     a.taskStartedAt=a.startedAt;a.sessionStartedAt=a.startedAt-8*60000;a.updatedAt=now;
     a.endedAt=['done','offline'].includes(a.status)?Math.max(a.startedAt,now-20*60000):0;
     a.todos=demoTodos(a,now);
+    a.inputRequest=a.status==='blocked'?demoInput(a,now):null;
+    if(a.inputRequest){a.attention=a.inputRequest.prompt;a.activity='Waiting for your choice about the scope of this task.';}
     a.events=[
       {id:a.id+":request",timestamp:a.startedAt,kind:"request",text:a.originalAsk},
       {id:a.id+":read",timestamp:a.startedAt+12000,kind:"progress",text:"I’m reading the existing implementation and checking the task requirements."},
@@ -239,7 +251,7 @@ const SIM = (() => {
     demoBeat++;
     if(demoBeat===5){
       const parent=agents[0],stamp=Date.now(),id="demo-apprentice";
-      agents.push({...parent,id,name:"Pip",parent:parent.id,status:"working",occupancy:"live",endedAt:0,taskId:"demo-task-pip",task:"Check the webhook edge cases",originalAsk:"Please test the webhook edge cases while Bolt finishes the queue changes.",taskStartedAt:stamp,startedAt:stamp,sessionStartedAt:stamp,updatedAt:stamp,tokens:0,cost:0,events:[{id:id+":arrival",timestamp:stamp,kind:"request",text:"Please test the webhook edge cases while Bolt finishes the queue changes."}]});
+      agents.push({...parent,id,name:"Pip",parent:parent.id,status:"working",occupancy:"live",endedAt:0,inputRequest:null,attention:'',taskId:"demo-task-pip",task:"Check the webhook edge cases",originalAsk:"Please test the webhook edge cases while Bolt finishes the queue changes.",taskStartedAt:stamp,startedAt:stamp,sessionStartedAt:stamp,updatedAt:stamp,tokens:0,cost:0,events:[{id:id+":arrival",timestamp:stamp,kind:"request",text:"Please test the webhook edge cases while Bolt finishes the queue changes."}]});
       agents.at(-1).todos=demoTodos(agents.at(-1),stamp);
     }
     if(demoBeat%14===6){
@@ -256,7 +268,7 @@ const SIM = (() => {
         const s = pick({
           working:["working","working","blocked","done"],
           idle:["idle","working","working"],
-          blocked:["blocked","blocked","working"],
+          blocked:["blocked"],
           done:["done","idle"],
           offline:["offline","offline","idle"]
         }[a.status]);
@@ -264,6 +276,9 @@ const SIM = (() => {
           a.status = s; a.lastLine = pick(LINES[s]); a.activity = pick(ACTIVITY[s]);
           a.endedAt=['done','offline'].includes(s)?Date.now():0;
           a.todos=demoTodos(a,Date.now());
+          a.inputRequest=s==='blocked'?demoInput(a,Date.now()):null;
+          a.attention=a.inputRequest?.prompt||'';
+          if(a.inputRequest)a.activity='Waiting for your choice about the scope of this task.';
         }
       } else if(Math.random() > 0.8){ a.lastLine = pick(LINES[a.status]); }
       const last=a.events.at(-1);
@@ -282,7 +297,22 @@ const SIM = (() => {
       a.status = status; a.lastLine = pick(LINES[status]); a.activity = pick(ACTIVITY[status]);
       a.endedAt=['done','offline'].includes(status)?Date.now():0;
       a.todos=demoTodos(a,Date.now());
+      a.inputRequest=status==='blocked'?(a.inputRequest||demoInput(a,Date.now())):null;
+      a.attention=a.inputRequest?.prompt||'';
       if(status==="offline") a.task = "-";
+    },
+    answer(id,text,requestId){
+      const a=agents.find(x=>x.id===id);
+      if(!a?.inputRequest||a.inputRequest.id!==requestId||!text.trim())return false;
+      const stamp=Date.now();
+      a.status='working';a.occupancy='live';a.endedAt=0;a.inputRequest=null;a.attention='';a.updatedAt=stamp;
+      a.activity='Practice reply received. I’m continuing the sample task with your guidance.';
+      a.lastLine='> sample resident is back at work';a.todos=demoTodos(a,stamp);
+      a.events.push(
+        {id:a.id+':practice-reply:'+stamp,timestamp:stamp,kind:'request',text:'Practice reply: '+text.trim()},
+        {id:a.id+':practice-resume:'+stamp,timestamp:stamp+1,kind:'progress',text:a.activity}
+      );
+      a.events=a.events.slice(-100);return true;
     },
     setLive(v){ live = v; }
   };
@@ -1776,6 +1806,11 @@ const noteEl = document.getElementById("note");
 function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
 
 document.getElementById("connect").onclick = ()=>{
+  if(PUBLIC_DEMO){
+    ENDPOINT=null;document.getElementById("endpoint").value="";
+    feedNote("Sample village · fictional agents and activity.");
+    return;
+  }
   const v = document.getElementById("endpoint").value.trim();
   if(!v){
     if(ENDPOINT!==null){
@@ -1819,16 +1854,24 @@ const refresh=createLatestRefresh(async ()=>{
 });
 
 observatory=createObservatory({
-  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
+  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getResidents:()=>residentTargets(actors,plots),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
-  select(id){selectedId=id;renderPanel();},drawJack
+  select(id){selectedId=id;renderPanel();},drawJack,
+  answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh
 });
 window.cottageObservatory=observatory;
 window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
 
 (function boot(){
   const box = document.getElementById("endpoint");
+  if(PUBLIC_DEMO){
+    ENDPOINT=null;box.value="";box.disabled=true;
+    document.getElementById("connect").disabled=true;
+    box.closest(".feed").hidden=true;
+    feedNote("Sample village · fictional agents and activity.");
+    return;
+  }
   const params = new URLSearchParams(location.search);
   const same = `${location.origin}/agents`;
   if (params.has("demo")) {

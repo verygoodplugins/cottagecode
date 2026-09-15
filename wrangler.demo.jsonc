@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "cottagecode-demo",
+  "account_id": "2cc725912d479c0bd6c08fc24931a478",
+  "compatibility_date": "2026-07-21",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "autojack.ai/cottagecode", "zone_name": "autojack.ai" },
+    { "pattern": "autojack.ai/cottagecode/*", "zone_name": "autojack.ai" }
+  ]
+}

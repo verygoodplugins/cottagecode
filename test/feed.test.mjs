@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { parseTranscript } from "../src/transcripts.mjs";
-import { toCottage, readHubAgents } from "../src/hub.mjs";
+import { mapHubStatus, toCottage, readHubAgents } from "../src/hub.mjs";
 import { toAgents, createFeed, createFeedServer, createClaudeScanner, repoFromRemote, createRepoResolver } from "../src/feed.mjs";
 
 const now = Date.parse("2026-09-14T11:00:00Z");
@@ -32,6 +32,226 @@ test("feed cottage request and task/session clocks remain distinct", () => {
   assert.equal(unknown.startedAt, 0);
   assert.equal(unknown.sessionStartedAt, null);
   assert.equal(unknown.status, "offline");
+});
+
+test("ordinary completed Claude turns are idle while explicit pending questions are blocked", () => {
+  const completed = parseTranscript(JSON.stringify({ type: "assistant", sessionId: "complete", timestamp: new Date(now).toISOString(), message: { content: "All checks pass.", stop_reason: "end_turn" } }));
+  assert.equal(toAgents([completed], { now })[0].status, "idle");
+  const question = parseTranscript(JSON.stringify({ type: "assistant", sessionId: "question", timestamp: new Date(now).toISOString(), message: { content: [{ type: "tool_use", id: "toolu_question", name: "AskUserQuestion", input: { questions: [{ question: "Which target?", options: [{ label: "Local" }, { label: "Staging" }] }] } }], stop_reason: "tool_use" } }));
+  const agent = toAgents([question], { now })[0];
+  assert.equal(agent.status, "blocked");
+  assert.equal(agent.inputRequest.prompt, "Which target?");
+  assert.equal(agent.attention, "Which target?");
+  assert.equal(agent.inputRequest.questions[0].options[0].label, "Local");
+});
+
+test("an unanswered stale sidechain question remains a blocked cottage", () => {
+  const session = parseTranscript(JSON.stringify({
+    type: "assistant", sessionId: "parent-session", isSidechain: true, uuid: "child-root",
+    timestamp: new Date(now - 5 * 60e3 - 1).toISOString(),
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", id: "child-question", name: "AskUserQuestion",
+      input: { questions: [{ question: "Which child target?" }] } }] },
+  }));
+  const child = toAgents([session], { now }).find(agent => agent.parent === "parent-session");
+  assert.equal(child.inputRequest.id, "child-question");
+  assert.equal(child.status, "blocked");
+});
+
+test("Hub input fields and pending transcript questions stay readable and clear on matched replies", async () => {
+  const session = sampleSession();
+  session.resolvedInputRequests.add("toolu_resolved");
+  const hubAgent = toCottage({ id: "hub-question", record_kind: "external_session", session_id: "session-1", status: "awaiting_input", attention_message: "An old question?", attention_type: "question", attention_options: '["Yes","No"]', context: { integration: { requestId: "toolu_resolved" } } }, now);
+  assert.equal(hubAgent.inputRequest.questions[0].options[1].label, "No");
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([session], { now }), sessions: [session] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-question", new Set(["session-1"])]]) }),
+  });
+  await feed.scan();
+  const combined = feed.snapshot().agents[0];
+  assert.equal(combined.inputRequest, null);
+  assert.equal(combined.status, "working");
+  assert.equal(combined.attention, "");
+  assert.equal((await feed.getActivity(combined.id)).inputRequest, null);
+});
+
+test("an answer received during an activity read cannot resurrect the earlier question", async () => {
+  const session = { ...sampleSession(), taskId: "hub-question", taskStartedAt: now - 10_000 };
+  let answered = false;
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const row = { id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input", attention_message: "Which target?", attention_type: "question", context: { integration: { requestId: "question-one" } } };
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([session], { now }), sessions: [session] }),
+    readHub: () => ({ ...emptyHub(), agents: [toCottage({ ...row, attention_response: answered ? "Local" : null }, now)], keys: new Set(["session-1"]), links: new Map([["hub-question", new Set(["session-1"])]]) }),
+    timeline: { configured: true, readTodos: async () => wait },
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest.id, "question-one");
+  const reading = feed.getActivity("hub-question");
+  answered = true;
+  await feed.scan();
+  release(null);
+  assert.equal((await reading).inputRequest, null);
+  assert.equal(feed.snapshot().agents[0].status, "idle");
+});
+
+test("Hub resolution suppresses a lagging local question until a distinct newer request", async () => {
+  let questionId = "fixture-question", questionAt = now - 2000;
+  let row = { id: "hub-question", record_kind: "logical_task", session_id: "session-1", started_at: now - 10000,
+    status: "awaiting_input", attention_message: "Which target?", attention_type: "question", attention_response: "Local",
+    attention_resolved_at: now, updated_at: now, context: { integration: { requestId: "fixture-question" } } };
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => {
+      const session = parseTranscript(JSON.stringify({ type: "assistant", sessionId: "session-1", taskId: "hub-question", timestamp: new Date(questionAt).toISOString(),
+        message: { stop_reason: "tool_use", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: { questions: [{ question: "Which target?" }] } }] } }));
+      assert.ok(session.inputRequest, "the transcript genuinely still has an unanswered tool call");
+      return { ok: true, agents: toAgents([session], { now }), sessions: [session] };
+    },
+    readHub: () => ({ ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map([["hub-question", new Set(["session-1"])]]) }),
+  });
+  const mapped = toCottage(row, now);
+  assert.equal(mapped.inputRequest, null);
+  assert.deepEqual(mapped.inputRequestResolution, { id: "fixture-question", resolvedAt: now, source: "hub:attention" });
+  assert.equal(mapped.status, "idle");
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null);
+  assert.equal(feed.snapshot().agents[0].status, "idle");
+  assert.equal((await feed.getActivity("hub-question")).inputRequest, null);
+  row = { ...row, status: "running", attention_type: null, attention_message: null, attention_response: null, attention_resolved_at: null };
+  questionAt = now + 1000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null, "cleared Hub fields and a same-ID streamed revision cannot erase the resolution");
+  questionId = "different-old-question"; questionAt = now - 1000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null, "a different ID still needs evidence that it is newer than the answer");
+  questionId = "new-question"; questionAt = now + 2000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest.id, "new-question");
+  assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
+test("a retained Hub resolution suppresses the same lingering raw Hub prompt", async () => {
+  let resolved = true;
+  let prompt = "Which target?";
+  let requestId = "fixture-question";
+  let updatedAt = now;
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => {
+      const row = {
+        id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+        attention_message: prompt, attention_type: "question", updated_at: updatedAt,
+        context: { integration: { requestId } },
+        ...(resolved ? { attention_response: "Local", attention_resolved_at: now } : {}),
+      };
+      return { ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map() };
+    },
+  });
+
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null);
+  resolved = false;
+  updatedAt = now + 1_000; // A hub heartbeat can update the row without asking again.
+  await feed.scan();
+  const lingering = feed.snapshot();
+  assert.equal(lingering.agents[0].inputRequest, null);
+  assert.equal(lingering.agents[0].status, "idle");
+  assert.equal(lingering.agents[0].attention, "");
+  assert.equal(lingering.letters, 0);
+
+  requestId = "fixture-question-two";
+  prompt = "Which release?";
+  updatedAt = now + 2_000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest.id, "fixture-question-two");
+  assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
+test("a retained Hub resolution clears an old prompt after its linked transcript advances tasks", async () => {
+  let answered = true;
+  let localTaskId = "hub-question";
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => {
+      const localInput = { id: "local-question", kind: "question", prompt: "New task question", questions: [], updatedAt: now + 2_000 };
+      const local = {
+        id: "session-1", source: "claude", taskId: localTaskId, taskStartedAt: now + 1_000,
+        sessionStartedAt: now - 10_000, status: "blocked", originalAsk: "The new local task", inputRequest: localInput,
+      };
+      return { ok: true, agents: [local], sessions: [{ ...local, events: [], sidechains: new Map(), resolvedInputRequests: new Set() }] };
+    },
+    readHub: () => {
+      const row = {
+        id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+        task: "The Hub task", attention_message: "Which target?", attention_type: "question", updated_at: now + 1_000,
+        context: { integration: { requestId: "hub-question-round" } },
+        ...(answered ? { attention_response: "Local", attention_resolved_at: now } : {}),
+      };
+      return { ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map([["hub-question", new Set(["hub-question", "session-1"])]]) };
+    },
+  });
+
+  await feed.scan();
+  localTaskId = "new-local-task";
+  answered = false;
+  await feed.scan();
+
+  const snapshot = feed.snapshot();
+  const hub = snapshot.agents.find(agent => agent.id === "hub-question");
+  const local = snapshot.agents.find(agent => agent.id === "session-1");
+  assert.equal(hub.inputRequest, null);
+  assert.equal(hub.status, "idle");
+  assert.equal(hub.attention, "");
+  assert.equal(hub.originalAsk, "The Hub task", "the Hub cottage keeps its own task diagnostics");
+  assert.equal((await feed.getActivity(hub.id)).inputRequest, null);
+  assert.equal(local.taskId, "new-local-task");
+  assert.equal(local.inputRequest.prompt, "New task question", "the distinct transcript task remains separate");
+  assert.equal(snapshot.letters, 1, "only the new transcript task contributes an input letter");
+});
+
+test("resolved terminal Hub attention does not remain blocked or visible", () => {
+  for (const status of ["failed", "cancelled", "interrupted"]) {
+    for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {
+      const row = {
+        id: `terminal-${status}`,
+        record_kind: "logical_task",
+        status,
+        attention_type: "question",
+        attention_message: "Which target?",
+        updated_at: now,
+        ...resolution,
+      };
+      const cottage = toCottage(row, now);
+      assert.equal(mapHubStatus(row, now), "done", `${status} remains terminal after attention resolves`);
+      assert.equal(cottage.status, "done");
+      assert.equal(cottage.occupancy, "settled");
+      assert.equal(cottage.inputRequest, null);
+      assert.equal(cottage.attention, "");
+    }
+  }
+});
+
+test("a resolved Hub prompt does not hide a distinct newer local prompt", async () => {
+  const hubAgent = toCottage({
+    id: "hub-task", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+    attention_message: "Old Hub prompt", attention_type: "question", updated_at: now,
+    context: { integration: { requestId: "prompt-a" } },
+  }, now);
+  const localInput = { id: "prompt-b", kind: "question", prompt: "New local prompt", questions: [{ id: "question-1", prompt: "New local prompt", options: [] }], source: "transcript", updatedAt: now + 1 };
+  const local = { id: "session-1", source: "claude", taskId: "hub-task", taskStartedAt: now - 1_000,
+    sessionStartedAt: now - 2_000, status: "blocked", inputRequest: localInput };
+  const localSession = { id: "session-1", events: [], sidechains: new Map(), inputRequest: localInput,
+    resolvedInputRequests: new Set(["prompt-a"]) };
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [local], sessions: [localSession] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-task", new Set(["hub-task", "session-1"])]]) }),
+  });
+
+  await feed.scan();
+  const [combined] = feed.snapshot().agents;
+  assert.equal(combined.inputRequest.id, "prompt-b");
+  assert.equal(combined.inputRequest.prompt, "New local prompt");
+  assert.equal(combined.status, "blocked");
+  assert.equal(combined.attention, "New local prompt");
 });
 
 test("feed and incremental activity expose the same explicit latest todo snapshot", async () => {
@@ -537,6 +757,21 @@ test("Hub database adapter accepts older schemas without optional task columns",
   assert.equal(withTodos.items[0].status, "completed");
   assert.equal(withTodos.source, "hub:checkpoint");
   assert.equal(withTodos.updatedAt, now);
+  const questionsDb = new DatabaseSync(path);
+  questionsDb.exec("ALTER TABLE agent_runs ADD COLUMN attention_options TEXT; ALTER TABLE agent_runs ADD COLUMN attention_detail TEXT; ALTER TABLE agent_runs ADD COLUMN attention_response TEXT; ALTER TABLE agent_runs ADD COLUMN attention_resolved_at TEXT");
+  questionsDb.prepare("UPDATE agent_runs SET status = ?, attention_type = ?, attention_message = ?, attention_options = ?, attention_detail = ?, context = ? WHERE id = ?")
+    .run("awaiting_input", "question", "Choose the test target", '["Local","Staging"]', "This task is waiting on its target.", JSON.stringify({ integration: { requestId: "db-question-one" } }), "old-task");
+  let asking = readHubAgents({ dbPath: path }).agents[0];
+  assert.equal(asking.inputRequest.id, "db-question-one");
+  assert.equal(asking.inputRequest.questions[0].options[1].label, "Staging");
+  assert.equal(asking.inputRequest.detail, "This task is waiting on its target.");
+  assert.equal(asking.status, "blocked");
+  questionsDb.prepare("UPDATE agent_runs SET attention_response = ? WHERE id = ?").run("Local", "old-task");
+  asking = readHubAgents({ dbPath: path }).agents[0];
+  assert.equal(asking.inputRequest, null);
+  assert.equal(asking.status, "idle");
+  assert.equal(asking.attention, "");
+  questionsDb.close();
   const retainedPr = result.agents.find(agent => agent.id === "historic-pr");
   assert.equal(retainedPr.pr.number, 72);
   assert.equal(retainedPr.pr.url, "https://github.com/owner/repo/pull/72");

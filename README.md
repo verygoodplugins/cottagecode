@@ -8,6 +8,10 @@ CottageCode is a local townmap for agent fleets. Walk up to a cottage, lift its 
 
 Point it at any URL that returns cottages as JSON, or explore the built-in demo. Projects become towns (`HubTown`, `MemTown`, or `{Stem}Town` from a folder name). Townmap is the atlas view.
 
+**[Visit the public sample village](https://autojack.ai/cottagecode/)** — walk,
+explore, and try a practice reply with fictional residents. No live task data is
+connected. [Build or publish your own demo](docs/PUBLIC_DEMO.md).
+
 Zero npm dependencies. Pixel canvas, native browser modules, and a small Node server.
 
 <p align="center">
@@ -49,6 +53,14 @@ Rooms and residents are generated from cottage and task identity. Return visits 
 Walk near a duck and it'll head for the pond. Cats and a goose roam too. **Sound starts off.** Enable it for footsteps, doors, a little wordless murmur when you talk to a resident, and status alerts, with separate ambience and alert switches. Reduced-motion preferences are respected.
 
 The PR desk has a changing status light, icon, and label. The **To-do** tab displays explicit task checklists when available; it never guesses a plan from progress prose. **Talk to agent** shows emitted updates alongside a message composer. Drafts and journal position survive feed refreshes. Messages require a supported connection and an explicit **Send**; unsupported sessions explain why sending is unavailable.
+
+When an agent needs input, talking reveals the actual question, choices, or
+permission details supplied by its source. Choices fill a reply for you to
+review and send. New questions get separate drafts, and the service checks the
+question is still current before delivering an answer. Transcript-only sessions
+show the request but must be answered in their original session; connected
+AutoHub tasks use their existing response route. Normal completed turns are idle
+and no longer create false input alerts.
 
 Use **Follow from bench** to keep one cottage selected as its work updates. The noticeboard lists changes observed since the previous visit. The scrapbook stores up to 1,600 milestones per feed in this browser, including result snippets and artifact links. Replay steps through that recorded history; it cannot reconstruct unobserved work or expired source logs.
 

@@ -6,11 +6,13 @@ import {homedir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {isIP} from 'node:net';
 import {MAX_MESSAGE_LENGTH} from './conversation.mjs';
+import {normalizeInputRequest,inputRequestFromHub,inputRequestVersion} from './input-request.mjs';
 
 const result=(status,body)=>({status,body});
 const rejected=(status,error)=>result(status,{ok:false,delivery:'not_sent',error});
 const unknown=()=>result(409,{ok:false,delivery:'unconfirmed',error:'Delivery is unconfirmed. Check the task before sending this message again.'});
 const parse=value=>{try{return typeof value==='string'?JSON.parse(value):value||{};}catch{return {};}};
+const inputIdentity=input=>input?JSON.stringify([input.id,input.kind,input.prompt,input.detail,input.questions]):null;
 function hubBase(raw){try{const url=new URL(raw);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return null;url.search='';url.hash='';url.pathname=url.pathname.replace(/\/$/,'').replace(/\/v1$/,'')+'/v1/';return url;}catch{return null;}}
 
 export function acceptsMessageOrigin(req){
@@ -30,25 +32,37 @@ export function createHubMessenger({
   ledgerPath=process.env.COTTAGE_MESSAGE_LEDGER||join(homedir(),'.cottagecode','message-receipts.jsonl'),
 }={}){
   const base=hubBase(baseUrl),entries=new Map();let loaded=false,queue=Promise.resolve();
-  const receiptHash=(cottageId,taskId,message)=>createHash('sha256').update(JSON.stringify([cottageId,taskId,message])).digest('hex');
+  const receiptHashes=(cottageId,payload,message)=>[
+    createHash('sha256').update(JSON.stringify([cottageId,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex'),
+    createHash('sha256').update(JSON.stringify([cottageId,payload.taskId,message])).digest('hex'),
+  ];
   async function priorReceipt(cottageId,payload){
     const message=typeof payload?.message==='string'?payload.message.trim():'';
     if(!cottageId||!message||message.length>MAX_MESSAGE_LENGTH||typeof payload?.requestId!=='string'||!/^[a-zA-Z0-9_-]{8,100}$/.test(payload.requestId))return null;
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
-    if(!previous||previous.hash!==receiptHash(cottageId,payload.taskId,message))return null;
+    if(!previous||!receiptHashes(cottageId,payload,message).includes(previous.hash))return null;
     return previous.response||unknown();
   }
   function capability(agent,{stale=false,checkedAt=now()}={}){
     const unavailable=reason=>({available:false,reason,source:'autohub',checkedAt});
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
     if(stale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
+    if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
     const target=agent.conversationTarget;
     if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
+    const shownInput=normalizeInputRequest(agent.inputRequest);
     let mode='';
     if(['awaiting_input','needs_input'].includes(target.taskStatus))mode='respond';
+    // A transitional Hub row can expose an explicit question before its raw
+    // status flips from running. Do not turn that answer into a free-form
+    // redirect: wait until Hub offers the matching response route.
+    else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
     else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection===true)mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
+    const resolution=agent.inputRequestResolution;
+    const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
+    if(mode==='respond'&&resolution&&(!shownInput||(resolution.id?shownInput.id===resolution.id:!newerThanUnidentifiedResolution)))return unavailable('This input request was already resolved. Refresh before replying.');
     return {available:true,mode,source:'autohub',checkedAt,messageUrl:'/agents/'+encodeURIComponent(agent.id)+'/messages'};
   }
   async function load(){
@@ -90,24 +104,30 @@ export function createHubMessenger({
     // A retry can arrive after this cottage advances to a new task. Its receipt
     // belongs to the task identity in the original payload, so inspect it before
     // treating the current cottage as changed.
-    const hash=receiptHash(agent.id,payload.taskId,message);
+    const [hash,legacyHash]=receiptHashes(agent.id,payload,message);
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
     if(previous){
-      if(previous.hash!==hash)return rejected(409,'That message request ID belongs to a different message.');
+      if(previous.hash!==hash&&previous.hash!==legacyHash)return rejected(409,'That message request ID belongs to a different message.');
       return previous.response||unknown();
     }
     if(payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');
     const supported=capability(agent,meta);if(!supported.available)return rejected(409,supported.reason);
+    const shownInput=normalizeInputRequest(agent.inputRequest);
+    if(supported.mode==='respond'&&(shownInput?.id||null)!==(payload.inputRequestId||null))return rejected(409,'The input request changed. Reopen the current question before replying.');
+    if(supported.mode==='respond'&&inputRequestVersion(shownInput)!==(payload.inputRequestVersion||null))return rejected(409,'The question or its choices changed. Refresh before replying.');
     const path='tasks/'+encodeURIComponent(agent.taskId);
     try{
-      const response=await request(path);
+      // Native Hub question rounds live in orchestrator context. Request it
+      // only server-side so identical wording in a new round stays distinct.
+      const response=await request(path+'?context=raw');
       if(!response.ok)return rejected(502,'AutoHub could not verify the current task. Nothing was sent.');
       const task=await response.json(),context=parse(task.context),execution=context.lifecycle?.execution||{};
       const current={...agent,conversationTarget:{taskId:task.id,taskStatus:task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection}};
       if(task.id!==agent.taskId||task.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
       const verified=capability(current);
       if(!verified.available||verified.mode!==supported.mode|| (supported.mode==='respond'&&task.canRespond===false))return rejected(409,'The task’s input state changed. Refresh before sending.');
+      if(supported.mode==='respond'&&inputIdentity(inputRequestFromHub(task))!==inputIdentity(shownInput))return rejected(409,'The agent is now asking a different question. Refresh before replying.');
     }catch{return rejected(502,'AutoHub could not verify the current task. Nothing was sent.');}
     const entry={id:payload.requestId,hash,at:now(),response:null};
     try{await remember(entry);}catch{return rejected(503,'The message receipt could not be saved. Nothing was sent.');}

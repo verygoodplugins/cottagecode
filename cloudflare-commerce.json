@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "provider": "cloudflare",
+  "profile": "static-demo",
+  "account_id": "2cc725912d479c0bd6c08fc24931a478",
+  "zone_id": "d117b55267eea7c1ef8deba43b954d30",
+  "worker_name": "cottagecode-demo",
+  "production_domain": "autojack.ai",
+  "public_url": "https://autojack.ai/cottagecode/",
+  "deploy_model": "manual-worker-static-assets",
+  "deploy_command": "npm run deploy:demo",
+  "config": "wrangler.demo.jsonc",
+  "bindings": {},
+  "secretsref": [],
+  "billable_actions": []
+}

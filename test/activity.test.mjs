@@ -79,6 +79,120 @@ test("an explicit task boundary resets task-scoped usage accounting", () => {
   assert.equal(session.tokens, 5);
 });
 
+test("pending Claude questions resolve by tool ID without clearing a newer prompt", () => {
+  const session = blankSession();
+  const ask = (id, prompt) => ({ type: "tool_use", id, name: "AskUserQuestion", input: { questions: [{ question: prompt, options: [{ label: "Yes", description: "Use the fixture" }, { label: "No" }] }] } });
+  applyLine(session, line("assistant", [ask("toolu_old", "Old question?")], 1));
+  assert.equal(session.inputRequest.prompt, "Old question?");
+  applyLine(session, line("assistant", [ask("toolu_new", "Current question?")], 2));
+  applyLine(session, line("user", [{ type: "tool_result", tool_use_id: "toolu_old", content: "Yes" }], 3));
+  assert.equal(session.inputRequest.id, "toolu_new");
+  applyLine(session, line("user", [{ type: "tool_result", tool_use_id: "toolu_new", content: "No" }], 4));
+  assert.equal(session.inputRequest, null);
+  applyLine(session, line("assistant", [ask("toolu_new", "Delayed duplicate question?")], 5));
+  assert.equal(session.inputRequest, null);
+  applyLine(session, line("assistant", [ask("toolu_next", "One more question?")], 6));
+  applyLine(session, line("user", "A new explicit task", 7, { taskId: "new-run" }));
+  assert.equal(session.inputRequest, null);
+});
+
+test("explicit input clears tombstone the matching request and never clear a newer one", () => {
+  const resolvedStates = [{ resolved: true }, { pending: false }, { resolvedAt: start }, { resolved_at: start }];
+  for (const resolution of [...resolvedStates, null]) {
+    const session = blankSession();
+    applyLine(session, { inputRequest: { id: "input-one", prompt: "Which target?" } });
+    applyLine(session, { inputRequest: resolution === null ? null : { id: "input-one", ...resolution } });
+    assert.equal(session.inputRequest, null);
+    assert.equal(session.resolvedInputRequests.has("input-one"), true);
+    applyLine(session, { inputRequest: { id: "input-one", prompt: "A streamed revision of the same question?" } });
+    assert.equal(session.inputRequest, null);
+  }
+  for (const resolution of resolvedStates) {
+    const session = blankSession();
+    applyLine(session, { inputRequest: { id: "input-old", prompt: "Old question?" } });
+    applyLine(session, { inputRequest: { id: "input-new", prompt: "New question?" } });
+    applyLine(session, { inputRequest: { id: "input-old", ...resolution } });
+    assert.equal(session.inputRequest.id, "input-new");
+    assert.equal(session.resolvedInputRequests.has("input-old"), true);
+    applyLine(session, { inputRequest: { ...resolution } });
+    assert.equal(session.inputRequest, null, "an explicit current-request resolution may omit its ID");
+    assert.equal(session.resolvedInputRequests.has("input-new"), true);
+  }
+});
+
+test("idless transcript input requests derive stable identities and respect resolution", () => {
+  const session = blankSession();
+  const at = offset => new Date(start + offset).toISOString();
+  applyLine(session, { timestamp: at(1), inputRequest: { prompt: "Choose an object target" } });
+  const objectId = session.inputRequest.id;
+  assert.match(objectId, /^input-/);
+  applyLine(session, { timestamp: at(2), inputRequest: { resolved: true } });
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { timestamp: at(3), inputRequest: { prompt: "Choose an object target" } });
+  assert.equal(session.inputRequest, null);
+
+  applyLine(session, { timestamp: at(4), inputRequest: "Choose a string target" });
+  const stringId = session.inputRequest.id;
+  assert.match(stringId, /^input-/);
+  assert.notEqual(stringId, objectId);
+  applyLine(session, { timestamp: at(5), inputRequest: { resolved: true } });
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { timestamp: at(6), inputRequest: "Choose a string target" });
+  assert.equal(session.inputRequest, null);
+});
+
+test("questions remain isolated from child work and ordinary tool calls", () => {
+  const session = blankSession();
+  const ask = { type: "tool_use", id: "child-question", name: "AskUserQuestion", input: { questions: [{ question: "Which child target?" }] } };
+  applyLine(session, line("assistant", [ask], 1, { isSidechain: true, uuid: "child-root" }));
+  assert.equal(session.inputRequest, null);
+  assert.equal(session.sidechains.get("child-root").inputRequest.id, "child-question");
+  applyLine(session, line("user", [{ type: "tool_result", tool_use_id: "child-question", content: "Unrelated parent tool result" }], 2));
+  assert.equal(session.sidechains.get("child-root").inputRequest.id, "child-question");
+  applyLine(session, line("user", [{ type: "tool_result", tool_use_id: "child-question", content: "Local" }], 3, { isSidechain: true, parentUuid: "child-root" }));
+  assert.equal(session.sidechains.get("child-root").inputRequest, null);
+  applyLine(session, line("assistant", [{ type: "tool_use", id: "toolu_bash", name: "Bash", input: { description: "Run tests" } }], 4));
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { hook_event_name: "PermissionRequest", tool_use_id: "toolu_permission", tool_name: "Bash", tool_input: { description: "Run fixture checks?" }, timestamp: new Date(start + 5000).toISOString() });
+  assert.equal(session.inputRequest.kind, "permission");
+  assert.equal(session.inputRequest.prompt, "Run fixture checks?");
+  applyLine(session, { hook_event_name: "PostToolUse", tool_use_id: "toolu_bash" });
+  assert.equal(session.inputRequest.id, "toolu_permission");
+  applyLine(session, { hook_event_name: "PostToolUseFailure", tool_use_id: "toolu_permission" });
+  assert.equal(session.inputRequest, null);
+});
+
+test("explicit Bash permissions include bounded command detail without arbitrary input", () => {
+  const session = blankSession();
+  const command = "node --test test/fixture.test.mjs";
+  applyLine(session, { hook_event_name: "PermissionRequest", tool_use_id: "permission-command", tool_name: "Bash",
+    tool_input: { command, environment: { API_KEY: "fixture-private-value" }, unrelated: "never copy this" } });
+  assert.equal(session.inputRequest.kind, "permission");
+  assert.equal(session.inputRequest.detail, command);
+  assert.doesNotMatch(JSON.stringify(session.inputRequest), /fixture-private-value|never copy this|environment/);
+  applyLine(session, { hook_event_name: "PermissionRequest", tool_use_id: "permission-bounded", tool_name: "Bash", tool_input: { command: "x".repeat(20000) } });
+  assert.equal(session.inputRequest.detail.length, 16000);
+  applyLine(session, { hook_event_name: "PermissionRequest", tool_use_id: "permission-other", tool_name: "CustomTool", tool_input: { command: "not a Bash command", unrelated: "never copy this" } });
+  assert.equal(session.inputRequest.detail, "");
+});
+
+test("Codex request_user_input and app-server responses clear only their matching request", () => {
+  const session = blankSession();
+  const questions = [{ id: "target", question: "Which target?", options: [{ label: "Local" }, { label: "Staging" }] }];
+  applyLine(session, { type: "response_item", timestamp: new Date(start).toISOString(), payload: { type: "function_call", name: "request_user_input", call_id: "call_input", arguments: JSON.stringify({ questions }) } });
+  assert.equal(session.inputRequest.id, "call_input");
+  applyLine(session, { type: "response_item", payload: { type: "function_call_output", call_id: "call_other", output: "done" } });
+  assert.equal(session.inputRequest.id, "call_input");
+  applyLine(session, { type: "response_item", payload: { type: "function_call_output", call_id: "call_input", output: JSON.stringify({ answers: { target: { answers: ["Local"] } } }) } });
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { id: 42, method: "item/tool/requestUserInput", params: { questions } });
+  assert.equal(session.inputRequest.id, "42");
+  applyLine(session, { id: 41, result: { answers: {} } });
+  assert.equal(session.inputRequest.id, "42");
+  applyLine(session, { id: 42, result: { answers: { target: { answers: ["Local"] } } } });
+  assert.equal(session.inputRequest, null);
+});
+
 test("explicit todo snapshots stay isolated by task and child, and empty means cleared", () => {
   const session = blankSession();
   const todo = (content, status = "pending") => ({ type: "tool_use", name: "TodoWrite", input: { todos: [{ content, status }] } });

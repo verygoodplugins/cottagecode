@@ -5,6 +5,7 @@ export function conversationCapability(agent, endpoint, {stale = false, now = Da
   const capability = agent?.conversation;
   const unavailable = reason => ({available:false,reason});
   if (stale) return unavailable('The feed is stale. Reconnect before sending a message.');
+  if (agent?.inputRequest?.stale) return unavailable('The input request is stale. Refresh before replying.');
   if (!capability?.available) return unavailable(capability?.reason || 'This source provides activity only. It has no connected route for messages.');
   if (typeof capability.messageUrl !== 'string' || !capability.messageUrl.trim()) return unavailable('The feed has not supplied a message route.');
   if (!agent.taskId || !['redirect','respond'].includes(capability.mode)) return unavailable('The feed has not identified a supported task conversation.');
