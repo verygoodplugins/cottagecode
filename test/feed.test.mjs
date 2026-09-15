@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { parseTranscript } from "../src/transcripts.mjs";
-import { toCottage, readHubAgents } from "../src/hub.mjs";
+import { mapHubStatus, toCottage, readHubAgents } from "../src/hub.mjs";
 import { toAgents, createFeed, createFeedServer, createClaudeScanner, repoFromRemote, createRepoResolver } from "../src/feed.mjs";
 
 const now = Date.parse("2026-09-14T11:00:00Z");
@@ -116,6 +116,27 @@ test("Hub resolution suppresses a lagging local question until a distinct newer 
   await feed.scan();
   assert.equal(feed.snapshot().agents[0].inputRequest.id, "new-question");
   assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
+test("resolved terminal Hub attention does not remain blocked or visible", () => {
+  for (const status of ["failed", "cancelled", "interrupted"]) {
+    for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {
+      const row = {
+        id: `terminal-${status}`,
+        record_kind: "logical_task",
+        status,
+        attention_type: "question",
+        attention_message: "Which target?",
+        updated_at: now,
+        ...resolution,
+      };
+      const cottage = toCottage(row, now);
+      assert.equal(mapHubStatus(row, now), "idle", `${status} is not blocked after attention resolves`);
+      assert.equal(cottage.status, "idle");
+      assert.equal(cottage.inputRequest, null);
+      assert.equal(cottage.attention, "");
+    }
+  }
 });
 
 test("feed and incremental activity expose the same explicit latest todo snapshot", async () => {
@@ -568,4 +589,30 @@ test("Hub database adapter accepts older schemas without optional task columns",
   assert.equal(asking.attention, "");
   questionsDb.close();
   assert.equal(readHubAgents({ dbPath: join(directory, "missing.db") }).ok, false);
+});
+
+test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {
+  const local = {
+    id: "session-1", source: "claude", taskId: "local-task", taskStartedAt: now - 10_000,
+    sessionStartedAt: now - 20_000, originalAsk: "Local task request", originalAskSource: "task",
+    activity: "Local diagnostic", lastLine: "Local diagnostic", status: "working",
+  };
+  const hubAgent = {
+    id: "hub-task", source: "hub", taskId: "hub-task", taskStartedAt: now - 5_000,
+    sessionStartedAt: null, originalAsk: "Hub task request", originalAskSource: "task",
+    activity: "Hub diagnostic", lastLine: "Hub diagnostic", status: "working",
+  };
+  const localEvents = [{ id: "local-progress", kind: "progress", text: "Local progress", timestamp: now - 2_000 }];
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [local], sessions: [{ id: "session-1", events: localEvents, sidechains: new Map() }] }),
+    readHub: () => ({ ok: true, agents: [hubAgent], keys: new Set(["hub-task", "session-1"]), links: new Map([["hub-task", new Set(["hub-task", "session-1"])]]) }),
+  });
+
+  await feed.scan();
+  const [agent] = feed.snapshot().agents;
+  assert.equal(agent.originalAsk, "Hub task request");
+  assert.equal(agent.activity, "Hub diagnostic");
+  assert.equal(agent.lastLine, "Hub diagnostic");
+  assert.equal(agent.sessionStartedAt, now - 20_000, "session timing is safe to retain");
+  assert.deepEqual((await feed.getActivity("hub-task")).events, []);
 });
