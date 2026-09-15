@@ -1,4 +1,6 @@
 /** Decorative light only: no task data, status, collision, or geometry changes. */
+import { hauntStage, paintHauntGhost, paintRoomDust } from './folklore.mjs';
+
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const mix = (a, b, t) => a + (b - a) * t;
@@ -191,6 +193,7 @@ function windowLight(p, x, y, agent, opacity, state, style, small = false) {
       p(x + side, y + 1, side ? 4 : 3, 1, color([73, 88, 113], style.nightness * .8));
       p(x + side, y + 5, side ? 4 : 3, 1, color([22, 32, 51], style.nightness));
     }
+    if (hauntStage(agent) !== 'none') paintHauntGhost(p, x, y, style.nightness);
   }
   return working && strength > .001;
 }
@@ -259,7 +262,9 @@ export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12)
 export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { time = 0, reduce = false, agent = null } = {}) {
   const state = stateOf(timeState), result = { phase: state.phase, windows: 0 };
   if (!ctx || !room || !finite(room.width) || !finite(room.height)) return result;
-  if (state.roomDarkness <= .0001 && state.windowShade <= .001 && state.windowGlow <= .001) return result;
+  const haunt = hauntStage(agent);
+  const hasLight = state.roomDarkness > .0001 || state.windowShade > .001 || state.windowGlow > .001;
+  if (!hasLight && haunt === 'none') return result;
   const review = room.objects?.find(object => object.id === 'review');
   const protectedRects = review ? [
     { x: review.x + 2, y: review.y - 12, w: review.w - 4, h: 14 },
@@ -275,48 +280,51 @@ export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { ti
     // unknown remains gray, and no warm ambient light changes those meanings.
     clipped(ctx, room.width, room.height, protectedRects);
     const p = painter(ctx);
-    palette(ctx, p, room.width, room.height, style, state);
-    const win = room.window;
-    if (validRect(win) && state.windowShade > .001) {
-      ctx.save();
-      try {
-        // drawRoom's curtains and crossbars stay visible around the glass.
-        ctx.beginPath();
-        ctx.rect(win.x + 3, win.y, 7, 11); ctx.rect(win.x + 12, win.y, 8, 11);
-        ctx.rect(win.x + 3, win.y + 13, 7, 10); ctx.rect(win.x + 12, win.y + 13, 8, 10);
-        ctx.clip();
-        p(win.x, win.y, win.w, win.h, color(state.sky, state.windowShade));
-        p(win.x, win.y + 17, win.w, 6, color([48, 73, 61], state.windowShade * .85));
-        p(win.x + 7, win.y + 14, 9, 8, color([55, 77, 65], state.windowShade * .85));
-        const moon = style.nightness;
-        p(win.x + 14, win.y + 4, 4, 4, color([246, 227, 172], state.windowShade * .75));
-        p(win.x + 16, win.y + 3, 3, 4, color(state.sky, state.windowShade * moon));
-        if (state.fireflies > .2) p(win.x + 6, win.y + 5, 1, 1, color([223, 230, 218], state.fireflies * .6));
-        result.windows = 1;
-      } finally { ctx.restore(); }
-      // A small moonlit projection follows the existing authored window shaft.
-      for (let i = 0; i < 4; i++) p(win.x + 4 + i * 3, 54 + i * 7, 21, 6,
-        color(style.nightness > .3 ? [112, 145, 195] : [253, 203, 138], state.windowShade * .08));
+    if (hasLight) {
+      palette(ctx, p, room.width, room.height, style, state);
+      const win = room.window;
+      if (validRect(win) && state.windowShade > .001) {
+        ctx.save();
+        try {
+          // drawRoom's curtains and crossbars stay visible around the glass.
+          ctx.beginPath();
+          ctx.rect(win.x + 3, win.y, 7, 11); ctx.rect(win.x + 12, win.y, 8, 11);
+          ctx.rect(win.x + 3, win.y + 13, 7, 10); ctx.rect(win.x + 12, win.y + 13, 8, 10);
+          ctx.clip();
+          p(win.x, win.y, win.w, win.h, color(state.sky, state.windowShade));
+          p(win.x, win.y + 17, win.w, 6, color([48, 73, 61], state.windowShade * .85));
+          p(win.x + 7, win.y + 14, 9, 8, color([55, 77, 65], state.windowShade * .85));
+          const moon = style.nightness;
+          p(win.x + 14, win.y + 4, 4, 4, color([246, 227, 172], state.windowShade * .75));
+          p(win.x + 16, win.y + 3, 3, 4, color(state.sky, state.windowShade * moon));
+          if (state.fireflies > .2) p(win.x + 6, win.y + 5, 1, 1, color([223, 230, 218], state.fireflies * .6));
+          result.windows = 1;
+        } finally { ctx.restore(); }
+        // A small moonlit projection follows the existing authored window shaft.
+        for (let i = 0; i < 4; i++) p(win.x + 4 + i * 3, 54 + i * 7, 21, 6,
+          color(style.nightness > .3 ? [112, 145, 195] : [253, 203, 138], state.windowShade * .08));
+      }
+      const hearth = room.objects?.find(object => object.id === 'hearth');
+      if (validRect(hearth) && working && state.windowGlow > .001) {
+        const flicker = .9 + Math.sin(frame * 1.7 + Number(room.seed || 0) % 17) * .1;
+        glow(p, hearth.x + 3, hearth.y + hearth.h - 10, hearth.w - 6, 8, state.windowGlow * flicker);
+        p(hearth.x - 5, hearth.y + hearth.h - 2, hearth.w + 10, 6, color([255, 190, 105], state.windowGlow * flicker * .15));
+      } else if (validRect(hearth) && style.nightness > .001) {
+        // Bedtime hearths settle to embers; the renderer's original bright flames
+        // are covered rather than being left shining underneath a dark overlay.
+        p(hearth.x + 7, hearth.y + hearth.h - 15, hearth.w - 14, 12, color([29, 34, 43], style.nightness));
+        p(hearth.x + 11, hearth.y + hearth.h - 5, 2, 1, color([128, 78, 55], style.nightness));
+        p(hearth.x + 17, hearth.y + hearth.h - 4, 2, 1, color([103, 68, 53], style.nightness));
+      }
+      const desk = room.objects?.find(object => object.id === 'workbench');
+      if (working && validRect(desk) && state.windowGlow > .001) {
+        ctx.globalCompositeOperation = 'screen';
+        glow(p, desk.x + 3, desk.y + 2, desk.w - 6, 16, state.windowGlow * .75);
+        p(desk.x + 4, desk.y + 4, desk.w - 8, 12, color([242, 175, 89], state.windowGlow * .12));
+        ctx.globalCompositeOperation = 'source-over';
+      }
     }
-    const hearth = room.objects?.find(object => object.id === 'hearth');
-    if (validRect(hearth) && working && state.windowGlow > .001) {
-      const flicker = .9 + Math.sin(frame * 1.7 + Number(room.seed || 0) % 17) * .1;
-      glow(p, hearth.x + 3, hearth.y + hearth.h - 10, hearth.w - 6, 8, state.windowGlow * flicker);
-      p(hearth.x - 5, hearth.y + hearth.h - 2, hearth.w + 10, 6, color([255, 190, 105], state.windowGlow * flicker * .15));
-    } else if (validRect(hearth) && style.nightness > .001) {
-      // Bedtime hearths settle to embers; the renderer's original bright flames
-      // are covered rather than being left shining underneath a dark overlay.
-      p(hearth.x + 7, hearth.y + hearth.h - 15, hearth.w - 14, 12, color([29, 34, 43], style.nightness));
-      p(hearth.x + 11, hearth.y + hearth.h - 5, 2, 1, color([128, 78, 55], style.nightness));
-      p(hearth.x + 17, hearth.y + hearth.h - 4, 2, 1, color([103, 68, 53], style.nightness));
-    }
-    const desk = room.objects?.find(object => object.id === 'workbench');
-    if (working && validRect(desk) && state.windowGlow > .001) {
-      ctx.globalCompositeOperation = 'screen';
-      glow(p, desk.x + 3, desk.y + 2, desk.w - 6, 16, state.windowGlow * .75);
-      p(desk.x + 4, desk.y + 4, desk.w - 8, 12, color([242, 175, 89], state.windowGlow * .12));
-      ctx.globalCompositeOperation = 'source-over';
-    }
+    paintRoomDust(p, room, haunt);
   } finally { ctx.restore(); }
   return result;
 }

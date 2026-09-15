@@ -1,5 +1,6 @@
 import {createInterior,isWalkable,renderInterior,renderResident} from './interiors.mjs';
 import {normalizePr,prCi,prStage,prCounts} from './pr.mjs';
+import {parcelReclaim,paintParcelReclaim} from './folklore.mjs';
 import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './world.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
@@ -636,6 +637,7 @@ export function createObservatory(api){
   function drawDispatch(ctx,p,time){
     const stage=prStage(p.agent.pr),s=STAGES[stage],x=p.x-15,y=p.y+55;
     const label=extras.lightAt(time).darkness>.1?'#d0def0':'#253729';
+    const px=(rx,ry,w,h,c)=>{ctx.fillStyle=c;ctx.fillRect(rx|0,ry|0,w|0,h|0);};
     ctx.textBaseline='top';
     ctx.fillStyle='#354231';ctx.fillRect(x-2,y+5,17,3);ctx.fillRect(x,y+8,2,9);ctx.fillRect(x+10,y+8,2,9);
     if(stage!=='none'){
@@ -643,6 +645,7 @@ export function createObservatory(api){
       if(stage==='ready'){ctx.fillStyle='#fff4b8';ctx.fillRect(x+5,y-5,2,13);ctx.fillRect(x-1,y,14,2);}
       if(stage==='merged'){ctx.clearRect(x+3,y-3,6,3);ctx.fillStyle='#c4e2a4';ctx.fillRect(x-1,y-6,5,3);ctx.fillRect(x+8,y-6,5,3);}
     }
+    paintParcelReclaim(px,x,y,parcelReclaim(p.agent));
     ctx.font='8px "Silkscreen",monospace';ctx.fillStyle=stage==='blocked'?'#ffe8d2':label;
     const sym={none:'—',open:'+',active:'*','waiting-codex':'?','waiting-ci':':',blocked:'!',ready:'*',merged:'✓',closed:'×',unknown:'?'}[stage];
     if(stage==='blocked'){ctx.fillStyle='#d95540';ctx.fillRect(x+2,y-18,9,11);ctx.fillStyle='#fff2df';}
