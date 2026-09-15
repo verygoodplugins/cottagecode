@@ -49,13 +49,13 @@ test('feed order, text, and status changes preserve the routine and stable flock
 
 test('hidden settled cottages retain their homecoming state until the task leaves the feed',()=>{
   const routine=createBedtimeRoutine();
-  routine.update(plots,night,{time:0,reduce:true,present:plots.map(plot=>plot.agent)});
-  routine.update([],night,{time:4,present:plots.map(plot=>plot.agent)});
-  const returned=routine.update(plots,night,{time:5,present:plots.map(plot=>plot.agent)});
-  assert.ok([...returned.values()].every(frame=>frame.settled),'hiding a cottage must not discard its tucked-in family');
+  const present=plots.map(plot=>plot.agent), initiallyVisible=plots.slice(1);
+  routine.update(initiallyVisible,night,{time:0,present});
+  const returned=routine.update(plots,night,{time:20,present});
+  assert.ok([...returned.values()].every(frame=>frame.settled),'a cottage hidden when evening starts must not begin a new homecoming when settled view reveals it');
 
-  routine.update([],night,{time:6,present:[]});
-  const replacement=routine.update(plots,night,{time:7,present:plots.map(plot=>plot.agent)});
+  routine.update([],night,{time:21,present:[]});
+  const replacement=routine.update(plots,night,{time:22,present:plots.map(plot=>plot.agent)});
   assert.equal(replacement.get('home-0').settled,false,'a real task removal gets a fresh arrival when it returns');
 });
 
