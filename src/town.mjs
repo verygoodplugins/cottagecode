@@ -1,5 +1,5 @@
 import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
-import { createTownLayout, advanceDuck } from "./world.mjs";
+import { createTownLayout, advanceDuck, normalizeTown } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
@@ -35,18 +35,6 @@ function townKey(ag){
   return ag.town || ag.role || "WildTown";
 }
 
-function normalizeTown(raw){
-  const s = String(raw || "").trim();
-  if(!s) return "WildTown";
-  const legacy = {dev:"HubTown", research:"MemTown", ops:"FusionTown", content:"AppTown"};
-  if(legacy[s]) return legacy[s];
-  // Keep word boundaries (my-project → MyProjectTown) while stripping markup.
-  const withoutTown = s.replace(/town$/i, "");
-  const words = withoutTown.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if(!words.length) return "WildTown";
-  const stem = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("");
-  return /town$/i.test(stem) ? stem : stem + "Town";
-}
 
 function isAllowedFeedUrl(raw){
   try{

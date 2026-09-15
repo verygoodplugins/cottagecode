@@ -365,14 +365,27 @@ export function createFeed({
   };
 }
 
+function isSameOriginRequest(req) {
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return true; // CLI and health probes have no browser origin.
+  const host = String(req.headers.host || "").trim();
+  if (!host) return false;
+  try {
+    const url = new URL(origin);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.host === host;
+  } catch { return false; }
+}
+
 export function createFeedServer(feed, { directory = HERE, messages = createHubMessenger() } = {}) {
   return createServer(async (req, res) => {
-    const cors = { "access-control-allow-origin": "*", "cache-control": "no-store" };
-    const json = (status, body) => { res.writeHead(status, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    const headers = { "cache-control": "no-store" };
+    const json = (status, body) => { res.writeHead(status, { ...headers, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
-      if (req.method === "OPTIONS") { res.writeHead(204, { ...cors, "access-control-allow-methods": "GET, OPTIONS" }); return res.end(); }
       const url = new URL(req.url, "http://localhost");
       const messageRoute = url.pathname.match(/^\/agents\/([^/]+)\/messages$/);
+      const isAgentRoute = url.pathname === "/agents" || /^\/agents\/[^/]+\/activity$/.test(url.pathname);
+      if (isAgentRoute && !isSameOriginRequest(req)) return json(403, { error: "Cross-origin agent access is not allowed" });
+      if (req.method === "OPTIONS") { res.writeHead(204, { ...headers, "access-control-allow-methods": "GET, POST, OPTIONS" }); return res.end(); }
       if (req.method === "POST" && messageRoute) {
         if (!acceptsMessageOrigin(req)) return json(403, { error: "Messages require a local connection from this CottageCode origin.", delivery: "not_sent" });
         if (Number(req.headers["content-length"]) > 65536) { req.resume(); return json(413, { error: "Message too large", delivery: "not_sent" }); }
@@ -409,7 +422,7 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         const path = await realpath(join(root, filename));
         if (!path.startsWith(root + sep)) return json(404, { error: "Not found" });
         const body = await readFile(path);
-        res.writeHead(200, { ...cors, "content-type": contentType });
+        res.writeHead(200, { ...headers, "content-type": contentType });
         return res.end(req.method === "HEAD" ? undefined : body);
       }
       return json(404, { error: "Not found" });
