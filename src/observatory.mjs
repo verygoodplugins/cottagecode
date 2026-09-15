@@ -541,6 +541,15 @@ export function createObservatory(api){
     if(mode==='room'&&byId(interiorId)){const newRoom=roomFor(byId(interiorId));if(newRoom.seed!==room.seed){room=newRoom;roomPlayer={...room.door};}}
     updatePrTally();updateRoster();ensureActivity(byId(interiorId||selected));renderPanel(selected);
   }
+  function drawApprenticeArrivals(ctx,time){
+    if(mode!=='town')return;
+    apprentices=apprentices.filter(e=>activeArrivalEntry(e,time));
+    for(const kid of apprentices){
+      const to=plotFor(kid.id),position=apprenticeArrivalPosition(apprentices,kid.id,api.getPlots(),time,{reduce});
+      if(!to||!position)continue;
+      renderResident(ctx,position.x,position.y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(position.x+4,position.y-8,6,5);
+    }
+  }
   function drawTown(ctx,time,dt,moving){
     placePlayer();const w=api.getWorld();
     // Relationship paths are explicit metadata, not guessed from project names.
@@ -561,12 +570,6 @@ export function createObservatory(api){
       let traveled=fraction*total,index=0;while(index<2&&traveled>lengths[index]){traveled-=lengths[index];index++;}
       const f=lengths[index]?traveled/lengths[index]:0,x=pts[index].x+(pts[index+1].x-pts[index].x)*f,y=pts[index].y+(pts[index+1].y-pts[index].y)*f;
       ctx.fillStyle='#eed19b';ctx.fillRect(x-3,y-8,7,6);ctx.strokeStyle='#564431';ctx.strokeRect(x-3,y-8,7,6);
-    }
-    apprentices=apprentices.filter(e=>activeArrivalEntry(e,time));
-    for(const kid of apprentices){
-      const to=plotFor(kid.id),position=apprenticeArrivalPosition(apprentices,kid.id,api.getPlots(),time,{reduce});
-      if(!to||!position)continue;
-      renderResident(ctx,position.x,position.y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(position.x+4,position.y-8,6,5);
     }
     if(board){
       ctx.fillStyle='#59402c';ctx.fillRect(board.x-14,board.y-17,28,21);ctx.fillRect(board.x-11,board.y+4,3,8);ctx.fillRect(board.x+8,board.y+4,3,8);
@@ -625,7 +628,8 @@ export function createObservatory(api){
     else if(stage==='none'){ctx.fillStyle=label;ctx.font='6px "Silkscreen",monospace';ctx.fillText('NO PR',x-4,y+26);}
   }
   return {update,draw,renderPanel,handleClick,enter,leave,follow,focusCottage,drawDispatch,latestLine,visible,talk,
-    drawAtmosphere:(ctx,world,time)=>extras.drawTown(ctx,world,time,reduce),
+    drawAtmosphere:(ctx,world,time,beforePalette)=>extras.drawTown(ctx,world,time,reduce,beforePalette),
+    drawApprenticeArrivals,
     lightAt:time=>extras.lightAt(time),
     resident:a=>roomFor(a).resident,sound,
     isApprenticeArriving:(id,time=performance.now()/1000)=>isApprenticeArrivalActive(apprentices,id,time),

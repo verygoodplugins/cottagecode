@@ -39,13 +39,14 @@ export function createBedtimeRoutine() {
   const homes = new Map();
   let evening = null, started = 0, cycle = 0;
   return {
-    update(plots, light, { time = 0, reduce = false, present = plots } = {}) {
+    update(plots, light, { time = 0, reduce = false, present = plots, source = '' } = {}) {
       time = Number.isFinite(time) ? time : 0;
+      const namespace = String(source ?? '');
       const nextEvening = isBedtime(light);
       if (evening !== nextEvening) { evening = nextEvening; started = time; cycle++; }
       const frames = new Map();
       for (const plot of plots) {
-        const agent = plot.agent || {}, key = JSON.stringify([agent.id, agent.taskId ?? null]);
+        const agent = plot.agent || {}, key = JSON.stringify([namespace, agent.id, agent.taskId ?? null]);
         if (!homes.has(key)) homes.set(key, { seed: hash(key), arrived: time });
         const home = homes.get(key), seed = home.seed;
         const elapsed = reduce || home.tuckedCycle === cycle ? 100 : Math.max(0, time - Math.max(started, home.arrived) - (seed % 17) / 10);
@@ -78,7 +79,7 @@ export function createBedtimeRoutine() {
       const active = new Set();
       for (const source of Array.isArray(present) ? present : []) {
         const agent = source?.agent || source;
-        if (agent?.id) active.add(JSON.stringify([agent.id, agent.taskId ?? null]));
+        if (agent?.id) active.add(JSON.stringify([namespace, agent.id, agent.taskId ?? null]));
       }
       for (const key of homes.keys()) if (!active.has(key)) homes.delete(key);
       return frames;

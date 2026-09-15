@@ -154,6 +154,21 @@ test('night recolors existing green grass and warm paths into a visibly darker b
   assert.ok(sceneStyle(villageTime('night')).darkness >= .75);
 });
 
+test('details painted before the town palette join the dusk and night scene', () => {
+  const daylight = [185, 120, 71], points = { arrival: { x: 12, y: 14, rgb: [0, 0, 0] } };
+  const luminance = rgb => rgb[0] * .3 + rgb[1] * .59 + rgb[2] * .11;
+  const ctx = pixelContext(points);
+  paintTownAtmosphere(ctx, { width: 24, height: 24 }, villageTime('night'), {
+    beforePalette(canvas) {
+      canvas.fillStyle = 'rgba(185,120,71,1)';
+      canvas.fillRect(12, 14, 1, 1);
+    },
+  });
+  const arrival = ctx.pixel('arrival');
+  assert.ok(arrival[2] > arrival[0] + 20, 'arrival parcel should be blue with the rest of the night scene: ' + arrival);
+  assert.ok(luminance(arrival) < luminance(daylight) * .6, 'arrival parcel should be darker than its daytime paint: ' + arrival);
+});
+
 test('night replaces previously bright inactive panes, keeps only working windows warm, and respects filters', () => {
   const points = Object.fromEntries(WORLD.plots.map((plot, i) => [i, { x: plot.x + 13, y: plot.y + 47, rgb: [255, 240, 180] }]));
   const ctx = pixelContext(points);
