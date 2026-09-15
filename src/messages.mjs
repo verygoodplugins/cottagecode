@@ -46,7 +46,7 @@ export function createHubMessenger({
     // status flips from running. Do not turn that answer into a free-form
     // redirect: wait until Hub offers the matching response route.
     else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
-    else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection!==false)mode='redirect';
+    else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection===true)mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
     const resolution=agent.inputRequestResolution;
     const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
@@ -88,14 +88,18 @@ export function createHubMessenger({
     const message=typeof payload?.message==='string'?payload.message.trim():'';
     if(!message||message.length>MAX_MESSAGE_LENGTH)return rejected(400,'Write a message of 1–'+MAX_MESSAGE_LENGTH+' characters.');
     if(typeof payload.requestId!=='string'||!/^[a-zA-Z0-9_-]{8,100}$/.test(payload.requestId))return rejected(400,'A unique message request ID is required.');
-    if(!agent||payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');
-    const hash=createHash('sha256').update(JSON.stringify([agent.id,agent.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
+    if(!agent)return rejected(409,'The task changed. Reopen its cottage before sending.');
+    // A retry can arrive after this cottage advances to a new task. Its receipt
+    // belongs to the task identity in the original payload, so inspect it before
+    // treating the current cottage as changed.
+    const hash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
     if(previous){
       if(previous.hash!==hash)return rejected(409,'That message request ID belongs to a different message.');
       return previous.response||unknown();
     }
+    if(payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');
     const supported=capability(agent,meta);if(!supported.available)return rejected(409,supported.reason);
     const shownInput=normalizeInputRequest(agent.inputRequest);
     if(supported.mode==='respond'&&(shownInput?.id||null)!==(payload.inputRequestId||null))return rejected(409,'The input request changed. Reopen the current question before replying.');

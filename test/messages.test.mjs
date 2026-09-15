@@ -24,7 +24,7 @@ test('only supported logical task transports advertise messages; terminal, unkno
   const {messenger}=fixture();
   assert.equal(messenger.capability(agent).mode,'redirect');
   assert.equal(messenger.capability({...agent,conversationTarget:{...agent.conversationTarget,taskStatus:'needs_input',transport:'direct'}}).mode,'respond');
-  for(const overrides of [{recordKind:'external_session'},{recordKind:'unknown'},{taskStatus:'completed'},{taskStatus:'queued'},{taskStatus:'failed'},{transport:'direct'},{transport:'unknown'},{supportsRedirection:false},{taskId:'other'}])
+  for(const overrides of [{recordKind:'external_session'},{recordKind:'unknown'},{taskStatus:'completed'},{taskStatus:'queued'},{taskStatus:'failed'},{transport:'direct'},{transport:'unknown'},{supportsRedirection:false},{supportsRedirection:null},{taskId:'other'}])
     assert.equal(messenger.capability({...agent,conversationTarget:{...agent.conversationTarget,...overrides}}).available,false,JSON.stringify(overrides));
   assert.equal(messenger.capability(agent,{stale:true}).available,false);
   assert.equal(messenger.capability({...agent,inputRequest:{stale:true}}).available,false);
@@ -112,7 +112,7 @@ test('a reply is bound to the displayed question and the current Hub question ro
   assert.equal((await correct.messenger.send(waiting,{...reply,inputRequestVersion:'different-version'})).status,409,'Receipt IDs also belong to a particular question revision');
 });
 test('fresh validation rejects changed task states and direct sessions before any write',async()=>{
-  for(const current of [{...task,status:'completed'},{...task,id:'other'},{...task,isStale:true},{...task,archived:true},{...task,recordKind:'external_session'},{...task,context:{lifecycle:{execution:{sessionMode:'direct'}}}}]){
+  for(const current of [{...task,status:'completed'},{...task,id:'other'},{...task,isStale:true},{...task,archived:true},{...task,recordKind:'external_session'},{...task,context:{lifecycle:{execution:{sessionMode:'direct'}}}},{...task,context:{lifecycle:{execution:{sessionMode:'tmux'}}}}]){
     const {messenger,calls}=fixture({current});
     assert.equal((await messenger.send(agent,message)).body.delivery,'not_sent');
     assert.equal(calls.filter(call=>call.method==='POST').length,0);
@@ -132,6 +132,17 @@ test('uncertain deliveries and successful receipts survive restart without repla
     assert.equal((await second.messenger.send(agent,next)).body.delivery,'submitted');
     const third=fixture({ledgerPath});assert.equal((await third.messenger.send(agent,next)).body.delivery,'submitted');assert.equal(third.calls.length,0);
     const stored=await readFile(ledgerPath,'utf8');assert.equal(stored.includes(message.message),false);assert.equal(stored.includes('fixture-token'),false);
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+test('a prior receipt is returned when the cottage has advanced to another task',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+  try{
+    const first=fixture({ledgerPath});
+    assert.equal((await first.messenger.send(agent,message)).body.delivery,'submitted');
+    const advanced={...agent,taskId:'task-2',conversationTarget:{...agent.conversationTarget,taskId:'task-2'}};
+    const retry=fixture({ledgerPath});
+    assert.equal((await retry.messenger.send(advanced,message)).body.delivery,'submitted');
+    assert.equal(retry.calls.length,0,'a durable receipt is checked using the original payload task before current task validation');
   }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('an interrupted final receipt record preserves prior message reservations',async()=>{
