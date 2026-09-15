@@ -202,7 +202,7 @@ function windowLight(p, x, y, agent, opacity, state, style, small = false) {
  * signalsPaintedAfter:true and repaint dispatch stands after this pass: this
  * preserves semantic colors without leaving daylight patches in the scenery.
  */
-export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12), { time = 0, reduce = false, signalsPaintedAfter = false } = {}) {
+export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12), { time = 0, reduce = false, signalsPaintedAfter = false, beforePalette = null } = {}) {
   const { width, height } = world || {}, state = stateOf(timeState);
   const result = { phase: state.phase, windows: 0, fireflies: 0 };
   if (!ctx || !finite(width) || !finite(height) || width <= 0 || height <= 0) return result;
@@ -212,6 +212,13 @@ export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12)
   ctx.save();
   try {
     ctx.imageSmoothingEnabled = false;
+    // Dynamic town sprites that belong to the scenery paint before this pass so
+    // they receive the same dusk/night palette as their destination cottage.
+    if (typeof beforePalette === 'function') {
+      ctx.save();
+      try { ctx.globalCompositeOperation = 'source-over'; beforePalette(ctx); }
+      finally { ctx.restore(); }
+    }
     // Standalone callers retain the parcel/label colors. The live renderer draws
     // those once more after this palette pass, avoiding rectangular light gaps.
     clipped(ctx, width, height, signalsPaintedAfter ? [] : plots.flatMap(plot => [

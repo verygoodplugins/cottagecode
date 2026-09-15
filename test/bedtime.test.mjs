@@ -59,6 +59,17 @@ test('hidden settled cottages retain their homecoming state until the task leave
   assert.equal(replacement.get('home-0').settled,false,'a real task removal gets a fresh arrival when it returns');
 });
 
+test('the same agent and task from a new feed begins its own evening routine',()=>{
+  const routine=createBedtimeRoutine(),first=[structuredClone(plots[0])];
+  routine.update(first,night,{time:0,reduce:true,present:first.map(plot=>plot.agent),source:'feed:https://first.example/agents'});
+  assert.equal(routine.update(first,night,{time:1,present:first.map(plot=>plot.agent),source:'feed:https://first.example/agents'}).get('home-0').settled,true);
+
+  const switched=[structuredClone(plots[0])];
+  const fresh=routine.update(switched,night,{time:2,present:switched.map(plot=>plot.agent),source:'feed:https://second.example/agents'}).get('home-0');
+  assert.equal(fresh.settled,false,'a matching fleet ID must not inherit another endpoint\'s tucked-in cycle');
+  assert.equal(routine.update(switched,night,{time:20,present:switched.map(plot=>plot.agent),source:'feed:https://second.example/agents'}).get('home-0').settled,true);
+});
+
 test('blocked and done bubbles retain their moving or tucked-in anchors for a post-palette repaint',()=>{
   const plot={x:80,y:100},actor={x:93.2,y:134.6,indoors:false};
   assert.deepEqual(statusBubbleAnchor({agent:{status:'blocked'},plot,routine:{settled:false},actor,time:1,reduce:true}),{x:102,y:120,status:'blocked'});

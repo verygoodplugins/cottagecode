@@ -7,6 +7,7 @@ import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoi
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
+import { residentTargets } from "./interaction.mjs";
 
 
 /* =======================================================================
@@ -401,6 +402,7 @@ let reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change",e=>{reduce=e.matches;});
 
 let agents = [], plots = [], gardens = [];
+let layoutSource = '';
 const actors = new Map();   // agent id -> villager sprite state, survives each poll
 const bedtime = createBedtimeRoutine();
 let bedtimeFrames = new Map(), lastBedtimeLabel = '';
@@ -1506,7 +1508,7 @@ function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
   const villageLight=observatory?.lightAt(t);
-  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents});
+  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents,source:layoutSource||feedNamespace(ENDPOINT,builtInDemo)});
   const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
   if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
@@ -1619,7 +1621,7 @@ function draw(){
   });
   moveFauna();
   drawFauna();
-  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t);
+  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t,paletteCtx=>observatory.drawApprenticeArrivals(paletteCtx,t));
   const nightInk=Math.min(1,(observatory?.lightAt(t).darkness||0)/.4);
   if(nightInk>0){
     ctx.textBaseline='top';ctx.fillStyle='#bacbe2';
@@ -1901,7 +1903,6 @@ document.getElementById("pause").onclick = (e)=>{
   e.target.textContent = paused ? "resume feed" : "pause feed";
 };
 
-let layoutSource="";
 const refresh=createLatestRefresh(async ()=>{
     const incoming=await fetchAgents();
     if(incoming===null)return true;
@@ -1915,10 +1916,13 @@ const refresh=createLatestRefresh(async ()=>{
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
-  getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>{
+  getResidents:()=>residentTargets(actors,plots).concat([...bedtimeFrames].flatMap(([parentId,r])=>{
+    if(!plots.some(plot=>plot.agent.id===parentId))return [];
+    return r.kids.filter(k=>!k.hidden).map(k=>{
     const arrival=observatory?.apprenticeArrival(k.id,t);
     return arrival||(observatory?.isApprenticeArriving(k.id,t)?null:{id:k.id,x:k.x,y:k.y});
-  }).filter(Boolean))),
+    }).filter(Boolean);
+  })),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh

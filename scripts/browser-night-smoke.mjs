@@ -66,6 +66,11 @@ try{
   assert.deepEqual(dark.done,[121,194,95],'completed residents retain a green status marker after settling');
   assert.deepEqual(dark.pr,daylight.pr,'PR readiness color must survive the palette');
   pass('actual night pixels are darker and blue, working windows warm, PR colors unchanged, families tucked in');
+  agents=[...agents,{id:'night-arrival',taskId:'arrival-task',name:'New Neighbor',parent:'night-host',town:'HubTown',status:'idle',pr:{state:'none',source:'browser-fixture',checkedAt:Date.now()}}];
+  await until("window.cottageObservatory.state.apprentices===1&&!!window.cottageObservatory.apprenticeArrival('night-arrival')",'New apprentice did not begin their arrival walk');
+  const arrivalParcel=await evaluate(`(async()=>{await new Promise(requestAnimationFrame);const c=document.getElementById('town'),p=window.cottageObservatory.apprenticeArrival('night-arrival');return p?Array.from(c.getContext('2d').getImageData(Math.round(p.x+6),Math.round(p.y-6),1,1).data).slice(0,3):null;})()`);
+  assert.ok(arrivalParcel[2]>arrivalParcel[0]+20,'new arrival parcel should use the blue night palette: '+arrivalParcel);
+  pass('a newly arriving apprentice and parcel share the night palette');
   await click('[data-cottage="night-sleeper"]');await click('[data-action="enter"]');
   await until('window.cottageObservatory.state.resting','Host did not go to bed');
   const roomSeed=(await state()).scene.roomSeed;

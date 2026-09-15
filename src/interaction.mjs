@@ -7,6 +7,17 @@ export function cottageDoors(plots, visible = () => true) {
   ]);
 }
 
+/** A resident is interactable only while their own cottage still has a
+ * rendered plot. Actors survive scene refreshes for animation continuity, so
+ * the plot list is the authoritative visibility boundary. */
+export function residentTargets(actors, plots) {
+  const rendered = new Set((plots || [])
+    .filter(plot => plot?.agent && plot.hidden !== true && plot.rendered !== false && plot.visible !== false)
+    .map(plot => plot.agent.id));
+  return [...(actors || [])].flatMap(([id, actor]) =>
+    rendered.has(id) && !actor?.indoors ? [{id, x:actor.x + 5, y:actor.y + 14}] : []);
+}
+
 export function crossedDoor(from, to, doors, direction = 'in') {
   const dy = to.y - from.y;
   if (!Number.isFinite(dy) || (direction === 'out' ? dy <= 0 : dy >= 0)) return null;
