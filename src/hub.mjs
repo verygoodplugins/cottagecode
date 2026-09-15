@@ -243,6 +243,7 @@ export function toCottage(row, now = Date.now()) {
     town,
     role: town,
     status: mapHubStatus(row, now),
+    terminal: terminalHubRun(row),
     task,
     taskId: externalSession ? null : row.id,
     originalAsk,
@@ -289,6 +290,11 @@ export function toCottage(row, now = Date.now()) {
 
 function activeRow(row) {
   return ["running", "awaiting_input", "awaiting_review", "needs_input", "pending", "queued"].includes(String(row.status || "").toLowerCase());
+}
+
+function terminalHubRun(row) {
+  if (row.archived) return true;
+  return ["completed", "failed", "cancelled", "interrupted", "stale"].includes(String(row.status || "").toLowerCase());
 }
 
 function terminalPrPlaceholder(ctx, durableResult) {
@@ -358,21 +364,39 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
        ORDER BY updated_at DESC
        LIMIT ?`
     ).all(cap);
-    const candidateRows = db.prepare(
+    const candidatePageSize = Math.min(Math.max(cap, 32), 200);
+    const candidates = db.prepare(
       `${select}
        WHERE ${possibleRetainedPr}
-       ORDER BY updated_at DESC`
-    ).all();
-
+       ORDER BY updated_at DESC
+       LIMIT ? OFFSET ?`
+    );
     const selected = new Map();
     for (const row of regularRows) selected.set(row.id, { row, regular: true, candidate: false });
-    for (const row of candidateRows) {
-      const prior = selected.get(row.id);
-      selected.set(row.id, { row, regular: prior?.regular || false, candidate: true });
-    }
+
     const now = Date.now();
+    // There can be arbitrarily many terminal or malformed structured records.
+    // Parse bounded pages until the resulting view has enough real outstanding
+    // PRs to fill every non-active slot, without materializing that history.
+    const retainedSlots = Math.max(0, cap - regularRows.filter(activeRow).length);
+    let retainedCandidates = 0;
+    let offset = 0;
+    while (retainedCandidates < retainedSlots) {
+      const page = candidates.all(candidatePageSize, offset);
+      if (!page.length) break;
+      offset += page.length;
+      for (const row of page) {
+        const cottage = toCottage(row, now);
+        if (!hasRetainedPrEvidence(row, cottage, now)) continue;
+        const prior = selected.get(row.id);
+        selected.set(row.id, { row, cottage, regular: prior?.regular || false, candidate: true });
+        retainedCandidates += 1;
+      }
+      if (page.length < candidatePageSize) break;
+    }
+
     const retained = [...selected.values()].map(item => {
-      const cottage = toCottage(item.row, now);
+      const cottage = item.cottage || toCottage(item.row, now);
       return { ...item, cottage, retained: item.candidate && hasRetainedPrEvidence(item.row, cottage, now) };
     }).filter(item => item.regular || item.retained).sort((left, right) => {
       const rank = item => activeRow(item.row) ? 0 : item.retained ? 1 : 2;
