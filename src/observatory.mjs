@@ -59,7 +59,7 @@ export function createObservatory(api){
     const milestones=(history?.events()||[]).filter(e=>e.agentId===id&&(e.taskId||'')===(agent.taskId||'')&&['result','pr','status'].includes(e.kind)).slice(-30).reverse();
     return {agent,room:roomFor(agent),milestones};
   }});
-  const restForRoom=()=>roomRest(room,byId(interiorId),extras.lightAt(performance.now()/1000));
+  const restForRoom=()=>roomRest(room,byId(interiorId),extras.lightAt(performance.now()/1000),api.getBedtimeRoutine?.(interiorId));
   const roomHost=()=>restForRoom()?.host||room?.resident;
   const conversationFor=a=>{
     const taskKey=sourceKey+'|'+a.id+'|'+(a.taskId||''),request=normalizeInputRequest(a.inputRequest);
