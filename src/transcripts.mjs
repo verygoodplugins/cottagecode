@@ -170,7 +170,7 @@ function trackInputRequest(target, line, ts) {
     if (value === null) resolve(target.inputRequest?.id);
     else if (value?.resolved === true || value?.pending === false || value?.resolvedAt || value?.resolved_at)
       resolve(idOf(value.id) || target.inputRequest?.id);
-    else if (idOf(value?.id)) remember(normalizeInputRequest(value, { source: "transcript:input", updatedAt: ts }));
+    else remember(normalizeInputRequest(value, { source: "transcript:input", updatedAt: ts }));
   }
   for (const block of blocksOf(line.message?.content)) {
     if (line.type === "assistant" && block?.type === "tool_use")

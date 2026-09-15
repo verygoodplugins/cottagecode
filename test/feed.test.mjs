@@ -130,6 +130,43 @@ test("Hub resolution suppresses a lagging local question until a distinct newer 
   assert.equal(feed.snapshot().agents[0].status, "blocked");
 });
 
+test("a retained Hub resolution suppresses the same lingering raw Hub prompt", async () => {
+  let resolved = true;
+  let prompt = "Which target?";
+  let requestId = "fixture-question";
+  let updatedAt = now;
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => {
+      const row = {
+        id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+        attention_message: prompt, attention_type: "question", updated_at: updatedAt,
+        context: { integration: { requestId } },
+        ...(resolved ? { attention_response: "Local", attention_resolved_at: now } : {}),
+      };
+      return { ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map() };
+    },
+  });
+
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null);
+  resolved = false;
+  updatedAt = now + 1_000; // A hub heartbeat can update the row without asking again.
+  await feed.scan();
+  const lingering = feed.snapshot();
+  assert.equal(lingering.agents[0].inputRequest, null);
+  assert.equal(lingering.agents[0].status, "idle");
+  assert.equal(lingering.agents[0].attention, "");
+  assert.equal(lingering.letters, 0);
+
+  requestId = "fixture-question-two";
+  prompt = "Which release?";
+  updatedAt = now + 2_000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest.id, "fixture-question-two");
+  assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
 test("resolved terminal Hub attention does not remain blocked or visible", () => {
   for (const status of ["failed", "cancelled", "interrupted"]) {
     for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {

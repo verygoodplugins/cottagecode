@@ -260,11 +260,25 @@ export function createFeed({
       const hubInput = normalizeInputRequest(agent.inputRequest);
       // Keep an observed resolution across the Hub's later field cleanup while
       // a linked transcript may still contain the unanswered tool-use record.
-      const inputRequestResolution = agent.inputRequestResolution || (!hubInput &&
-        previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId ? previous?.inputRequestResolution : null) || null;
+      const sameCachedTask = previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId;
+      // Hub rows can keep reporting an old awaiting-input status after their
+      // response fields disappear. Keep its observed resolution until a
+      // distinct request proves it was asked later.
+      const inputRequestResolution = agent.inputRequestResolution || (sameCachedTask ? previous?.inputRequestResolution : null) || null;
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
-      if (!local) return { ...agent, inputRequestResolution };
+      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
+      if (!local) {
+        const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+          hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+          hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+        const inputRequest = terminal ? null : hubInput && hubInputAfterResolution ? hubInput : null;
+        return {
+          ...agent, inputRequest, inputRequestResolution,
+          ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+            inputRequestResolution ? { status: agent.status === "blocked" ? "idle" : agent.status, attention: "" } : {}),
+        };
+      }
       const hubHasExplicitTask = Boolean(agent.taskId);
       const sameExplicitTask = hubHasExplicitTask && Boolean(local.taskId) &&
         String(agent.taskId) === String(local.taskId);
@@ -296,11 +310,16 @@ export function createFeed({
       const inputAfterResolution = !inputRequestResolution || (localInput &&
         localInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
         localInput.updatedAt && localInput.updatedAt > inputRequestResolution.resolvedAt);
+      const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+        hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+        hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
       const resolvedLocally = hubInput && [...keys].some(key => inputStates.get(key)?.resolvedInputRequests?.has(hubInput.id));
-      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
       const localReplacement = inputInTask && localInput &&
         (!hubInput || localInput.id !== hubInput.id) && inputAfterResolution ? localInput : null;
-      const inputRequest = terminal ? null : !resolvedLocally && hubInput ? hubInput : localReplacement;
+      const inputRequest = terminal ? null : !resolvedLocally && hubInput && hubInputAfterResolution ? hubInput : localReplacement;
+      const hasResolvedInput = !inputRequest && (resolvedLocally || inputRequestResolution);
+      const statusAfterResolution = resolvedLocally && local?.status && local.status !== "blocked" ? local.status :
+        agent.status === "blocked" ? "idle" : agent.status;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
@@ -314,7 +333,7 @@ export function createFeed({
         inputRequest,
         inputRequestResolution,
         ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
-          resolvedLocally ? { status: local.status, attention: "" } : {}),
+          hasResolvedInput ? { status: statusAfterResolution, attention: "" } : {}),
       };
     });
     for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push({ ...agent });
