@@ -633,6 +633,14 @@ test("bundled music supports native ranges, HEAD, and rejects missing or escapin
     assert.equal(Number(response.headers.get("content-length")), end - start + 1);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(start, end + 1));
   }
+  const currentRange = await fetch(base + "day.mp3", { headers: { range: "bytes=0-9", "if-range": etag } });
+  assert.equal(currentRange.status, 206);
+  assert.deepEqual(Buffer.from(await currentRange.arrayBuffer()), bytes.subarray(0, 10));
+  const staleRange = await fetch(base + "day.mp3", { headers: { range: "bytes=0-9", "if-range": '"stale-version"' } });
+  assert.equal(staleRange.status, 200);
+  assert.equal(staleRange.headers.get("content-range"), null);
+  assert.equal(staleRange.headers.get("content-length"), "36");
+  assert.deepEqual(Buffer.from(await staleRange.arrayBuffer()), bytes);
   for (const range of ["bytes=36-", "bytes=9-2", "bytes=-0", "bytes=-", "bytes=0-1,3-4", "items=0-1", "bytes=999999999999999999999-"]) {
     const response = await fetch(base + "day.mp3", { headers: { range } });
     assert.equal(response.status, 416, range);
