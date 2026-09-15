@@ -1,5 +1,10 @@
 import { feedEnvelope } from "./feed-client.mjs";
 
+/** New feed connections must not retain a prior endpoint's paths or couriers. */
+export function blankFeedMeta() {
+  return { source: "", relationships: [], handoffs: [] };
+}
+
 /**
  * Read a feed only while its endpoint is still the selected endpoint. This
  * prevents a late response from one feed populating another feed's town.

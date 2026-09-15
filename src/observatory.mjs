@@ -196,7 +196,7 @@ export function createObservatory(api){
   }
   function recordActivity(a,events){
     for(const e of events||[])if(e.id&&(e.kind==='result'||safeUrl(e.url))){
-      history?.record({id:'activity:'+a.id+':'+(a.taskId||'')+':'+e.id,agentId:a.id,taskId:a.taskId||'',name:a.name,town:a.town,timestamp:Number(e.timestamp)>0?Number(e.timestamp):Date.now(),kind:'result',text:String(e.text||'Recorded artifact').slice(0,1200),url:safeUrl(e.url)});
+      history?.recordObservation({id:'activity:'+a.id+':'+(a.taskId||'')+':'+e.id,agentId:a.id,taskId:a.taskId||'',name:a.name,town:a.town,timestamp:Number(e.timestamp)>0?Number(e.timestamp):Date.now(),kind:'result',text:String(e.text||'Recorded artifact').slice(0,1200),url:safeUrl(e.url)});
     }
   }
   async function ensureActivity(a,{older=false}={}){
@@ -322,7 +322,7 @@ export function createObservatory(api){
   const seenHandoffs=new Set();
   function appendHandoff(e){
     if(seenHandoffs.has(e.id))return;seenHandoffs.add(e.id);
-    history?.record({id:'handoff:'+e.id,agentId:e.agentId||e.from,name:e.name||e.from,town:e.from,timestamp:e.timestamp,kind:'handoff',text:e.text||'Work handed over',url:e.url});
+    history?.recordObservation({id:'handoff:'+e.id,agentId:e.agentId||e.from,name:e.name||e.from,town:e.from,timestamp:e.timestamp,kind:'handoff',text:e.text||'Work handed over',url:e.url});
     const w=api.getWorld(),from=w.districts?.find(d=>d.key===e.from),to=w.districts?.find(d=>d.key===e.to);
     if(from&&to&&Date.now()-e.timestamp<60000)couriers.push({...e,start:performance.now()/1000,fromPoint:{x:from.x+from.w/2,y:from.y+from.h-10},toPoint:{x:to.x+to.w/2,y:to.y+to.h-10}});
   }
