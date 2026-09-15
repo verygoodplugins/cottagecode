@@ -2,7 +2,8 @@ import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
 import { createTownLayout, advanceDuck } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory } from "./observatory.mjs";
-import { feedEnvelope, normalizeCottage } from "./feed-client.mjs";
+import { normalizeCottage } from "./feed-client.mjs";
+import { createLatestRefresh, readCurrentFeed } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 
 
@@ -16,6 +17,8 @@ const POLL_MS = 1500;
 let ENDPOINT = null;
 let builtInDemo = true;
 let LIVE = false, feedStale = false, lastSnapshot = null, lastEndpoint = null;
+let activeFeedAbort = null;
+let feedRevision = 0;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
 let observatory;
 const stableLayout = createTownLayout();
@@ -95,11 +98,17 @@ async function fetchAgents(){
     return SIM.snapshot();
   }
   const endpoint=ENDPOINT;
+  const revision=feedRevision;
+  const current=()=>endpoint===ENDPOINT&&revision===feedRevision;
+  const controller=new AbortController();
+  activeFeedAbort=controller;
   try{
-    const res=await fetch(endpoint,{headers:{accept:"application/json"},signal:AbortSignal.timeout(8000)});
-    if(!res.ok)throw new Error("HTTP "+res.status);
-    const data=feedEnvelope(await res.json());
-    if(endpoint!==ENDPOINT)return agents;
+    const timeout=AbortSignal.timeout(8000);
+    const signal=typeof AbortSignal.any==="function" ? AbortSignal.any([controller.signal,timeout]) : timeout;
+    const incoming=await readCurrentFeed(endpoint,{signal,isCurrent:current});
+    if(incoming.kind==="superseded")return null;
+    if(incoming.kind==="error")throw incoming.error;
+    const data=incoming.data;
     let bundledEmpty=false;
     try{const u=new URL(endpoint,location.href);bundledEmpty=!data.stale&&!data.agents.length&&u.origin===location.origin&&u.pathname==="/agents"&&(!data.source||data.source==="none");}catch{}
     if(bundledEmpty){builtInDemo=true;LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
@@ -109,11 +118,13 @@ async function fetchAgents(){
     feedNote((feedStale?"Stale snapshot · ":"live. ")+list.length+" cottages ("+(data.source||"custom feed")+")",feedStale?"#e7b778":"#94c99e");
     return list;
   }catch(err){
-    if(endpoint!==ENDPOINT)return agents;
+    if(!current())return null;
     feedStale=true;
     if(lastSnapshot&&lastEndpoint===endpoint){LIVE=true;feedNote("Connection interrupted · showing last live snapshot. Retrying…","#e7b778");return lastSnapshot.map(a=>({...a,pr:normalizePr({...a.pr,stale:true,reason:"Feed connection interrupted; PR readiness is unverified."})}));}
     LIVE=false;feedNote("Feed unavailable · "+err.message+". Retrying…","#e7b778");
     return [];
+  }finally{
+    if(activeFeedAbort===controller)activeFeedAbort=null;
   }
 }
 
@@ -1761,12 +1772,17 @@ function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = co
 
 document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
-  if(!v){ ENDPOINT=null;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh();}
+  if(!v){
+    if(ENDPOINT!==null){activeFeedAbort?.abort();feedRevision++;}
+    ENDPOINT=null;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
+  }
   if(!isAllowedFeedUrl(v)){
     feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
     return;
   }
-  ENDPOINT=new URL(v,location.href).href;builtInDemo=false;lastSnapshot=null;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh();
+  const nextEndpoint=new URL(v,location.href).href;
+  if(nextEndpoint!==ENDPOINT){activeFeedAbort?.abort();feedRevision++;}
+  ENDPOINT=nextEndpoint;builtInDemo=false;lastSnapshot=null;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh({latest:true});
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
   if(e.key==="Enter") document.getElementById("connect").click();
@@ -1782,17 +1798,16 @@ document.getElementById("pause").onclick = (e)=>{
   e.target.textContent = paused ? "resume feed" : "pause feed";
 };
 
-let refreshing=false,layoutSource="";
-async function refresh(){
-  if(refreshing)return;
-  refreshing=true;
-  try{
-    agents=await fetchAgents();
+let layoutSource="";
+const refresh=createLatestRefresh(async ()=>{
+    const incoming=await fetchAgents();
+    if(incoming===null)return true;
+    agents=incoming;
     const nextSource=feedNamespace(ENDPOINT,builtInDemo);
     if(nextSource!==layoutSource){layoutSource=nextSource;stableLayout.reset();layoutSignature="";fauna.length=0;}
     layout();observatory?.update(agents,{...FEED_META,stale:feedStale});renderTally();renderPanel();
-  }finally{refreshing=false;}
-}
+    return false;
+});
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
