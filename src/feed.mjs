@@ -200,6 +200,15 @@ function sortCottages(list) {
   });
 }
 
+/** Prefer evidence with a comparable newer clock; an undated snapshot cannot regress a dated one. */
+function newestTodos(current, incoming) {
+  if (!incoming) return current || null;
+  if (!current) return incoming;
+  if (current.updatedAt !== null && incoming.updatedAt === null) return current;
+  if (incoming.updatedAt !== null && (current.updatedAt === null || incoming.updatedAt >= current.updatedAt)) return incoming;
+  return current;
+}
+
 export function createFeed({
   scanClaude = createClaudeScanner(), readHub = readHubAgents, enrich = enrichAgents,
   resolveRepos = createRepoResolver(), timeline = createHubTimelineReader(), now = Date.now,
@@ -275,7 +284,7 @@ export function createFeed({
     for (const agent of combined) {
       const stored = remoteTodos.get(`${agent.id}\n${agent.taskId || ""}\n${agent.sessionId || ""}`);
       const supplied = normalizeTodos(agent.todos);
-      agent.todos = stored && (!supplied || (stored.updatedAt && supplied.updatedAt && stored.updatedAt > supplied.updatedAt)) ? stored : supplied;
+      agent.todos = newestTodos(stored, supplied);
       if (agent.todos && nextErrors.length) agent.todos = { ...agent.todos, stale: true };
     }
     let enriched = combined;
@@ -311,7 +320,7 @@ export function createFeed({
     const currentAgent = cache.find(cottage => identity(cottage) === key) || agent;
     const incoming = normalizeTodos(value);
     const current = normalizeTodos(currentAgent.todos);
-    const todos = incoming && (!current?.updatedAt || !incoming.updatedAt || incoming.updatedAt >= current.updatedAt) ? incoming : current;
+    const todos = newestTodos(current, incoming);
     if (todos) {
       agent.todos = currentAgent.todos = todos;
       remoteTodos.set(key, todos);

@@ -277,6 +277,46 @@ test("remote todo observations survive subsequent feed polls and explicit cleari
   assert.deepEqual(feed.snapshot().agents[0].todos.items, []);
 });
 
+test("dated remote todo observations survive an undated Hub scan", async () => {
+  const dated = { items: [{ id: "dated", text: "Dated remote checklist", status: "in_progress" }], source: "hub:todo", updatedAt: now };
+  let supplied = null;
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => ({ ...emptyHub(), agents: [{ id: "hub-run", taskId: "hub-run", name: "Hub", source: "hub", status: "working", todos: supplied }] }),
+    timeline: { configured: true, read: async () => ({ events: [], source: "hub:codex", todos: dated, hasMore: false, cursor: null }) },
+  });
+
+  await feed.scan();
+  await feed.getActivity("hub-run");
+  supplied = { items: [{ id: "undated", text: "Undated Hub checklist", status: "pending" }], source: "hub:context" };
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Dated remote checklist");
+
+  supplied = { items: [], source: "hub:context", updatedAt: now + 1_000 };
+  await feed.scan();
+  assert.deepEqual(feed.snapshot().agents[0].todos.items, [], "a newer explicit empty snapshot remains a valid clear");
+});
+
+test("undated activity todos cannot replace a dated cottage checklist", async () => {
+  const dated = { items: [{ id: "dated", text: "Dated cottage checklist", status: "in_progress" }], source: "hub:context", updatedAt: now };
+  let incoming = { items: [{ id: "undated", text: "Undated activity checklist", status: "pending" }], source: "hub:todo" };
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => ({ ...emptyHub(), agents: [{ id: "hub-run", taskId: "hub-run", name: "Hub", source: "hub", status: "working", todos: dated }] }),
+    timeline: { configured: true, read: async () => ({ events: [], source: "hub:codex", todos: incoming, hasMore: false, cursor: null }) },
+  });
+
+  await feed.scan();
+  const first = await feed.getActivity("hub-run");
+  assert.equal(first.todos.items[0].text, "Dated cottage checklist");
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Dated cottage checklist");
+
+  incoming = { items: [], source: "hub:todo", updatedAt: now + 1_000 };
+  const cleared = await feed.getActivity("hub-run");
+  assert.deepEqual(cleared.todos.items, [], "a newer explicit empty activity result clears the checklist");
+  assert.deepEqual(feed.snapshot().agents[0].todos.items, []);
+});
+
 test("Hub cottages with local journals refresh dedicated todos without reading the remote timeline", async () => {
   const session = { ...sampleSession(), taskId: "hub-run", taskStartedAt: now - 20_000 };
   const hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 20000, status: "running", task: "Current task", context: {} }, now);
