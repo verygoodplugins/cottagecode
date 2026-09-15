@@ -5,7 +5,7 @@ import { createObservatory } from "./observatory.mjs";
 import { feedEnvelope, normalizeCottage } from "./feed-client.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
-import { createBedtimeRoutine, paintCoop, routineForAgent, villageLifeLabel } from "./bedtime.mjs";
+import { createBedtimeRoutine, paintCoop, routineForAgent, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 
 
 /* =======================================================================
@@ -1585,8 +1585,7 @@ function draw(){
         ctx.strokeRect(k.x-1.5, k.y-1.5, 19, 19);
       }
     });
-    for(const kid of routine?.kids||[]){
-      if(kid.hidden)continue;
+    for(const kid of visibleBedtimeKids(routine,id=>observatory?.isApprenticeArriving(id,t))){
       const agent=p.kids.find(k=>k.agent.id===kid.id)?.agent;
       if(agent)renderResident(ctx,Math.round(kid.x),Math.round(kid.y),observatory.resident(agent),{time:t*1000,walking:kid.walking,scale:.62,reduce});
     }
