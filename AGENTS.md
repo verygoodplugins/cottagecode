@@ -13,6 +13,7 @@ npm start                 # http://127.0.0.1:8787
 npm test                  # Node test runner, no install step
 npm run test:browser      # Real Chrome journey; requires Browser Hand
 npm run test:ambience     # Music, light, and postcards in real Chrome
+npm run test:night        # Night pixels, bedtime and talking beside a bed
 node src/feed.mjs --once  # print one /agents snapshot as JSON
 node src/feed.mjs --host 0.0.0.0 --port 8787
 ```
@@ -42,6 +43,7 @@ duck. Check direct inspector controls, the connect box, and stale-feed recovery.
 | `src/occupancy.mjs` | live / recent / settled, letters, conservative PR identity inference |
 | `src/history.mjs` / `src/sound.mjs` | Bounded browser-local milestones/replay and opt-in Web Audio |
 | `src/village-extras.mjs` / `src/atmosphere.mjs` | Gramophone controls, local-clock light, fireflies and postcard dialog |
+| `src/bedtime.mjs` | Stable evening family routines, chicken coops and sleeping hosts |
 | `src/music.mjs` / `src/music-output.mjs` | Opt-in music lifecycle, crossfades and quiet native media output |
 | `src/music-tracks.mjs` / `src/audio/` | Static soundtrack catalog and bundled MP3s |
 | `src/postcard.mjs` | Local PNG rendering with one deliberately selected milestone |
@@ -72,6 +74,10 @@ clock uses device-local time; musical location follows Jack, not the selected
 inspector. Generation is a manual authoring step, never a browser/build request.
 The public sample ships only static assets; keep its live API connections
 disabled. Postcards default to scenery, with explicit opt-in for a recorded note.
+Night must read as a desaturated blue scene, not a faint wash over daylight.
+Warm night windows represent actual working agents. Bedtime is decorative;
+never change feed status or hide input/PR access because a resident is asleep.
+Child sprites represent recorded parent relationships; chickens are scenery.
 
 Naming lock (also in `.cursor/rules/naming.mdc`):
 

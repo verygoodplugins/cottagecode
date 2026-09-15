@@ -1056,7 +1056,7 @@ function conversationBubble(p, room, time, reduce) {
 }
 
 /** Render into a 240×176 coordinate space; the caller owns camera/scaling. */
-export function renderInterior(ctx, room, { time = 0, agent = {}, player = null, selectedObject = null, reduce = false, talking = false } = {}) {
+export function renderInterior(ctx, room, { time = 0, agent = {}, player = null, selectedObject = null, reduce = false, talking = false, rest = null, paintRest = null } = {}) {
   const frameTime = reduce ? 0 : time;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
@@ -1068,7 +1068,7 @@ export function renderInterior(ctx, room, { time = 0, agent = {}, player = null,
   const signal = reviewSignal(agent.pr);
   const stage = signal.stage;
   const layers = room.objects.filter((object) => object.id !== 'exit').map((object) => ({ y: object.y + object.h, object }));
-  layers.push({ y: room.resident.y, resident: room.resident });
+  if (!rest) layers.push({ y: room.resident.y, resident: room.resident });
   if (player) layers.push({ y: player.y, player });
   layers.sort((a, b) => a.y - b.y);
   for (const layer of layers) {
@@ -1095,11 +1095,14 @@ export function renderInterior(ctx, room, { time = 0, agent = {}, player = null,
       else if (object.id === 'shelf') shelf(ctx, object, room, agent, stage);
       else if (object.id === 'theme') themeFurniture(ctx, object, room);
       else if (object.id === 'hearth') hearth(p, object, frameTime, room);
-      else if (object.id === 'chair') chair(p, object, room);
+      else if (object.id === 'chair') {
+        if (rest && paintRest) paintRest(ctx, room, rest, { time: time / 1000, reduce, talking });
+        else chair(p, object, room);
+      }
       else if (object.id === 'plant') plant(p, object);
     }
   }
-  if (talking) conversationBubble(p, room, frameTime, reduce);
+  if (talking && !rest) conversationBubble(p, room, frameTime, reduce);
   const selectedId = typeof selectedObject === 'object' ? selectedObject?.id : selectedObject;
   const selected = room.objects.find((object) => object.id === selectedId);
   if (selected) {
