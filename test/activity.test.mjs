@@ -369,6 +369,29 @@ test("Hub structured plan snapshots remain available when an incremental page ha
   assert.equal(after.todos.items[0].text, "Run regression tests");
 });
 
+test("a dated timeline checklist remains preferred to an undated todo checkpoint", async () => {
+  let clock = start;
+  let state = "dated";
+  const timeline = createHubTimelineReader({ baseUrl: "http://hub.local", now: () => clock,
+    fetchFn: async url => {
+      if (url.pathname.endsWith("/todo")) return { ok: true, json: async () => ({
+        list: { items: [{ title: state === "dated" ? "Undated checkpoint" : "Undated replacement checkpoint", status: "pending" }] },
+      }) };
+      return { ok: true, json: async () => ({ source: "codex", has_more: false, events: [{
+        id: `plan-${state}`, kind: "plan", items: [{ step: state === "dated" ? "Dated timeline plan" : "Undated timeline plan", status: "in_progress" }],
+        ...(state === "dated" ? { ts: start } : {}),
+      }] }) };
+    },
+  });
+
+  const first = await timeline.read("one");
+  assert.equal(first.todos.items[0].text, "Dated timeline plan");
+  clock += 2_000;
+  state = "undated";
+  const second = await timeline.read("one");
+  assert.equal(second.todos.items[0].text, "Undated replacement checkpoint");
+});
+
 test("Hub dedicated todo snapshots preserve source time, explicit empty, and stale fallback", async () => {
   let clock = start;
   let state = "populated";
