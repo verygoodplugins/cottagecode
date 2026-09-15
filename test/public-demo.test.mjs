@@ -203,7 +203,7 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
     FEED_META: {}, DEMO_META: { source: 'demo' }, SIM: { snapshot: () => snapshot },
     document: { getElementById: id => id === 'endpoint' ? box : connect },
     location: { origin: 'https://sample.example', href: 'https://sample.example/cottagecode/' + search, protocol: 'https:', search },
-    URL, URLSearchParams, AbortSignal, activeFeedAbort: null, feedRevision: 0,
+    URL, URLSearchParams, AbortSignal, AbortController, activeFeedAbort: null, feedRevision: 0,
     readCurrentFeed: async (...args) => { requests.push(args); return { kind: 'error', error: new Error('No live source should be reached.') }; },
     feedNote: (...args) => notes.push(args), refresh: () => refreshes.push('refresh'),
     isAllowedFeedUrl: value => /^https?:\/\//.test(value), stableLayout: { reset: () => resets.push('reset') },
