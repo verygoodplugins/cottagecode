@@ -32,6 +32,18 @@ export function createHubMessenger({
   ledgerPath=process.env.COTTAGE_MESSAGE_LEDGER||join(homedir(),'.cottagecode','message-receipts.jsonl'),
 }={}){
   const base=hubBase(baseUrl),entries=new Map();let loaded=false,queue=Promise.resolve();
+  const receiptHashes=(cottageId,payload,message)=>[
+    createHash('sha256').update(JSON.stringify([cottageId,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex'),
+    createHash('sha256').update(JSON.stringify([cottageId,payload.taskId,message])).digest('hex'),
+  ];
+  async function priorReceipt(cottageId,payload){
+    const message=typeof payload?.message==='string'?payload.message.trim():'';
+    if(!cottageId||!message||message.length>MAX_MESSAGE_LENGTH||typeof payload?.requestId!=='string'||!/^[a-zA-Z0-9_-]{8,100}$/.test(payload.requestId))return null;
+    try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
+    const previous=entries.get(payload.requestId);
+    if(!previous||!receiptHashes(cottageId,payload,message).includes(previous.hash))return null;
+    return previous.response||unknown();
+  }
   function capability(agent,{stale=false,checkedAt=now()}={}){
     const unavailable=reason=>({available:false,reason,source:'autohub',checkedAt});
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
@@ -92,11 +104,7 @@ export function createHubMessenger({
     // A retry can arrive after this cottage advances to a new task. Its receipt
     // belongs to the task identity in the original payload, so inspect it before
     // treating the current cottage as changed.
-    const hash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
-    // Receipts written before input rounds were part of the request identity
-    // contain only the cottage, task, and message. Keep those reservations
-    // durable when a current browser retry includes its displayed question.
-    const legacyHash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,message])).digest('hex');
+    const [hash,legacyHash]=receiptHashes(agent.id,payload,message);
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
     if(previous){
@@ -144,7 +152,7 @@ export function createHubMessenger({
     try{await remember({...entry,response:receipt});}catch{return unknown();}
     return receipt;
   }
-  return {capability,
+  return {capability,priorReceipt,
     send(agent,payload,meta={}){
       // The durable reservation precedes the only write request. Repeated Send,
       // a timeout, or a process restart cannot replay an uncertain instruction.

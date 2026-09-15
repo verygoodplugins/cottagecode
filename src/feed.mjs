@@ -467,7 +467,14 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return json(400, { error: "Invalid message", delivery: "not_sent" });
         if (feed.scan) await feed.scan();
         const snapshot = feed.snapshot(), agent = snapshot.agents.find(agent => agent.id === decodeURIComponent(messageRoute[1]));
-        if (!agent) return json(404, { error: "Cottage not found", delivery: "not_sent" });
+        if (!agent) {
+          // A browser retry can outlive a just-finished or refreshed cottage.
+          // Consult only the exact durable receipt for this route and payload;
+          // no task is fetched or message is sent when the cottage is absent.
+          const receipt = await messages.priorReceipt?.(decodeURIComponent(messageRoute[1]), payload);
+          if (receipt) return json(receipt.status, receipt.body);
+          return json(404, { error: "Cottage not found", delivery: "not_sent" });
+        }
         const sent = await messages.send(agent, payload, { stale: !!snapshot.stale, checkedAt: snapshot.checkedAt });
         return json(sent.status, sent.body);
       }
