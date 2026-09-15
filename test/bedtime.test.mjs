@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBedtimeRoutine,isBedtime,roomRest,paintBed,villageLifeLabel} from '../src/bedtime.mjs';
+import {createBedtimeRoutine,isBedtime,roomRest,paintBed,routineForAgent,villageLifeLabel} from '../src/bedtime.mjs';
 import {createInterior,isWalkable} from '../src/interiors.mjs';
 
 const plots=Array.from({length:8},(_,i)=>({x:80+i*80,y:100,agent:{id:'home-'+i,taskId:'task-one',status:i===0?'working':i===1?'blocked':'idle'},
@@ -79,6 +79,17 @@ test('disabling reduced motion does not bring a tucked family back outside',()=>
   const routine=createBedtimeRoutine();routine.update(plots,night,{time:0});
   routine.update(plots,night,{time:1,reduce:true});
   assert.ok([...routine.update(plots,night,{time:2}).values()].every(r=>r.settled));
+});
+
+test('a settled family supplies bedtime state to its nonworking shed apprentice',()=>{
+  const routine=createBedtimeRoutine();
+  const frames=routine.update(plots,night,{time:0,reduce:true});
+  const child={...plots[0].kids[0].agent,status:'idle'};
+  const shared=routineForAgent(frames,child);
+  assert.equal(shared,frames.get('home-0'));
+  assert.ok(roomRest(createInterior(child),child,night,shared),'the tucked child uses its family arrival state');
+  assert.equal(roomRest(createInterior(child),{...child,status:'working'},night,shared),null,'late child work stays awake');
+  assert.equal(routineForAgent(frames,{id:'orphan',parent:'missing'}),null);
 });
 
 test('sleeping bed keeps room geometry stable and a reachable host in every layout',()=>{

@@ -78,6 +78,12 @@ export function createBedtimeRoutine() {
   };
 }
 
+/** A shed apprentice returns with its recorded family, while retaining its own work status indoors. */
+export function routineForAgent(routines, agent) {
+  if (!routines?.get || !agent?.id) return null;
+  return routines.get(agent.id) || (agent.parent ? routines.get(agent.parent) || null : null);
+}
+
 /** The armchair's footprint becomes a little bed; authored walking lanes stay put. */
 export function roomRest(room, agent, light, routine) {
   const bed = room?.objects?.find(object => object.id === 'chair');
