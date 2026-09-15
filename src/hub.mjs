@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
 import { timestampMs } from "./activity.mjs";
+import { hasOutstandingPr } from "./pr.mjs";
 import {
   classifyOccupancy,
   inferPr,
@@ -268,6 +269,32 @@ export function toCottage(row, now = Date.now()) {
   return cottage;
 }
 
+function activeRow(row) {
+  return ["running", "awaiting_input", "awaiting_review", "needs_input", "pending", "queued"].includes(String(row.status || "").toLowerCase());
+}
+
+function terminalPrPlaceholder(ctx, durableResult) {
+  const prValues = [ctx.pr, ctx.pullRequest, durableResult.pr, durableResult.pullRequest];
+  const receipts = [ctx.finalization, ctx.pr?.finalization, ctx.pullRequest?.finalization,
+    durableResult.finalization, durableResult.pr?.finalization, durableResult.pullRequest?.finalization];
+  return prValues.some(value => ["none", "merged", "closed"].includes(String(value?.state || "").toLowerCase())) ||
+    receipts.some(value => ["not_needed", "none", "merged", "closed"].includes(String(value?.status || "").toLowerCase()));
+}
+
+/**
+ * A retention row must survive the same parsing used by the public feed. SQL
+ * only finds plausible structured candidates; this second pass rejects null,
+ * malformed, and terminal placeholders before they receive cap priority.
+ */
+function hasRetainedPrEvidence(row, cottage, now) {
+  const ctx = parseContext(row.context);
+  const durableResult = parseContext(row.result);
+  const pr = cottage.pr || {};
+  return !terminalPrPlaceholder(ctx, durableResult) &&
+    ["context", "finalization"].includes(pr.source) &&
+    Boolean(pr.number || pr.url) && hasOutstandingPr(cottage, now);
+}
+
 export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH || null } = {}) {
   if (!dbPath) return { ok: true, missing: true, agents: [], keys: new Set() };
 
@@ -277,65 +304,71 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
     const columns = new Set(db.prepare("PRAGMA table_info(agent_runs)").all().map(column => column.name));
     const optional = ["record_kind", "request_spec", "result"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
     const cap = Math.min(Math.max(limit, 1), 500);
-    const retainedPr = `(
-      context LIKE '%"pullRequest"%'
-      OR (json_valid(context) AND (
-        lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
-        OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
-        -- Keep completed tasks whose durable context identifies a PR. These
-        -- forms are intentionally aligned with inferPr()/toCottage().
-        OR json_extract(context, '$.finalization.pullRequestNumber') IS NOT NULL
-        OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
-        OR json_extract(context, '$.pr.number') IS NOT NULL
-        OR json_extract(context, '$.pr.url') IS NOT NULL
-        -- inferPr() accepts an explicit open state even before an
-        -- identity is available; hasOutstandingPr() keeps it visible.
-        OR lower(json_extract(context, '$.pr.state')) = 'open'
-        OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
-        OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
-      ))
-      ${columns.has("result") ? `OR CASE WHEN json_valid(result) THEN
-        json_extract(result, '$.pullRequest') IS NOT NULL
-        OR json_extract(result, '$.finalization.pullRequestNumber') IS NOT NULL
-        OR json_extract(result, '$.finalization.pullRequestUrl') IS NOT NULL
-      ELSE 0 END` : ""}
+    const numberAt = (column, path) => `CAST(json_extract(${column}, '${path}') AS INTEGER) > 0`;
+    const urlAt = (column, path) => `json_extract(${column}, '${path}') LIKE '%/pull/%'`;
+    const structuredIdentity = column => [
+      numberAt(column, "$.finalization.pullRequestNumber"), urlAt(column, "$.finalization.pullRequestUrl"),
+      numberAt(column, "$.pr.number"), urlAt(column, "$.pr.url"),
+      numberAt(column, "$.pr.finalization.pullRequestNumber"), urlAt(column, "$.pr.finalization.pullRequestUrl"),
+      numberAt(column, "$.pullRequest.number"), urlAt(column, "$.pullRequest.url"),
+      numberAt(column, "$.pullRequest.finalization.pullRequestNumber"), urlAt(column, "$.pullRequest.finalization.pullRequestUrl"),
+      `(${numberAt(column, "$.githubAutoJackRequest.targetNumber")} AND lower(json_extract(${column}, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request'))`,
+      urlAt(column, "$.githubAutoJackRequest.targetUrl"),
+    ].join(" OR ");
+    // Do not use broad string matching here: a JSON key with null data is not
+    // PR evidence. Final parsing below establishes the actual state.
+    const possibleRetainedPr = `(
+      json_valid(context) AND (${structuredIdentity("context")})
+      ${columns.has("result") ? `OR (json_valid(result) AND (${structuredIdentity("result")}))` : ""}
     )`;
     const activeStates = "status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')";
-    const rows = db
-      .prepare(
-        `SELECT
-           id, agent, status, task, user, platform, model, parent_id, session_id,
-           context, queued_at, started_at, completed_at, updated_at, archived,
-           input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
-           total_cost, error, result_summary, attention_type, attention_message,
-           ${optional}
-         FROM agent_runs
-         WHERE updated_at > datetime('now', '-24 hours')
-            OR ${activeStates}
-            OR ${retainedPr}
-            OR context LIKE '%"babysitHandoff"%'
-         ORDER BY
-           CASE
-             WHEN ${activeStates} THEN 0
-             -- A current default-sized view must not evict an old cottage
-             -- which still carries a PR the user needs to inspect.
-             WHEN ${retainedPr} THEN 1
-             ELSE 2
-           END,
-           updated_at DESC
-         LIMIT ?`
-      )
-      .all(cap);
+    const select = `SELECT
+       id, agent, status, task, user, platform, model, parent_id, session_id,
+       context, queued_at, started_at, completed_at, updated_at, archived,
+       input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
+       total_cost, error, result_summary, attention_type, attention_message,
+       ${optional}
+     FROM agent_runs`;
+    // The normal slice stays bounded. Potential retention rows are read
+    // separately so a null or terminal placeholder cannot evict a real PR
+    // before Node has parsed it.
+    const regularRows = db.prepare(
+      `${select}
+       WHERE updated_at > datetime('now', '-24 hours')
+          OR ${activeStates}
+          OR context LIKE '%"babysitHandoff"%'
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    ).all(cap);
+    const candidateRows = db.prepare(
+      `${select}
+       WHERE ${possibleRetainedPr}
+       ORDER BY updated_at DESC`
+    ).all();
 
+    const selected = new Map();
+    for (const row of regularRows) selected.set(row.id, { row, regular: true, candidate: false });
+    for (const row of candidateRows) {
+      const prior = selected.get(row.id);
+      selected.set(row.id, { row, regular: prior?.regular || false, candidate: true });
+    }
     const now = Date.now();
+    const retained = [...selected.values()].map(item => {
+      const cottage = toCottage(item.row, now);
+      return { ...item, cottage, retained: item.candidate && hasRetainedPrEvidence(item.row, cottage, now) };
+    }).filter(item => item.regular || item.retained).sort((left, right) => {
+      const rank = item => activeRow(item.row) ? 0 : item.retained ? 1 : 2;
+      return rank(left) - rank(right) || parseDbTimestampMs(right.row.updated_at) - parseDbTimestampMs(left.row.updated_at);
+    }).slice(0, cap);
+
     const keys = new Set();
     const links = new Map();
-    const agents = rows.map((row) => {
+    const agents = retained.map(({ row, cottage }) => {
       const ctx = parseContext(row.context);
       const related = hubDedupKeys(row, ctx);
       links.set(row.id, related);
-      for (const k of related) keys.add(k);
-      return toCottage(row, now);
+      for (const key of related) keys.add(key);
+      return cottage;
     });
     return { ok: true, dbPath, agents, keys, links };
   } catch (err) {

@@ -244,10 +244,17 @@ test("HTTP serves modules and incremental activity while refusing writes and tra
   await once(server, "listening");
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const response = await fetch(`${base}/agents`);
+  const response = await fetch(`${base}/agents`, { headers: { Origin: base } });
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  assert.equal(response.headers.get("access-control-allow-origin"), null,
+    "the local feed does not opt arbitrary pages into reading private agent data");
   assert.equal((await response.json()).agents.length, 1);
+  const crossOrigin = await fetch(`${base}/agents`, { headers: { Origin: "https://example.test" } });
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(crossOrigin.headers.get("access-control-allow-origin"), null);
+  const crossOriginActivity = await fetch(`${base}/agents/session-1/activity`, { headers: { Origin: "https://example.test" } });
+  assert.equal(crossOriginActivity.status, 403);
+  assert.equal((await fetch(`${base}/agents`)).status, 200, "local command-line reads remain available");
   const module = await fetch(`${base}/modules/scene.mjs`);
   assert.match(module.headers.get("content-type"), /javascript/);
   assert.equal(await module.text(), "export const ready = true;");
@@ -356,13 +363,20 @@ test("Hub prioritizes historic PR evidence above the default completed-task cap"
   for (let index = 0; index < 81; index++) {
     fresh.run(`completed-${index}`, "Resident", "completed", "Recent task", "{}");
   }
+  const historic = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  historic.run("placeholder-open", "Resident", "completed", "Placeholder", JSON.stringify({ pr: { state: "open", number: null } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
+  historic.run("terminal-pr", "Resident", "completed", "Merged work", JSON.stringify({ repo: "owner/repo", pr: { state: "merged", number: 92 } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
   db.close();
 
   const result = readHubAgents({ dbPath: path });
   assert.equal(result.ok, true);
   assert.equal(result.agents.length, 80, "the regular result cap stays bounded");
   assert.equal(result.agents.find(agent => agent.id === "historic-pr")?.pr.number, 91,
-    "a completed row retained only for structured PR evidence wins a place in the default view");
+    "a completed row retained only for parsed outstanding PR evidence wins a place in the default view");
+  assert.equal(result.agents.some(agent => agent.id === "placeholder-open"), false,
+    "a null open-state placeholder cannot consume the retention priority");
+  assert.equal(result.agents.some(agent => agent.id === "terminal-pr"), false,
+    "a merged PR cannot consume the retention priority");
 });
 
 test("Hub retains old context-only PR receipts", async t => {
@@ -396,7 +410,7 @@ test("Hub retains old context-only PR receipts", async t => {
   assert.equal(result.agents.find(agent => agent.id === "context-pr-receipt")?.pr.number, 77);
 });
 
-test("Hub retains old explicit open PR state without an identity", async t => {
+test("Hub drops old explicit open PR placeholders without an identity", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-hub-open-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "hub.db");
@@ -414,9 +428,8 @@ test("Hub retains old explicit open PR state without an identity", async t => {
   db.close();
 
   const result = readHubAgents({ dbPath: path });
-  const retained = result.agents.find(agent => agent.id === "context-open-state");
-  assert.equal(retained?.pr.state, "open");
-  assert.equal(retained?.occupancy, "live");
+  assert.equal(result.agents.some(agent => agent.id === "context-open-state"), false,
+    "an unidentifiable open state is not durable PR evidence");
 });
 
 test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {
