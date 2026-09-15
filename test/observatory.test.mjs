@@ -26,4 +26,3 @@ test('inline activity routes only complete handoffs to the append path',()=>{
   ],event=>appended.push(event));
   assert.deepEqual(appended,[{id:'handoff',kind:'handoff',from:'HubTown',to:'AppTown',text:'Interface contract ready'}]);
 });
-});
