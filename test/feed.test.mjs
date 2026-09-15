@@ -283,6 +283,26 @@ test("a mismatched explicit local task ID cannot donate todos by timestamp", asy
   assert.equal(feed.snapshot().agents[0].todos, null);
 });
 
+test("a dated Hub todo snapshot remains preferred over an undated matching local snapshot", async () => {
+  const local = {
+    ...sampleSession(), taskId: "hub-run",
+    todos: { items: [{ id: "local", text: "Undated local checklist", status: "pending" }], source: "fixture" },
+  };
+  const hubAgent = toCottage({
+    id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 1_000,
+    status: "running", task: "Current Hub task", context: {},
+    todo_snapshot: JSON.stringify({ items: [{ id: "hub", text: "Dated Hub checklist", status: "in_progress" }] }),
+    todo_updated_at: new Date(now).toISOString(),
+  }, now);
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([local], { now }), sessions: [local] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-run", new Set(["session-1"])]] ) }),
+  });
+
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos.items[0].text, "Dated Hub checklist");
+});
+
 test("scan failures retain the last live snapshot and mark it stale, then recover", async () => {
   let failing = false;
   const session = sampleSession();

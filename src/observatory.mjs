@@ -28,7 +28,10 @@ const safeUrl=raw=>{try{const u=new URL(raw);return ['http:','https:'].includes(
 const clock=value=>{const ms=validTime(value);return ms?new Date(ms).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';};
 const elapsed=agent=>{const duration=elapsedMs(agent);if(duration===null)return 'Unavailable';const sec=Math.floor(duration/1000);return Math.floor(sec/60)+'m '+(sec%60)+'s';};
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-const button=(action,label,extra='')=>'<button type="button" data-action="'+action+'" '+extra+'>'+label+'</button>';
+export const button=(action,label,extra='')=>'<button type="button" data-action="'+esc(action)+'" '+extra+'>'+label+'</button>';
+export function appendInlineHandoffs(events,append){
+  for(const event of events||[])if(event?.kind==='handoff'&&event.from&&event.to)append(event);
+}
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
@@ -219,7 +222,7 @@ export function createObservatory(api){
     if(log&&same&&!atEnd&&anchorId){const current=[...log.querySelectorAll('[data-event]')].find(e=>e.dataset.event===anchorId);if(current)log.scrollTop+=current.getBoundingClientRect().top-log.getBoundingClientRect().top-anchorOffset;}
     if(log&&!same)log.scrollTop=log.scrollHeight;
     if(journalFocused)log?.focus({preventScroll:true});
-    if(focus)panel.querySelector('[data-action="'+focus+'"]')?.focus({preventScroll:true});
+    if(focus)[...panel.querySelectorAll('[data-action]')].find(node=>node.dataset.action===focus)?.focus({preventScroll:true});
     if(composing){const input=$('agent-message');if(input){input.focus({preventScroll:true});input.setSelectionRange(selection[0],selection[1]);input.scrollTop=selection[2];}}
     if(todosOpen&&panel.querySelector('.talk-todos'))panel.querySelector('.talk-todos').open=true;
     if(todoScroll&&panel.querySelector('.todo-list'))panel.querySelector('.todo-list').scrollTop=todoScroll;
@@ -240,7 +243,10 @@ export function createObservatory(api){
   async function ensureActivity(a,{older=false}={}){
     if(!a)return;
     const cache=cacheFor(a);
-    if(Array.isArray(a.events)){cache.events=mergeActivity(cache.events,a.events);cache.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');return;}
+    if(Array.isArray(a.events)){
+      cache.events=mergeActivity(cache.events,a.events);cache.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');
+      appendInlineHandoffs(cache.events,appendHandoff);return;
+    }
     const url=activityAddress(a,api.getEndpoint());if(!url||inflight.has(a.id))return;
     if(older&&cache.events.length)url.searchParams.set('before',cache.events[0].id);
     else if(cache.events.length)url.searchParams.set('after',cache.cursor||cache.events.at(-1).id);
@@ -453,7 +459,10 @@ export function createObservatory(api){
       if(a.parent&&!knownKids.has(a.id)){
         knownKids.add(a.id);if(historyInitialized)apprentices.push({id:a.id,parent:a.parent,start:performance.now()/1000});
       }
-      const c=cacheFor(a);if(Array.isArray(a.events)){c.events=mergeActivity(c.events,a.events);c.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');recordActivity(a,a.events);}
+      const c=cacheFor(a);if(Array.isArray(a.events)){
+        c.events=mergeActivity(c.events,a.events);c.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');recordActivity(a,a.events);
+        appendInlineHandoffs(c.events,appendHandoff);
+      }
       const line=latestLine(a),oldLine=activityLines.get(a.id),p=plotFor(a.id);
       if(line&&oldLine&&line!==oldLine&&p&&player&&a.status==='working'){
         const proximity=mode==='room'?(a.id===interiorId?0:Infinity):distance(player,p);
