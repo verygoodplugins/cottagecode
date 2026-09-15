@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isPracticeDemo,button,appendInlineHandoffs,isApprenticeArrivalActive} from '../src/observatory.mjs';
+import {isPracticeDemo,button,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -34,4 +34,15 @@ test('an apprentice arrival stays active only during its visible walk',()=>{
   assert.equal(isApprenticeArrivalActive(arrivals,'pip',108),false);
   assert.equal(isApprenticeArrivalActive(arrivals,'moss',100),false);
   assert.equal(isApprenticeArrivalActive(arrivals,'unknown',101),false);
+});
+
+
+test('an arriving apprentice uses its visible walking position and never a stale family hitbox',()=>{
+  const arrivals=[{id:'pip',parent:'bolt',start:100}];
+  const plots=[{x:100,y:200,agent:{id:'bolt'},kids:[{x:160,y:220,agent:{id:'pip'}}]}];
+  const familyPosition={id:'pip',x:168,y:240};
+  assert.deepEqual(apprenticeArrivalPosition(arrivals,'pip',plots,103),{id:'pip',x:147.5,y:256});
+  assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,103,familyPosition),{id:'pip',x:147.5,y:256},'talk and click follow the visible walk');
+  assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,108,familyPosition),familyPosition,'family interaction resumes after the arrival');
+  assert.equal(apprenticeResidentPosition(arrivals,'pip',[],103,familyPosition),null,'an active arrival with no visible position cannot expose a stale hitbox');
 });

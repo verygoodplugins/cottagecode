@@ -52,6 +52,27 @@ export function isApprenticeArrivalActive(arrivals, id, time, duration=8){
   return arrivals.some(arrival=>arrival?.id===id&&activeArrivalEntry(arrival,time,duration));
 }
 
+/** The same walking position drives both the sprite and its talk/click target. */
+export function apprenticeArrivalPosition(arrivals, id, plots, time, {reduce=false,duration=8}={}){
+  if(!Array.isArray(arrivals)||!Array.isArray(plots)||!id||!Number.isFinite(time))return null;
+  const arrival=arrivals.find(entry=>entry?.id===id&&activeArrivalEntry(entry,time,duration));
+  if(!arrival)return null;
+  const from=plots.find(plot=>plot?.agent?.id===arrival.parent);
+  const to=plots.find(plot=>plot?.agent?.id===arrival.id)||(from?.kids||[]).find(kid=>kid?.agent?.id===arrival.id);
+  if(!from||!to)return null;
+  const destination=to.parentPlot?to:to.agent?.id===arrival.id?{x:to.x,y:to.y}:null;
+  if(!destination)return null;
+  const fraction=reduce?1:Math.min(1,(time-arrival.start)/6);
+  return {id:arrival.id,x:from.x+27+(destination.x-from.x-19)*fraction,y:from.y+76+(destination.y-from.y-60)*fraction};
+}
+
+/** Active arrivals never leave a stale family coordinate interactive. */
+export function apprenticeResidentPosition(arrivals, id, plots, time, fallback, options={}){
+  const arrival=apprenticeArrivalPosition(arrivals,id,plots,time,options);
+  if(arrival)return arrival;
+  return isApprenticeArrivalActive(arrivals,id,time,options.duration)||!fallback?null:fallback;
+}
+
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
@@ -527,9 +548,9 @@ export function createObservatory(api){
     }
     apprentices=apprentices.filter(e=>activeArrivalEntry(e,time));
     for(const kid of apprentices){
-      const from=plotFor(kid.parent),to=plotFor(kid.id);if(!from||!to)continue;
-      const f=reduce?1:Math.min(1,(time-kid.start)/6),x=from.x+27+(to.x-from.x-19)*f,y=from.y+76+(to.y-from.y-60)*f;
-      renderResident(ctx,x,y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(x+4,y-8,6,5);
+      const to=plotFor(kid.id),position=apprenticeArrivalPosition(apprentices,kid.id,api.getPlots(),time,{reduce});
+      if(!to||!position)continue;
+      renderResident(ctx,position.x,position.y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(position.x+4,position.y-8,6,5);
     }
     if(board){
       ctx.fillStyle='#59402c';ctx.fillRect(board.x-14,board.y-17,28,21);ctx.fillRect(board.x-11,board.y+4,3,8);ctx.fillRect(board.x+8,board.y+4,3,8);
@@ -592,6 +613,7 @@ export function createObservatory(api){
     lightAt:time=>extras.lightAt(time),
     resident:a=>roomFor(a).resident,sound,
     isApprenticeArriving:(id,time=performance.now()/1000)=>isApprenticeArrivalActive(apprentices,id,time),
+    apprenticeArrival:(id,time=performance.now()/1000)=>apprenticeResidentPosition(apprentices,id,api.getPlots(),time,null,{reduce}),
     isTalking:id=>talkingId===id&&performance.now()<talkingUntil,
     get player(){return player;},get mode(){return mode;},
     get state(){return {mode,selected,interiorId,roomSeed:room?.seed,roomPlayer,resident:room?{...room.resident,...roomHost()}:null,resting:!!restForRoom(),roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(interiorId||selected),...extras.state};}
