@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBedtimeRoutine,isBedtime,roomRest,paintBed} from '../src/bedtime.mjs';
+import {createBedtimeRoutine,isBedtime,roomRest,paintBed,villageLifeLabel} from '../src/bedtime.mjs';
 import {createInterior,isWalkable} from '../src/interiors.mjs';
 
 const plots=Array.from({length:8},(_,i)=>({x:80+i*80,y:100,agent:{id:'home-'+i,taskId:'task-one',status:i===0?'working':i===1?'blocked':'idle'},
@@ -10,6 +10,12 @@ const night={hour:23},day={hour:12};
 test('bedtime follows the evening clock including midnight, not invalid input',()=>{
   for(const hour of [0,4.99,18.5,19,23])assert.equal(isBedtime({hour}),true);
   for(const hour of [5,12,18.49,null,undefined,NaN,'night'])assert.equal(isBedtime({hour}),false);
+});
+
+test('village-life copy follows the clock when no families are rendered',()=>{
+  assert.equal(villageLifeLabel(night,[]),'The village is tucked in · 0 cottages working late');
+  assert.equal(villageLifeLabel(day,[]),'Daytime · Children and chickens in the gardens');
+  assert.equal(villageLifeLabel(night,[{evening:true,settled:false}]),'Families are heading home · Chickens to their coops');
 });
 
 test('families gather once, then children and hens get indoors without changing task state',()=>{
@@ -80,13 +86,14 @@ test('sleeping bed keeps room geometry stable and a reachable host in every layo
   for(let i=0;i<60;i++){
     const room=createInterior({id:'room-'+i,town:'MemTown'}),before=JSON.stringify(room);
     layouts.add(room.layout);
-    const rest=roomRest(room,{status:'idle'},night);
+    const rest=roomRest(room,{status:'idle'},night,{settled:true});
     assert.ok(rest);assert.equal(rest.bed.id,'chair');
     let near=false;
     for(let y=room.floor.y;y<room.floor.y+room.floor.h;y+=2)for(let x=room.floor.x;x<room.floor.x+room.floor.w;x+=2)
       if(isWalkable(room,x,y)&&Math.hypot(x-rest.host.x,y-rest.host.y)<25)near=true;
     assert.ok(near,'host can be spoken to from a walking lane');
-    assert.equal(roomRest(room,{status:'working'},night),null);
+    assert.equal(roomRest(room,{status:'idle'},night,{settled:false}),null,'the indoor pose waits for this cottage to arrive home');
+    assert.equal(roomRest(room,{status:'working'},night,{settled:true}),null);
     assert.equal(roomRest(room,{status:'blocked'},day),null);
     assert.equal(JSON.stringify(room),before);
   }
@@ -94,7 +101,7 @@ test('sleeping bed keeps room geometry stable and a reachable host in every layo
 });
 
 test('bed painter remains static under reduced motion and handles talking',()=>{
-  const room=createInterior({id:'bed'}),rest=roomRest(room,{status:'idle'},night);
+  const room=createInterior({id:'bed'}),rest=roomRest(room,{status:'idle'},night,{settled:true});
   const draw=(time,talking=false)=>{
     const calls=[],ctx={save(){},restore(){},fillRect(...rect){calls.push([...rect,this.fillStyle]);}};
     paintBed(ctx,room,rest,{time,reduce:true,talking});return calls;

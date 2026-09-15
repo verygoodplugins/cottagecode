@@ -5,7 +5,7 @@ import { createObservatory } from "./observatory.mjs";
 import { feedEnvelope, normalizeCottage } from "./feed-client.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
-import { createBedtimeRoutine, paintCoop } from "./bedtime.mjs";
+import { createBedtimeRoutine, paintCoop, villageLifeLabel } from "./bedtime.mjs";
 
 
 /* =======================================================================
@@ -1482,10 +1482,9 @@ function placeJack(){
 function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
-  bedtimeFrames=bedtime.update(plots,observatory?.lightAt(t),{time:t,reduce});
-  const families=[...bedtimeFrames.values()],gathering=families.some(f=>f.evening&&!f.settled);
-  const late=families.filter(f=>f.mode==='working-late').length;
-  const bedtimeLabel=gathering?'Families are heading home · Chickens to their coops':families.some(f=>f.evening)?'The village is tucked in · '+late+' cottage'+(late===1?'':'s')+' working late':'Daytime · Children and chickens in the gardens';
+  const villageLight=observatory?.lightAt(t);
+  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce});
+  const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
   if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
 
@@ -1888,6 +1887,7 @@ async function refresh(){
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>FEED_META.source==="demo"?"demo":ENDPOINT||"demo",
+  getBedtimeRoutine:id=>bedtimeFrames.get(id),
   getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>({id:k.id,x:k.x,y:k.y})))),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,

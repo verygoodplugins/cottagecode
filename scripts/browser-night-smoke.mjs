@@ -44,6 +44,12 @@ try{
   await fill('#village-time','Night');
   await until('window.cottageState().bedtime.some(r=>r.mode==="gathering")','Families did not gather');
   const moving=(await state()).bedtime.find(r=>r.id==='night-host');assert.equal(moving.kids[0].hidden,false);
+  assert.equal((await state()).bedtime.find(r=>r.id==='night-sleeper').settled,false,'the selected host is still walking home');
+  await evaluate("window.cottageObservatory.enter('night-sleeper')");
+  await until('window.cottageObservatory.state.mode==="room"','Cottage did not open during homecoming');
+  assert.equal((await state()).scene.resting,false,'a host remains outside until its own homecoming settles');
+  await evaluate('window.cottageObservatory.leave()');
+  await until('window.cottageObservatory.state.mode==="town"','Cottage did not close after the homecoming check');
   await until('window.cottageState().bedtime.every(r=>r.settled)','Families did not settle');
   const after=await state(),dark=await samples();
   assert.deepEqual(after.agents.map(a=>[a.id,a.status]),original);
@@ -55,7 +61,7 @@ try{
   assert.deepEqual(dark.done,[121,194,95],'completed residents retain a green status marker after settling');
   assert.deepEqual(dark.pr,daylight.pr,'PR readiness color must survive the palette');
   pass('actual night pixels are darker and blue, working windows warm, PR colors unchanged, families tucked in');
-  await click('.cottage-directory > summary');await click('[data-cottage="night-sleeper"]');await click('[data-action="enter"]');
+  await click('[data-cottage="night-sleeper"]');await click('[data-action="enter"]');
   await until('window.cottageObservatory.state.resting','Host did not go to bed');
   const roomSeed=(await state()).scene.roomSeed;
   await evaluate(`(async()=>{

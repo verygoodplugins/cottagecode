@@ -9,6 +9,18 @@ export function isBedtime(light) {
   const hour = light?.hour;
   return Number.isFinite(hour) && (hour >= 18.5 || hour < 5);
 }
+
+/** The live clock stays truthful even when a filtered or empty feed has no families to paint. */
+export function villageLifeLabel(light, routines = []) {
+  const families = Array.isArray(routines) ? routines : [...routines.values()];
+  const evening = isBedtime(light);
+  if (evening && families.some(family => !family.settled)) return 'Families are heading home · Chickens to their coops';
+  if (evening) {
+    const late = families.filter(family => family.mode === 'working-late').length;
+    return 'The village is tucked in · ' + late + ' cottage' + (late === 1 ? '' : 's') + ' working late';
+  }
+  return 'Daytime · Children and chickens in the gardens';
+}
 function along(points, fraction) {
   const lengths = points.slice(1).map((point, i) => Math.hypot(point.x - points[i].x, point.y - points[i].y));
   let remaining = clamp(fraction) * lengths.reduce((sum, n) => sum + n, 0);
@@ -67,9 +79,9 @@ export function createBedtimeRoutine() {
 }
 
 /** The armchair's footprint becomes a little bed; authored walking lanes stay put. */
-export function roomRest(room, agent, light) {
+export function roomRest(room, agent, light, routine) {
   const bed = room?.objects?.find(object => object.id === 'chair');
-  if (!bed || !isBedtime(light) || agent?.status === 'working') return null;
+  if (!bed || !isBedtime(light) || !routine?.settled || agent?.status === 'working') return null;
   return { bed, host: { x: bed.x + bed.w / 2, y: bed.y + bed.h - 1 } };
 }
 
