@@ -226,6 +226,17 @@ test("local session todos from a previous logical task do not leak into a newer 
   assert.equal(feed.snapshot().agents[0].todos, null);
 });
 
+test("a mismatched explicit local task ID cannot donate todos by timestamp", async () => {
+  const local = { ...sampleSession(), taskId: "local-run", todos: { items: [{ id: "wrong-task", text: "Do not show this", status: "pending" }], source: "fixture", updatedAt: now } };
+  const hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 1000, status: "running", task: "Current Hub task", context: {} }, now);
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: toAgents([local], { now }), sessions: [local] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-run", new Set(["session-1"])]] ) }),
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].todos, null);
+});
+
 test("scan failures retain the last live snapshot and mark it stale, then recover", async () => {
   let failing = false;
   const session = sampleSession();
