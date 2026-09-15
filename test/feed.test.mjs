@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { parseTranscript } from "../src/transcripts.mjs";
-import { toCottage, readHubAgents } from "../src/hub.mjs";
+import { mapHubStatus, toCottage, readHubAgents } from "../src/hub.mjs";
 import { toAgents, createFeed, createFeedServer, createClaudeScanner, repoFromRemote, createRepoResolver } from "../src/feed.mjs";
 
 const now = Date.parse("2026-09-14T11:00:00Z");
@@ -116,6 +116,27 @@ test("Hub resolution suppresses a lagging local question until a distinct newer 
   await feed.scan();
   assert.equal(feed.snapshot().agents[0].inputRequest.id, "new-question");
   assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
+test("resolved terminal Hub attention does not remain blocked or visible", () => {
+  for (const status of ["failed", "cancelled", "interrupted"]) {
+    for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {
+      const row = {
+        id: `terminal-${status}`,
+        record_kind: "logical_task",
+        status,
+        attention_type: "question",
+        attention_message: "Which target?",
+        updated_at: now,
+        ...resolution,
+      };
+      const cottage = toCottage(row, now);
+      assert.equal(mapHubStatus(row, now), "idle", `${status} is not blocked after attention resolves`);
+      assert.equal(cottage.status, "idle");
+      assert.equal(cottage.inputRequest, null);
+      assert.equal(cottage.attention, "");
+    }
+  }
 });
 
 test("feed and incremental activity expose the same explicit latest todo snapshot", async () => {
