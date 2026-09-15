@@ -280,6 +280,17 @@ test("missing optional transcript directory is empty; a vanished configured dire
   await assert.rejects(scanner);
 });
 
+test("terminal Hub attention stops the task clock at the recorded end", () => {
+  const agent = toCottage({
+    id: "needs-decision", status: "failed", attention_message: "Choose the release target",
+    started_at: "2026-09-14 10:00:00", completed_at: "2026-09-14 10:05:00", updated_at: "2026-09-14 10:05:00",
+    context: {},
+  }, now);
+  assert.equal(agent.status, "blocked");
+  assert.equal(agent.terminal, true);
+  assert.equal(agent.endedAt, now - 55 * 60 * 1000);
+});
+
 test("Hub database adapter accepts older schemas without optional task columns", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-hub-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -366,6 +377,12 @@ test("Hub prioritizes historic PR evidence above the default completed-task cap"
   const historic = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
   historic.run("placeholder-open", "Resident", "completed", "Placeholder", JSON.stringify({ pr: { state: "open", number: null } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
   historic.run("terminal-pr", "Resident", "completed", "Merged work", JSON.stringify({ repo: "owner/repo", pr: { state: "merged", number: 92 } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
+  for (let index = 0; index < 161; index++) {
+    const timestamp = new Date(Date.parse("2000-01-02T00:00:00Z") + index * 1000).toISOString();
+    historic.run(`terminal-candidate-${index}`, "Resident", "completed", "Merged work", JSON.stringify({
+      repo: "owner/repo", finalization: { status: "merged", pullRequestNumber: index + 1000 },
+    }), timestamp, timestamp);
+  }
   db.close();
 
   const result = readHubAgents({ dbPath: path });
