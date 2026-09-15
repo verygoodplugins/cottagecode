@@ -194,6 +194,9 @@ export function applyLine(session, line) {
     target.pr = null;
     target.finalization = null;
     target.todos = null;
+    target.tokens = 0;
+    target.cost = 0;
+    target.usageByMessage.clear();
   }
   trackPrMetadata(target, line);
   if (target.taskId && timestampMs(line.taskStartedAt)) target.taskStartedAt = timestampMs(line.taskStartedAt);
