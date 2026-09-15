@@ -202,6 +202,32 @@ test("remote repository lookup is exact, read-only, and cached", async () => {
   assert.equal(input[0].repo, undefined);
 });
 
+test("remote repository lookup retains the last identity after a refresh failure", async () => {
+  let clock = now, calls = 0;
+  const resolver = createRepoResolver({ now: () => clock, run: async () => {
+    calls++;
+    if (calls === 1) return { stdout: "git@github.com:owner/project.git\n" };
+    throw new Error("temporary checkout failure");
+  } });
+  const input = [{ id: "one", worktreePath: "/projects/project" }];
+  assert.equal((await resolver(input))[0].repo, "owner/project");
+  clock += 300001;
+  assert.equal((await resolver(input))[0].repo, "owner/project");
+});
+
+test("one-shot callers can wait for queued GitHub enrichment", async () => {
+  let flushed = false;
+  const enrich = async agents => agents.map(agent => ({ ...agent, enrichment: flushed ? "fresh" : "queued" }));
+  enrich.flush = async () => { flushed = true; };
+  const feed = createFeed({ ...feedOptions, enrich,
+    scanClaude: async () => ({ ok: true, agents: toAgents([sampleSession()], { now }), sessions: [sampleSession()] }),
+  });
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].enrichment, "queued");
+  await feed.flushEnrichment();
+  assert.equal(feed.snapshot().agents[0].enrichment, "fresh");
+});
+
 test("HTTP serves modules and incremental activity while refusing writes and traversal", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-http-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

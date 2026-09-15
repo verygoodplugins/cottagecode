@@ -35,12 +35,19 @@ function blocksOf(content) {
   return typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
 }
 
+function withoutLeadingSystemReminders(text) {
+  let request = text;
+  let match;
+  while ((match = /^\s*<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>\s*/i.exec(request))) request = request.slice(match[0].length);
+  return request.trim();
+}
+
 export function genuineRequest(line) {
   if (line.type !== "user" || line.isMeta || line.isCompactSummary) return "";
   const blocks = blocksOf(line.message?.content);
   // A tool reply sometimes has text siblings carrying runtime annotations.
   if (blocks.some(block => block?.type === "tool_result")) return "";
-  const text = textOf(blocks);
+  const text = withoutLeadingSystemReminders(textOf(blocks));
   if (!text || /^\s*(?:<local-command-(?:caveat|stdout)|<command-name>|<system-reminder>|\[Request interrupted|This session is being continued from a previous conversation)/i.test(text)) return "";
   return text;
 }
