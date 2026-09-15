@@ -76,6 +76,11 @@ export function shortModel(m) {
   return s.split(/[^a-z0-9]+/).filter(Boolean)[0] || "sonnet";
 }
 
+function attentionResolved(row) {
+  return Boolean(row.attention_resolved_at || row.attentionResolvedAt ||
+    String(row.attention_response ?? row.attentionResponse ?? "").trim());
+}
+
 export function mapHubStatus(row, now = Date.now()) {
   if (row.archived) return "offline";
   const status = String(row.status || "").toLowerCase();
@@ -91,14 +96,14 @@ export function mapHubStatus(row, now = Date.now()) {
     status === "needs_input" ||
     status === "awaiting_review"
   ) {
-    if (row.attention_resolved_at || row.attentionResolvedAt ||
-      String(row.attention_response ?? row.attentionResponse ?? "").trim()) return "idle";
+    if (attentionResolved(row)) return "idle";
     return "blocked";
   }
   if (status === "completed") {
     return aged(completed || updated) ? "offline" : "done";
   }
   if (status === "failed" || status === "cancelled" || status === "interrupted") {
+    if (attentionResolved(row)) return "idle";
     if (row.attention_type || row.attention_message) return "blocked";
     return aged(updated) ? "offline" : "done";
   }
