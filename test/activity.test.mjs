@@ -38,6 +38,14 @@ test("original request survives tool replies, assistant progress, and follow-ups
   assert.equal(session.firstTs, start);
 });
 
+test("a request after a closed system reminder remains the original ask", () => {
+  const session = parseTranscript(JSON.stringify(line("user", [
+    { type: "text", text: "<system-reminder>\nSession context changed.\n</system-reminder>\n\nPlease repair the reconnect flow." },
+  ], 1)));
+  assert.equal(session.originalAsk, "Please repair the reconnect flow.");
+  assert.deepEqual(session.events.map(entry => entry.text), ["Please repair the reconnect flow."]);
+});
+
 test("only explicit task identities create a new task request and timeline", () => {
   const session = blankSession();
   applyLine(session, line("user", "Task one", 1, { taskId: "run-one" }));

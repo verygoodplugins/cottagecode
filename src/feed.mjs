@@ -178,12 +178,13 @@ export function createRepoResolver({ run = execFileAsync, now = Date.now } = {})
         const path = paths[index++];
         const previous = cache.get(path);
         if (previous && now() - previous.checkedAt < 300000) continue;
-        let repo = "";
+        let repo = "", resolved = false;
         try {
           const { stdout } = await run("git", ["-C", path, "remote", "get-url", "origin"], { timeout: 2000, maxBuffer: 16384 });
           repo = repoFromRemote(stdout);
+          resolved = true;
         } catch { /* Not a repository, no origin, or unavailable checkout. */ }
-        cache.set(path, { repo, checkedAt: now() });
+        cache.set(path, { repo: resolved ? repo : previous?.repo || "", checkedAt: now() });
       }
     }));
     for (const agent of result) if (!agent.repo) agent.repo = cache.get(agent.worktreePath)?.repo || "";
@@ -311,6 +312,11 @@ export function createFeed({
       if (!scanning) scanning = doScan().finally(() => { scanning = null; });
       return scanning;
     },
+    async flushEnrichment() {
+      if (typeof enrich.flush !== "function") return snapshot();
+      await enrich.flush();
+      return doScan();
+    },
     async getActivity(id, options = {}) {
       const agent = cache.find(cottage => cottage.id === id);
       if (!agent) return null;
@@ -395,7 +401,7 @@ async function main() {
   const windowMs = match ? Number(match[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[match[2]] : 12 * 3600e3;
   const feed = createFeed({ scanClaude: createClaudeScanner({ windowMs }) });
   await feed.scan();
-  if (argv.includes("--once")) { console.log(JSON.stringify(feed.snapshot().agents, null, 2)); return; }
+  if (argv.includes("--once")) { await feed.flushEnrichment(); console.log(JSON.stringify(feed.snapshot().agents, null, 2)); return; }
   const timer = setInterval(() => feed.scan().catch(() => console.error("Snapshot refresh failed; retaining the previous snapshot")), POLL_MS);
   const server = createFeedServer(feed);
   server.on("close", () => clearInterval(timer));
