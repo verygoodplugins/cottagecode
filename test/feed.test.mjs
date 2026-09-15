@@ -130,6 +130,43 @@ test("Hub resolution suppresses a lagging local question until a distinct newer 
   assert.equal(feed.snapshot().agents[0].status, "blocked");
 });
 
+test("a retained Hub resolution suppresses the same lingering raw Hub prompt", async () => {
+  let resolved = true;
+  let prompt = "Which target?";
+  let requestId = "fixture-question";
+  let updatedAt = now;
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [], sessions: [] }),
+    readHub: () => {
+      const row = {
+        id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+        attention_message: prompt, attention_type: "question", updated_at: updatedAt,
+        context: { integration: { requestId } },
+        ...(resolved ? { attention_response: "Local", attention_resolved_at: now } : {}),
+      };
+      return { ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map() };
+    },
+  });
+
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest, null);
+  resolved = false;
+  updatedAt = now + 1_000; // A hub heartbeat can update the row without asking again.
+  await feed.scan();
+  const lingering = feed.snapshot();
+  assert.equal(lingering.agents[0].inputRequest, null);
+  assert.equal(lingering.agents[0].status, "idle");
+  assert.equal(lingering.agents[0].attention, "");
+  assert.equal(lingering.letters, 0);
+
+  requestId = "fixture-question-two";
+  prompt = "Which release?";
+  updatedAt = now + 2_000;
+  await feed.scan();
+  assert.equal(feed.snapshot().agents[0].inputRequest.id, "fixture-question-two");
+  assert.equal(feed.snapshot().agents[0].status, "blocked");
+});
+
 test("resolved terminal Hub attention does not remain blocked or visible", () => {
   for (const status of ["failed", "cancelled", "interrupted"]) {
     for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {
@@ -596,10 +633,17 @@ test("HTTP serves modules and incremental activity while refusing writes and tra
   await once(server, "listening");
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const response = await fetch(`${base}/agents`);
+  const response = await fetch(`${base}/agents`, { headers: { Origin: base } });
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  assert.equal(response.headers.get("access-control-allow-origin"), null,
+    "the local feed does not opt arbitrary pages into reading private agent data");
   assert.equal((await response.json()).agents.length, 1);
+  const crossOrigin = await fetch(`${base}/agents`, { headers: { Origin: "https://example.test" } });
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(crossOrigin.headers.get("access-control-allow-origin"), null);
+  const crossOriginActivity = await fetch(`${base}/agents/session-1/activity`, { headers: { Origin: "https://example.test" } });
+  assert.equal(crossOriginActivity.status, 403);
+  assert.equal((await fetch(`${base}/agents`)).status, 200, "local command-line reads remain available");
   const module = await fetch(`${base}/modules/scene.mjs`);
   assert.match(module.headers.get("content-type"), /javascript/);
   assert.equal(await module.text(), "export const ready = true;");
@@ -784,13 +828,20 @@ test("Hub prioritizes historic PR evidence above the default completed-task cap"
   for (let index = 0; index < 81; index++) {
     fresh.run(`completed-${index}`, "Resident", "completed", "Recent task", "{}");
   }
+  const historic = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  historic.run("placeholder-open", "Resident", "completed", "Placeholder", JSON.stringify({ pr: { state: "open", number: null } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
+  historic.run("terminal-pr", "Resident", "completed", "Merged work", JSON.stringify({ repo: "owner/repo", pr: { state: "merged", number: 92 } }), "2000-01-01 00:00:00", "2000-01-01 00:00:00");
   db.close();
 
   const result = readHubAgents({ dbPath: path });
   assert.equal(result.ok, true);
   assert.equal(result.agents.length, 80, "the regular result cap stays bounded");
   assert.equal(result.agents.find(agent => agent.id === "historic-pr")?.pr.number, 91,
-    "a completed row retained only for structured PR evidence wins a place in the default view");
+    "a completed row retained only for parsed outstanding PR evidence wins a place in the default view");
+  assert.equal(result.agents.some(agent => agent.id === "placeholder-open"), false,
+    "a null open-state placeholder cannot consume the retention priority");
+  assert.equal(result.agents.some(agent => agent.id === "terminal-pr"), false,
+    "a merged PR cannot consume the retention priority");
 });
 
 test("Hub retains old context-only PR receipts", async t => {
@@ -824,7 +875,7 @@ test("Hub retains old context-only PR receipts", async t => {
   assert.equal(result.agents.find(agent => agent.id === "context-pr-receipt")?.pr.number, 77);
 });
 
-test("Hub retains old explicit open PR state without an identity", async t => {
+test("Hub drops old explicit open PR placeholders without an identity", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-hub-open-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "hub.db");
@@ -842,9 +893,8 @@ test("Hub retains old explicit open PR state without an identity", async t => {
   db.close();
 
   const result = readHubAgents({ dbPath: path });
-  const retained = result.agents.find(agent => agent.id === "context-open-state");
-  assert.equal(retained?.pr.state, "open");
-  assert.equal(retained?.occupancy, "live");
+  assert.equal(result.agents.some(agent => agent.id === "context-open-state"), false,
+    "an unidentifiable open state is not durable PR evidence");
 });
 
 test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {

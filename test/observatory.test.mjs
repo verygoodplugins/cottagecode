@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -64,4 +64,20 @@ test('an arriving apprentice uses its visible walking position and never a stale
   assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,103,familyPosition),{id:'pip',x:147.5,y:256},'talk and click follow the visible walk');
   assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,108,familyPosition),familyPosition,'family interaction resumes after the arrival');
   assert.equal(apprenticeResidentPosition(arrivals,'pip',[],103,familyPosition),null,'an active arrival with no visible position cannot expose a stale hitbox');
+});
+
+test('activity cache clears task artifacts when a session-only cottage advances to a new session',()=>{
+  const first={taskId:null,sessionId:'session-one',activityUrl:'/agents/cottage/activity'};
+  const cache=activityCacheFor(null,first);
+  cache.events=[{id:'old',text:'Earlier task'}];
+  cache.todos={items:[{id:'old-todo',text:'Earlier task checklist',status:'pending'}]};
+  cache.cursor='old';
+
+  assert.equal(activityCacheFor(cache,{...first,task:'Updated same task'}),cache,'a same-session refresh keeps journal state and scroll anchors');
+
+  const next=activityCacheFor(cache,{...first,sessionId:'session-two'});
+  assert.notEqual(next,cache);
+  assert.deepEqual(next.events,[]);
+  assert.equal(next.todos,undefined,'an omitted new-session todo snapshot cannot reuse the prior task checklist');
+  assert.equal(next.cursor,null);
 });
