@@ -186,8 +186,17 @@
   .input-option strong,.input-option span{display:block}
   .input-option span{font-size:11px;color:#c2cdc0;font-weight:normal;margin-top:3px}
   .input-option[aria-pressed="true"]{background:#555f40;border-color:#e6d394;color:#fff0c5}
-  .pr-summary{border:1px solid var(--pr-color);border-radius:3px;padding:14px;color:var(--pr-color);margin-top:10px}
-  .pr-summary p{font-size:12px;color:#c9d4cd;margin:8px 0}
+  .pr-snapshot{border:1px solid var(--pr-color);border-radius:3px;padding:12px;margin:10px 0;background:#1f2b2b}
+  .pr-snapshot-head{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap}
+  .pr-stage{font:11px "Silkscreen",monospace;color:var(--pr-color)}
+  .pr-open{font:10px "Silkscreen",monospace;padding:6px 8px;border:1px solid var(--pr-color);border-radius:2px;color:#f4e6bd;text-decoration:none}
+  .pr-open:hover{background:#39443e}
+  .pr-title{font-size:12px;color:#d6e1d8;margin:8px 0 2px}
+  .pr-snapshot dl{margin:10px 0;font-size:12px;gap:4px 10px}
+  .pr-label-wrap{display:flex;align-items:flex-start;gap:7px;font-size:11px;color:#aebeb5}
+  .pr-labels{list-style:none;display:flex;gap:5px;flex-wrap:wrap;padding:0;margin:0}
+  .pr-labels li{font:10px ui-monospace,monospace;color:#d4dfd6;border:1px solid #52655d;border-radius:99px;padding:2px 6px;overflow-wrap:anywhere}
+  .pr-muted{font-size:11px;color:#aebeb5}
   .review-reason{background:#4b4030;color:#f0d5a3!important;padding:10px;margin:10px 0}
   .mono{font-family:ui-monospace,monospace}
   .artifact-list{padding-left:18px;overflow-wrap:anywhere}

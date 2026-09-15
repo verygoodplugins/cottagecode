@@ -10,7 +10,7 @@ import {pageActivity} from '../src/activity.mjs';
 import {inputRequestVersion} from '../src/input-request.mjs';
 
 const run=promisify(execFile),page='cottagecode-browser-smoke';
-const stamp=Date.now(),pr={number:123,url:'https://github.com/example/observatory/pull/123',state:'open',labels:['babysit:ready'],headSha:'head-one',source:'browser-fixture',checkedAt:stamp};
+const stamp=Date.now(),pr={number:123,url:'https://github.com/example/observatory/pull/123',state:'open',labels:['feature','babysit:ready'],headSha:'head-one',source:'github',checkedAt:stamp,statusCheckRollup:[{name:'smoke',status:'COMPLETED',conclusion:'SUCCESS',detailsUrl:'https://github.com/example/observatory/actions/runs/123'}]};
 let agents=[
   {id:'host',taskId:'task-one',name:'Hazel',town:'HubTown',status:'working',task:'Verify the observatory',originalAsk:'Keep the original request pinned while progress arrives.',taskStartedAt:stamp-130000,sessionStartedAt:stamp-600000,updatedAt:stamp,activityUrl:'/agents/host/activity',pr,todos:{source:'browser-fixture',updatedAt:stamp,items:[{id:'one',text:'Keep the request visible',status:'completed'},{id:'two',text:'Verify doors and conversations',status:'in_progress'}]}},
   {id:'neighbor',taskId:'task-neighbor',name:'Fern',town:'AppTown',status:'done',task:'Shared PR companion',pr:{...pr},endedAt:stamp-60000},
@@ -69,8 +69,11 @@ try{
   await until('document.querySelectorAll(\'.journal-event\').length===131','Older entries did not load');
   pass('walk indoors, inspect request, stream and paginate journal without scroll jumps');
   await click('[data-action="tab:review"]');
-  assert.match(await evaluate('document.querySelector(\'.pr-summary\').textContent'),/Ready to merge/);
-  assert.match(await evaluate('document.querySelector(\'.pr-summary a\').href'),/pull\/123$/);
+  assert.match(await evaluate('document.querySelector(\'.pr-snapshot\').textContent'),/Ready to merge/);
+  assert.match(await evaluate('document.querySelector(\'.pr-snapshot\').textContent'),/feature/);
+  assert.match(await evaluate('document.querySelector(\'.pr-snapshot\').textContent'),/Passing · 1 check/);
+  assert.match(await evaluate('document.querySelector(\'.pr-open\').href'),/pull\/123$/);
+  pass('PR snapshot shows GitHub labels, CI result, evidence, and direct link');
   await key('Escape');assert.equal((await state()).mode,'town');
   await key('e');assert.equal((await state()).mode,'town','E must not operate doors');
   await key('ArrowUp',250);assert.equal((await state()).mode,'room');

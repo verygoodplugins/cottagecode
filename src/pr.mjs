@@ -24,6 +24,34 @@ function positiveNumber(value) {
   const n = Number(value);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
+function safeCheckUrl(value) {
+  try {
+    const url = new URL(str(value));
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : "";
+  } catch { return ""; }
+}
+function checkName(value) { return str(value).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 160); }
+function checkWord(value) { return str(value).toUpperCase().replace(/[^A-Z_]/g, "").slice(0, 40); }
+function normalizeChecks(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 50).map((entry) => ({
+    name: checkName(entry?.name || entry?.context), status: checkWord(entry?.status || entry?.state),
+    conclusion: checkWord(entry?.conclusion), url: safeCheckUrl(entry?.url || entry?.detailsUrl || entry?.targetUrl),
+  })).filter(entry => entry.name || entry.status || entry.conclusion);
+}
+
+/** A concise, factual rollup for presentation. It never determines merge readiness. */
+export function prCi(pr) {
+  const source = Array.isArray(pr?.checks) && pr.checks.length ? pr.checks : pr?.statusCheckRollup;
+  const checks = normalizeChecks(source);
+  if (!checks.length) return { state: "unavailable", total: 0, passed: 0, failed: 0, pending: 0, url: "" };
+  const failed = checks.filter(check => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(check.conclusion));
+  const pending = checks.filter(check => check.status !== "COMPLETED" || !check.conclusion).filter(check => !failed.includes(check));
+  const passed = checks.filter(check => !failed.includes(check) && !pending.includes(check));
+  const state = failed.length ? "failing" : pending.length ? "pending" : "passing";
+  const preferred = (state === "failing" ? failed : state === "pending" ? pending : passed).find(check => check.url) || checks.find(check => check.url);
+  return { state, total: checks.length, passed: passed.length, failed: failed.length, pending: pending.length, url: preferred?.url || "" };
+}
 
 /** Recognize an explicit PR link, without guessing a repository from its title. */
 export function parsePrUrl(value) {
@@ -54,6 +82,7 @@ export function normalizePr(value, now = Date.now()) {
   const parsed = liveUrl || receiptUrl;
   const number = liveNumber || liveUrl?.number || receiptNumber || receiptUrl?.number || null;
   const labels = labelNames(p.labels);
+  const checks = normalizeChecks(p.checks || p.statusCheckRollup);
   const checkedAt = timestamp(p.checkedAt) || timestamp(receipt?.checkedAt);
   const stale = p.stale === true || !checkedAt || now - checkedAt > PR_FRESH_MS || checkedAt > now + 60_000;
   const headSha = str(p.headSha || p.headRefOid);
@@ -146,7 +175,7 @@ export function normalizePr(value, now = Date.now()) {
   if (state === "unknown" && !reason) reason = hasIdentity ? "PR state has not been verified." : "PR metadata was not supplied.";
   const result = {
     number, url: parsed?.url || "", title: str(p.title), state, reviewState,
-    labels, headSha, reviewedHeadSha, source, checkedAt, stale, reason,
+    labels, checks, headSha, reviewedHeadSha, source, checkedAt, stale, reason,
     stage, reviewUncertain: uncertain,
   };
   for (const key of ["repo", "host", "observedReadyHeadSha", "isDraft", "mergedAt", "closedAt"])

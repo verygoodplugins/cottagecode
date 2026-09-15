@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizePr, prStage, prKey, prCounts, hasOutstandingPr, PR_FRESH_MS } from "../src/pr.mjs";
+import { normalizePr, prCi, prStage, prKey, prCounts, hasOutstandingPr, PR_FRESH_MS } from "../src/pr.mjs";
 
 const now = Date.parse("2026-09-14T12:00:00Z");
 const base = { number: 12, url: "https://github.com/example/cottage/pull/12", state: "open",
@@ -25,6 +25,18 @@ test("fresh exclusive labels expose all babysit stages independently of executio
     assert.equal(hasOutstandingPr({ status: "done", pr }, now), true);
   }
   assert.equal(prStage(base, now), "open");
+});
+
+test("GitHub check observations retain their state and direct run link", () => {
+  const pr = normalizePr({ ...base, statusCheckRollup: [
+    { name: "unit", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/example/cottage/actions/runs/1" },
+    { name: "lint", status: "IN_PROGRESS", conclusion: null, detailsUrl: "https://github.com/example/cottage/actions/runs/2" },
+  ] }, now);
+  assert.deepEqual(pr.checks, [
+    { name: "unit", status: "COMPLETED", conclusion: "SUCCESS", url: "https://github.com/example/cottage/actions/runs/1" },
+    { name: "lint", status: "IN_PROGRESS", conclusion: "", url: "https://github.com/example/cottage/actions/runs/2" },
+  ]);
+  assert.deepEqual(prCi(pr), { state: "pending", total: 2, passed: 1, failed: 0, pending: 1, url: "https://github.com/example/cottage/actions/runs/2" });
 });
 
 test("readiness fails closed for stale, future, missing, conflicting and draft evidence", () => {

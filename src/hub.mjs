@@ -11,6 +11,7 @@ import { timestampMs } from "./activity.mjs";
 import { normalizeTodos } from "./todos.mjs";
 import { inputRequestFromHub } from "./input-request.mjs";
 import { hasOutstandingPr } from "./pr.mjs";
+import { taskText } from "./task-text.mjs";
 import {
   classifyOccupancy,
   inferPr,
@@ -128,15 +129,14 @@ function pickWorktree(row, ctx) {
 
 function pickTask(row, ctx, worktree) {
   const gh = ctx.githubAutoJackRequest || {};
-  if (gh.targetTitle) return String(gh.targetTitle).replace(/\s+/g, " ").trim().slice(0, 150);
+  const title = taskText(gh.targetTitle);
+  if (title) return title.slice(0, 150);
   const cr = ctx.customerRequest;
-  if (typeof cr === "string" && cr.trim() && !isEmptyResult(cr)) {
-    return cr.replace(/\s+/g, " ").trim().slice(0, 150);
+  const request = taskText(typeof cr === "string" ? cr : cr?.text);
+  if (request && !isEmptyResult(request)) {
+    return request.slice(0, 150);
   }
-  if (cr?.text && !isEmptyResult(cr.text)) {
-    return String(cr.text).replace(/\s+/g, " ").trim().slice(0, 150);
-  }
-  const raw = row.task ? String(row.task).replace(/\s+/g, " ").trim() : "";
+  const raw = taskText(row.task);
   if (
     raw &&
     !isEmptyResult(raw) &&
@@ -231,7 +231,7 @@ export function toCottage(row, now = Date.now()) {
     (!row.record_kind && /external_agent_status|claude_hook|claude_code_status|codex_status/.test(ctx.source || ""));
   const requestSpec = parseContext(row.request_spec);
   const explicitRequest = ctx.originalAsk || requestSpec.request || ctx.customerRequest?.text || ctx.customerRequest || ctx.originalTask;
-  const original = typeof explicitRequest === "string" ? explicitRequest.trim() : !externalSession ? String(row.task || "").trim() : "";
+  const original = taskText(typeof explicitRequest === "string" ? explicitRequest : !externalSession ? row.task : "");
   const originalAsk = original && !isEmptyResult(original) && !isWorktreeSlug(original) ? original.slice(0, 32768) : "";
   const suppliedTodos = normalizeTodos(ctx.todos ?? ctx.cottage?.todos ?? durableResult.todos, { source: "hub:context", updatedAt: ctx.todosUpdatedAt });
   const checkpointTodos = normalizeTodos(row.todo_snapshot, { source: "hub:checkpoint", updatedAt: row.todo_updated_at });

@@ -271,6 +271,7 @@ Old `{ "number", "url", "title", "state" }` objects continue to work. Omitting `
 | `state` | string | `none`, `open`, `merged`, `closed`, or `unknown`. |
 | `reviewState` | string | `active`, `waiting-codex`, `waiting-ci`, `blocked`, `ready`, or `unknown`. |
 | `labels` | array | Real label strings or `{ "name": "babysit:active" }` objects. |
+| `checks` | array | Optional CI checks, each with a `name`, `status`, `conclusion`, and HTTP(S) `url`. The bundled GitHub adapter supplies these from GitHub's status check rollup. |
 | `headSha` | string | Currently observed PR head. |
 | `reviewedHeadSha` | string | Head covered by recorded review/finalization evidence. |
 | `source` | string | Evidence source, such as `github`, `finalization`, or the feed's own adapter name. |
@@ -300,7 +301,7 @@ Exactly one recognized `babysit:*` label may describe the review stage. Multiple
 
 A structured `finalization` receipt may provide `status`, `terminalLabel`, `pullRequestNumber`, `pullRequestUrl`, `branchHeadSha`, and `checkedAt`. `branchHeadSha` is review evidence; it must not be copied into the currently observed `headSha`. Receipt-only readiness requires a matching current head. `status: "not_needed"` with no PR identity establishes `none`.
 
-The bundled GitHub adapter reads actual labels and tracks the head across an observed ready-label period. A head change under an unchanged label stays unverified until new evidence resolves it. Cached `observedReadyHeadSha` records that observation, not a review it performed. Normalized output also includes derived `stage` and `reviewUncertain`; producers do not need to supply those fields.
+The bundled GitHub adapter reads actual labels and status checks, then tracks the head across an observed ready-label period. A head change under an unchanged label stays unverified until new evidence resolves it. Cached `observedReadyHeadSha` records that observation, not a review it performed. Normalized output also includes derived `stage` and `reviewUncertain`; producers do not need to supply those fields.
 
 Counts deduplicate canonical repository/PR identity across cottages and sheds. The newest observation wins; equally fresh conflicting observations count once as unknown. A number alone cannot identify a shared PR across repositories. Once observed, open PRs and known PR identities with temporarily unknown state keep their cottages visible after execution ends. Blocked PRs also create letters. Opening a parcel opens its link; the viewer never changes labels or merges.
 
