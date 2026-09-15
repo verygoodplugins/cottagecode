@@ -199,12 +199,12 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
   const connect = { disabled: false, onclick: null, click() { this.onclick(); } };
   const snapshot = [{ id: 'sample-resident' }], notes = [], requests = [], refreshes = [], resets = [];
   const context = vm.createContext({
-    PUBLIC_DEMO: publicDemo, ENDPOINT: endpoint, LIVE: true, feedStale: true,
+    PUBLIC_DEMO: publicDemo, ENDPOINT: endpoint, LIVE: true, feedStale: true, builtInDemo: false,
     FEED_META: {}, DEMO_META: { source: 'demo' }, SIM: { snapshot: () => snapshot },
     document: { getElementById: id => id === 'endpoint' ? box : connect },
     location: { origin: 'https://sample.example', href: 'https://sample.example/cottagecode/' + search, protocol: 'https:', search },
-    URL, URLSearchParams, AbortSignal,
-    fetch: async (...args) => { requests.push(args); throw new Error('No live source should be reached.'); },
+    URL, URLSearchParams, AbortSignal, activeFeedAbort: null, feedRevision: 0,
+    readCurrentFeed: async (...args) => { requests.push(args); return { kind: 'error', error: new Error('No live source should be reached.') }; },
     feedNote: (...args) => notes.push(args), refresh: () => refreshes.push('refresh'),
     isAllowedFeedUrl: value => /^https?:\/\//.test(value), stableLayout: { reset: () => resets.push('reset') },
     lastSnapshot: null, lastEndpoint: null, layoutSignature: 'preserved', agents: [],
