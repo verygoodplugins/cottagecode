@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Zero-dependency CottageCode feed: local transcripts, optional Hub DB, read-only PRs. */
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { readdir, stat, readFile, realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -495,12 +496,43 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
       let contentType = "";
       if (["/", "/index.html"].includes(url.pathname)) { filename = "town.html"; contentType = "text/html; charset=utf-8"; }
       else if (/^\/modules\/[a-z][a-z0-9-]*\.mjs$/.test(url.pathname)) { filename = url.pathname.slice("/modules/".length); contentType = "text/javascript; charset=utf-8"; }
+      else if (/^\/modules\/audio\/[a-z][a-z0-9-]*\.mp3$/.test(url.pathname)) { filename = url.pathname.slice("/modules/".length); contentType = "audio/mpeg"; }
       if (filename) {
         const root = await realpath(directory);
         const path = await realpath(join(root, filename));
         if (!path.startsWith(root + sep)) return json(404, { error: "Not found" });
         const body = await readFile(path);
-        res.writeHead(200, { ...headers, "content-type": contentType });
+        const assetHeaders = { ...headers, "content-type": contentType, "content-length": body.length };
+        if (contentType === "audio/mpeg") {
+          // Tracks can change under a stable path, so retain their cached body
+          // but revalidate it before media loops select it again.
+          const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+          assetHeaders["cache-control"] = "public, max-age=0, must-revalidate";
+          assetHeaders["accept-ranges"] = "bytes";
+          assetHeaders.etag = etag;
+          if (req.headers["if-none-match"]?.split(",").some(value => [etag, "*"].includes(value.trim()))) {
+            const notModified = { ...assetHeaders };
+            delete notModified["content-length"];
+            res.writeHead(304, notModified);
+            return res.end();
+          }
+          // A single byte range supports native media seeking and loop overlap.
+          // HEAD describes the full resource and ignores Range per HTTP semantics.
+          // A stale If-Range validator tells a media client to discard its
+          // partial cache and fetch the complete replacement instead.
+          const rangeAccepted = !req.headers["if-range"] || req.headers["if-range"].trim() === etag;
+          if (req.method === "GET" && req.headers.range && rangeAccepted) {
+            const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+            const start = range?.[1] ? Number(range[1]) : Math.max(0, body.length - Number(range?.[2]));
+            const end = range?.[1] && range[2] ? Math.min(body.length - 1, Number(range[2])) : body.length - 1;
+            if (!range || (!range[1] && !range[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= body.length || start > end) {
+              res.writeHead(416, { ...assetHeaders, "content-length": 0, "content-range": `bytes */${body.length}` }); return res.end();
+            }
+            res.writeHead(206, { ...assetHeaders, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}` });
+            return res.end(body.subarray(start, end + 1));
+          }
+        }
+        res.writeHead(200, assetHeaders);
         return res.end(req.method === "HEAD" ? undefined : body);
       }
       return json(404, { error: "Not found" });

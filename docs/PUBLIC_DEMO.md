@@ -19,10 +19,15 @@ configuration is in `wrangler.demo.jsonc`; the deployment manifest is
 
 The build copies only the browser module graph and generated HTML into
 `dist/`. It locks the page to fictional demo agents, removes the connection
-controls, and ignores feed URL parameters. Browser network connections are
-disabled by Content Security Policy. Practice replies affect only the sample
+controls, and ignores feed URL parameters. API connections are disabled by
+Content Security Policy; same-origin bundled audio and local postcard blob
+images are allowed. No audio is requested before explicit play. Practice replies affect only the sample
 resident in that browser. Live transcripts, activity endpoints, message
 routes, receipt ledgers, local history, and backend modules are not shipped.
+
+The static bundle includes seven generated MP3s (about 5.2 MiB total), loaded
+only as the gramophone needs them. Visitors need no API account or credentials
+and cannot trigger paid music generation. PNG postcards stay in their browser.
 
 To build for a different host's root, use:
 

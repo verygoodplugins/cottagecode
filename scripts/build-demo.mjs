@@ -10,7 +10,7 @@ const SIGNATURE = 'CottageCode public sample build v1\n';
 const PUBLIC_ASSETS = new Set(['.mjs', '.js', '.css', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.wav', '.ogg', '.mp3']);
 const SERVER_MODULES = new Set(['feed.mjs', 'hub.mjs', 'messages.mjs', 'transcripts.mjs', 'activity.mjs', 'github.mjs', 'towns.mjs']);
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
-const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
 const DESCRIPTION = 'A playable sample village for CottageCode. Walk between pixel cottages, meet fictional agents, and explore tasks, journals, and pull request progress.';
 const htmlEscape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const within = (root, path) => path === root || path.startsWith(root + sep);

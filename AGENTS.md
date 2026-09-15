@@ -12,6 +12,7 @@ renders pixel cottages; a tiny local HTTP process serves the page and
 npm start                 # http://127.0.0.1:8787
 npm test                  # Node test runner, no install step
 npm run test:browser      # Real Chrome journey; requires Browser Hand
+npm run test:ambience     # Music, light, and postcards in real Chrome
 node src/feed.mjs --once  # print one /agents snapshot as JSON
 node src/feed.mjs --host 0.0.0.0 --port 8787
 ```
@@ -40,6 +41,10 @@ duck. Check direct inspector controls, the connect box, and stale-feed recovery.
 | `src/pr.mjs` / `src/github.mjs` | Shared PR classifier/counts and cached read-only GitHub observations |
 | `src/occupancy.mjs` | live / recent / settled, letters, conservative PR identity inference |
 | `src/history.mjs` / `src/sound.mjs` | Bounded browser-local milestones/replay and opt-in Web Audio |
+| `src/village-extras.mjs` / `src/atmosphere.mjs` | Gramophone controls, local-clock light, fireflies and postcard dialog |
+| `src/music.mjs` / `src/music-output.mjs` | Opt-in music lifecycle, crossfades and quiet native media output |
+| `src/music-tracks.mjs` / `src/audio/` | Static soundtrack catalog and bundled MP3s |
+| `src/postcard.mjs` | Local PNG rendering with one deliberately selected milestone |
 | `src/towns.mjs` | `{Stem}Town` naming |
 
 Public contract: [`docs/COTTAGE_FEED.md`](docs/COTTAGE_FEED.md). Prefer documenting
@@ -61,6 +66,12 @@ visited rooms and cottage positions. Only explicit relationships and recorded
 handoffs create paths and couriers. Sound starts off. Scrapbook replay is limited
 to locally observed history. Walk into doors to enter/leave; E talks to a nearby
 resident or inspects an object. Direct buttons and Escape remain available.
+
+Music is independent of sound effects and starts off on every load. The village
+clock uses device-local time; musical location follows Jack, not the selected
+inspector. Generation is a manual authoring step, never a browser/build request.
+The public sample ships only static assets; keep its live API connections
+disabled. Postcards default to scenery, with explicit opt-in for a recorded note.
 
 Naming lock (also in `.cursor/rules/naming.mdc`):
 

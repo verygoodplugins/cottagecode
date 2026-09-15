@@ -698,6 +698,59 @@ test("HTTP serves modules and incremental activity while refusing writes and tra
   assert.equal((await fetch(`${base}/agents/missing/activity`)).status, 404);
 });
 
+test("bundled music supports native ranges, HEAD, and rejects missing or escaping audio", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "cottage-audio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const web = join(directory, "web");
+  await mkdir(join(web, "audio"), { recursive: true });
+  const bytes = Buffer.from("0123456789abcdefghijklmnopqrstuvwxyz");
+  await writeFile(join(web, "audio", "day.mp3"), bytes);
+  await writeFile(join(directory, "outside.mp3"), "outside audio");
+  await symlink(join(directory, "outside.mp3"), join(web, "audio", "escape.mp3"));
+  const feed = { snapshot: () => ({ agents: [] }) };
+  const server = createFeedServer(feed, { directory: web }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}/modules/audio/`;
+  const full = await fetch(base + "day.mp3");
+  assert.equal(full.headers.get("content-type"), "audio/mpeg");
+  assert.equal(full.headers.get("accept-ranges"), "bytes");
+  assert.equal(full.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+  const etag = full.headers.get("etag");
+  assert.match(etag, /^"[a-f0-9]{64}"$/);
+  assert.deepEqual(Buffer.from(await full.arrayBuffer()), bytes);
+  const cached = await fetch(base + "day.mp3", { headers: { "if-none-match": etag } });
+  assert.equal(cached.status, 304);
+  assert.equal(cached.headers.get("etag"), etag);
+  assert.equal((await cached.arrayBuffer()).byteLength, 0);
+  for (const [range, start, end] of [["bytes=0-9", 0, 9], ["bytes=10-", 10, 35], ["bytes=-3", 33, 35], ["bytes=30-900", 30, 35], ["bytes=-90", 0, 35]]) {
+    const response = await fetch(base + "day.mp3", { headers: { range } });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get("content-range"), `bytes ${start}-${end}/36`);
+    assert.equal(Number(response.headers.get("content-length")), end - start + 1);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(start, end + 1));
+  }
+  const currentRange = await fetch(base + "day.mp3", { headers: { range: "bytes=0-9", "if-range": etag } });
+  assert.equal(currentRange.status, 206);
+  assert.deepEqual(Buffer.from(await currentRange.arrayBuffer()), bytes.subarray(0, 10));
+  const staleRange = await fetch(base + "day.mp3", { headers: { range: "bytes=0-9", "if-range": '"stale-version"' } });
+  assert.equal(staleRange.status, 200);
+  assert.equal(staleRange.headers.get("content-range"), null);
+  assert.equal(staleRange.headers.get("content-length"), "36");
+  assert.deepEqual(Buffer.from(await staleRange.arrayBuffer()), bytes);
+  for (const range of ["bytes=36-", "bytes=9-2", "bytes=-0", "bytes=-", "bytes=0-1,3-4", "items=0-1", "bytes=999999999999999999999-"]) {
+    const response = await fetch(base + "day.mp3", { headers: { range } });
+    assert.equal(response.status, 416, range);
+    assert.equal(response.headers.get("content-range"), "bytes */36");
+    assert.equal((await response.arrayBuffer()).byteLength, 0);
+  }
+  const head = await fetch(base + "day.mp3", { method: "HEAD", headers: { range: "bytes=0-1" } });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-length"), "36");
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  for (const file of ["missing.mp3", "escape.mp3", "%2e%2e%2foutside.mp3"]) assert.equal((await fetch(base + file)).status, 404);
+});
+
 test("missing optional transcript directory is empty; a vanished configured directory is a scan error", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-scan-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

@@ -1,0 +1,119 @@
+[
+  {
+    "id": "morning",
+    "title": "Mosslight Morning",
+    "phase": "morning",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-14T23:53:26.905Z",
+    "songId": "sCkcL6m3zMy42Iyh3bky",
+    "durationSeconds": 64.992,
+    "bytes": 780649,
+    "sha256": "00113716a94dd503911a2829dc15964a4da77bb374b72338eb2a563487c85c58",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. Early morning sunlight on a wooden floor. A gently curious three-note plucked motif above soft sustained harmony, a little hopeful movement, very sparse and tender.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.692:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "day",
+    "title": "Little Roads",
+    "phase": "day",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-14T23:57:29.344Z",
+    "songId": "xNq74Cd9XoOte9dWU4T6",
+    "durationSeconds": 65.04,
+    "bytes": 781271,
+    "sha256": "4861b39cd7c20f892e290907ccbbe3c51e26bef193aaad9149ec74182aa1ba66",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. A peaceful afternoon in the village. A few rounded 8-bit plucks answer one another, supported by a quiet warm triangle bass. Leisurely, bright but never energetic.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "dusk",
+    "title": "Lamplight",
+    "phase": "dusk",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-14T23:57:30.191Z",
+    "songId": "93cUmSyPzhbvwwSEoZ6E",
+    "durationSeconds": 65.04,
+    "bytes": 781268,
+    "sha256": "9611aa4fc570ea27e9931a82e84da4182508f28dbd4100e1cecd72dd89fec1f5",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. Golden dusk and cottage lamps coming on. Slower-feeling phrases, warm suspended chords, wistful tiny music-box notes with long soft tails. A very gentle winding down.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "night",
+    "title": "After the Fireflies",
+    "phase": "night",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-15T00:01:24.314Z",
+    "songId": "aqELzVcJ6pkSQkPnnqxX",
+    "durationSeconds": 65.04,
+    "bytes": 781278,
+    "sha256": "a067537b909faa05934b9786b285f9e1cf829f75a948a94cd6aed183975bed8a",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. Still night beside a small pond. The sparsest arrangement: distant rounded bell notes, a low soft pad, tiny falling two-note phrases separated by silence. Deeply restful and quiet, no tension.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "app-town",
+    "title": "Pocket Signals",
+    "phase": [
+      "morning",
+      "day"
+    ],
+    "town": "AppTown",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-15T00:01:23.550Z",
+    "songId": "BZFe28cTXDflHeiykx4Q",
+    "durationSeconds": 65.04,
+    "bytes": 781273,
+    "sha256": "f3282b7611966fc8610c83dd3d7e2c570a6932303f530240b13549870c9479e0",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. A cozy workshop with little phones and computers. Small soft digital bleeps in a leisurely call and response, muted rounded square waves, a playful but very sparse melody. Never imitate notification or alarm sounds.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "mem-town",
+    "title": "Between the Pages",
+    "phase": [
+      "morning",
+      "day"
+    ],
+    "town": "MemTown",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-15T00:03:24.285Z",
+    "songId": "8FqKlVTvXxDkolWj875I",
+    "durationSeconds": 65.04,
+    "bytes": 781276,
+    "sha256": "e38ecc07428e1e7a8a06471334a3cdb9cf8af70a78bf09d0d3aa45a39747c09c",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. A hushed cottage library lined with books. Barely-there round chiptune piano notes and a gentle page-like chord progression. Reflective, spacious, soothing; slightly slower than the other village pieces.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  },
+  {
+    "id": "vault-town",
+    "title": "The Clockmaker",
+    "phase": [
+      "morning",
+      "day"
+    ],
+    "town": "VaultTown",
+    "provider": "ElevenLabs",
+    "model": "music_v2",
+    "generatedAt": "2026-09-15T00:03:23.056Z",
+    "songId": "p7DRahOlgm0LaMWANv4e",
+    "durationSeconds": 65.04,
+    "bytes": 781273,
+    "sha256": "9a655a3db95eed37339418a81e4103b66e72f40b4eb7fe429471d9dcfc2ac249",
+    "prompt": "Original instrumental background music for a quiet pixel cottage village. Very restrained low-bit ambient game music, rounded triangle-wave bass, soft filtered pulse-wave plucks, tiny sine-wave music-box notes, a warm faint pad. Slow 64 BPM, gentle G major and E minor colors. Only two or three soft notes at a time, generous rests, delicate dynamics, simple unhurried motifs. Calm and cozy, unobtrusive enough to read and concentrate. No vocals, no speech, no drums, no snare, no sharp high frequencies, no harsh bitcrushing, no busy arpeggios, no loud lead, no risers or drops. Keep an even texture from start to finish suitable for a gentle crossfade loop; no big intro, climax, or final cadence. The music should feel like a small mechanical music box heard from the next room. A tiny clock repair shop. Soft music-box pin notes and rounded plucked tones form a delicate clockwork motif, widely spaced. A tender mechanical lullaby with no literal ticking sound and no percussion.",
+    "processing": "lowpass=f=5500,loudnorm=I=-20:TP=-3:LRA=7,afade=t=in:d=0.08,afade=t=out:st=64.740:d=0.3",
+    "format": "MP3 · 44.1 kHz stereo · 96 kbps"
+  }
+]
