@@ -19,6 +19,16 @@ test('artifact URLs are safe and history works without storage',()=>{
   assert.equal(h.record({id:'a',timestamp:1}),false);
 });
 
+test('late source events use their local observation time in the scrapbook',()=>{
+  let time=1_000;const h=createHistory({now:()=>time});
+  time=2_000;
+  assert.equal(h.recordObservation({id:'late-handoff',timestamp:100,kind:'handoff',text:'Arrived late'}),true);
+  const event=h.events()[0];
+  assert.equal(event.timestamp,2_000);
+  assert.equal(event.sourceTimestamp,100);
+  assert.deepEqual(h.sinceVisit().map(e=>e.id),['late-handoff']);
+});
+
 const start=Date.parse('2026-09-14T12:00:00Z');
 const pr={number:7,url:'https://github.com/example/repo/pull/7',state:'open',source:'github',
   headSha:'head-a',checkedAt:start,labels:['babysit:active']};

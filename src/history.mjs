@@ -56,6 +56,10 @@ export function createHistory({storage=null,key='demo',now=()=>Date.now()}={}){
     return seen.has(e.id);
   }
   function record(e){const added=append(e);if(added)persist();return added;}
+  function recordObservation(e){
+    const sourceTimestamp=object(e)&&finiteTime(e.timestamp)?e.timestamp:null;
+    return record({...e,timestamp:now(),...(sourceTimestamp===null?{}:{sourceTimestamp})});
+  }
 
   return {
     observe(agents,{initial=false}={}){
@@ -117,7 +121,7 @@ export function createHistory({storage=null,key='demo',now=()=>Date.now()}={}){
       trimMap(next);trimMap(nextPr);previous=next;previousPr=nextPr;
       initialized=true;data.lastVisit=time;persist();return additions;
     },
-    record,
+    record,recordObservation,
     events:()=>data.events.map(e=>({...e})),
     sinceVisit:()=>data.events.filter(e=>e.timestamp>since&&e.kind!=='observed').map(e=>({...e})),
     baseline:since,

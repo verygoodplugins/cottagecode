@@ -47,8 +47,12 @@ export function parsePrUrl(value) {
 export function normalizePr(value, now = Date.now()) {
   const p = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const receipt = p.finalization && typeof p.finalization === "object" ? p.finalization : null;
-  const parsed = parsePrUrl(p.url || receipt?.pullRequestUrl);
-  const number = positiveNumber(p.number) || parsed?.number || positiveNumber(receipt?.pullRequestNumber);
+  const liveUrl = parsePrUrl(p.url);
+  const receiptUrl = parsePrUrl(receipt?.pullRequestUrl);
+  const liveNumber = positiveNumber(p.number);
+  const receiptNumber = positiveNumber(receipt?.pullRequestNumber);
+  const parsed = liveUrl || receiptUrl;
+  const number = liveNumber || liveUrl?.number || receiptNumber || receiptUrl?.number || null;
   const labels = labelNames(p.labels);
   const checkedAt = timestamp(p.checkedAt) || timestamp(receipt?.checkedAt);
   const stale = p.stale === true || !checkedAt || now - checkedAt > PR_FRESH_MS || checkedAt > now + 60_000;
@@ -68,10 +72,26 @@ export function normalizePr(value, now = Date.now()) {
     state = "unknown";
     reason = "PR identity conflicts with the reported absence of a PR.";
   }
-  if (parsed && positiveNumber(p.number) && Number(p.number) !== parsed.number) {
+  const sameIdentity = (left, right) => left && right &&
+    left.host === right.host && left.repo.toLowerCase() === right.repo.toLowerCase() && left.number === right.number;
+  const liveIdentityNumber = liveNumber || liveUrl?.number;
+  const receiptIdentityNumber = receiptNumber || receiptUrl?.number;
+  if (liveUrl && liveNumber && liveNumber !== liveUrl.number) {
     state = "unknown";
     uncertain = true;
     reason = "PR number and URL identify different pull requests.";
+  } else if (receiptUrl && receiptNumber && receiptNumber !== receiptUrl.number) {
+    state = "unknown";
+    uncertain = true;
+    reason = "Finalization receipt number and URL identify different pull requests.";
+  } else if (liveIdentityNumber && receiptIdentityNumber && liveIdentityNumber !== receiptIdentityNumber) {
+    state = "unknown";
+    uncertain = true;
+    reason = "Live PR identity and the finalization receipt identify different pull requests.";
+  } else if (liveUrl && receiptUrl && !sameIdentity(liveUrl, receiptUrl)) {
+    state = "unknown";
+    uncertain = true;
+    reason = "Live PR identity and the finalization receipt identify different pull requests.";
   }
   const liveLabels = source === "github" && Array.isArray(p.labels);
   const babysitLabels = labels.filter((l) => l.toLowerCase().startsWith("babysit:"));
