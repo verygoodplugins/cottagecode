@@ -88,6 +88,7 @@ Full shape (everything else is optional):
 | `sessionStartedAt` | number \| null | Start of the enclosing session, in epoch milliseconds. |
 | `startedAt` | number \| null | Legacy start value, still accepted for occupancy. It does not replace the explicit task/session clocks. |
 | `endedAt` | number \| null | Known completion time. The task clock uses it to stop elapsed time for terminal tasks. |
+| `terminal` | boolean | Optional. Set when a terminal source record is presented as `blocked` for attention; the task clock stops at `endedAt`. |
 | `updatedAt` | number \| null | Time of the last signal. |
 | `tokens` | number | |
 | `cost` | number | USD for this run. |
