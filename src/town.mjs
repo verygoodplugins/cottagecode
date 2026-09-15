@@ -5,7 +5,7 @@ import { createObservatory } from "./observatory.mjs";
 import { feedEnvelope, normalizeCottage } from "./feed-client.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
-import { createBedtimeRoutine, paintCoop, villageLifeLabel } from "./bedtime.mjs";
+import { createBedtimeRoutine, paintCoop, routineForAgent, villageLifeLabel } from "./bedtime.mjs";
 
 
 /* =======================================================================
@@ -1892,7 +1892,7 @@ async function refresh(){
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
-  getBedtimeRoutine:id=>bedtimeFrames.get(id),
+  getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
   getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>({id:k.id,x:k.x,y:k.y})))),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,

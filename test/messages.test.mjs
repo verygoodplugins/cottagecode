@@ -31,6 +31,15 @@ test('only supported logical task transports advertise messages; terminal, unkno
   assert.equal(messenger.capability(agent,{checkedAt:now-121000}).available,false);
   assert.equal(createHubMessenger({baseUrl:''}).capability(agent).available,false);
 });
+test('resolved input is unavailable even while the raw Hub status still awaits input',async()=>{
+  const resolved={...agent,inputRequestResolution:{id:'question-a',resolvedAt:now,source:'hub:attention'},conversationTarget:{...agent.conversationTarget,taskStatus:'needs_input',transport:'direct'}};
+  const {messenger,calls}=fixture({current:{...task,status:'needs_input',canRespond:true}});
+  assert.equal(messenger.capability(resolved).available,false);
+  assert.equal((await messenger.send(resolved,message)).body.delivery,'not_sent');
+  assert.equal(calls.length,0,'A resolved question must not be verified or posted again.');
+  const newer={...resolved,inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[]}};
+  assert.equal(messenger.capability(newer).mode,'respond','A distinct current question stays answerable.');
+});
 test('explicit messages verify current task then submit exact text, with concurrent duplicate protection',async()=>{
   const {messenger,calls}=fixture();
   const [one,two]=await Promise.all([messenger.send(agent,message),messenger.send(agent,message)]);
