@@ -113,6 +113,29 @@ test("GitHub PR queries request the status check rollup", async () => {
   assert.equal(command.file, "gh");
   assert.equal(command.args[0], "pr");
   assert.match(command.args.at(-1), /statusCheckRollup/);
+  assert.match(command.args.at(-1), /createdAt/);
+});
+
+test("GitHub enrichment maps createdAt to openedAt and keeps a feed open clock", async () => {
+  const enrich = createGithubEnricher({
+    now: () => start,
+    query: async () => ({ ...rawPr, createdAt: "2026-09-01T00:00:00Z" }),
+  });
+  await enrich([agent]);
+  await enrich.flush();
+  const withGithubClock = (await enrich([agent]))[0].pr;
+  assert.equal(withGithubClock.openedAt, "2026-09-01T00:00:00Z");
+
+  const feedOpened = Date.parse("2026-08-01T00:00:00Z");
+  const enrichKeep = createGithubEnricher({
+    now: () => start,
+    query: async () => ({ ...rawPr }),
+  });
+  const seeded = { ...agent, pr: { ...agent.pr, openedAt: feedOpened } };
+  await enrichKeep([seeded]);
+  await enrichKeep.flush();
+  const kept = (await enrichKeep([seeded]))[0].pr;
+  assert.equal(kept.openedAt, feedOpened);
 });
 
 test("branch discovery checks the actual default branch and accepts only an unambiguous exact match", async () => {

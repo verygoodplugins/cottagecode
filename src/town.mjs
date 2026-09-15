@@ -5,6 +5,16 @@ import { createObservatory, apprenticeResidentTarget } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
+import {
+  hauntStage,
+  branchLane,
+  letterNeglect,
+  checkWeather,
+  paintHauntExtras,
+  paintBranchWeeds,
+  paintLetterCrows,
+  paintCheckStorm,
+} from "./folklore.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 import { residentTargets } from "./interaction.mjs";
@@ -187,12 +197,13 @@ const SIM = (() => {
     ["Otto","HubTown","idle"],["Vera","HubTown","done"],["Gus","HubTown","working"],["Ida","HubTown","idle"],
     ["Juno","MemTown","working"],["Pim","MemTown","working"],["Wren","MemTown","idle"],
     ["Sable","MemTown","offline"],
+    ["Moss","MemTown","offline"],
     ["Hollis","FusionTown","working"],["Dov","FusionTown","idle"],["Tess","FusionTown","blocked"],["Nils","FusionTown","working"],
     ["Odie","AppTown","working"],["Ruth","AppTown","done"],["Cass","AppTown","idle"],
     ["Nyx","VaultTown","working"],["Reed","VaultTown","idle"],
     ["Bolt-1","HubTown","working",0],["Bolt-2","HubTown","blocked",0],
     ["Juno-1","MemTown","working",7],["Juno-2","MemTown","done",7],["Juno-3","MemTown","working",7],
-    ["Hollis-1","FusionTown","idle",11]
+    ["Hollis-1","FusionTown","idle",12]
   ];
   const now = Date.now();
   const agents = seed.map((s,i)=>({
@@ -245,11 +256,84 @@ const SIM = (() => {
       a.branch = mum ? mum.branch : "main";
     }
   });
+  const FOLKLORE_PINNED = new Set(["Moss", "Sable", "Vera", "Kip", "Gus"]);
+  const stampFolkloreDemo = (stamp = Date.now()) => {
+    const moss = agents.find(a => a.name === "Moss");
+    if (moss) {
+      moss.status = "offline";
+      moss.endedAt = stamp - 30 * 60 * 60 * 1000;
+      moss.updatedAt = moss.endedAt;
+      moss.occupancy = "settled";
+      moss.branch = "feat/forgotten-index";
+      moss.defaultBranch = "main";
+      moss.pr = { state: "none", source: "demo", checkedAt: stamp };
+      moss.inputRequest = null;
+      moss.attention = "";
+      moss.task = "Claude Code session ended.";
+      moss.lastLine = pick(LINES.offline);
+      moss.activity = pick(ACTIVITY.offline);
+    }
+    const sable = agents.find(a => a.name === "Sable");
+    if (sable) {
+      sable.status = "offline";
+      sable.endedAt = stamp - 8 * 60 * 60 * 1000;
+      sable.updatedAt = sable.endedAt;
+      sable.occupancy = "settled";
+      sable.branch = "feat/old-memory";
+      sable.defaultBranch = "main";
+      sable.pr = { state: "none", source: "demo", checkedAt: stamp };
+      sable.inputRequest = null;
+      sable.attention = "";
+      sable.task = "Claude Code session ended.";
+      sable.lastLine = pick(LINES.offline);
+      sable.activity = pick(ACTIVITY.offline);
+    }
+    const vera = agents.find(a => a.name === "Vera");
+    if (vera) {
+      vera.status = "done";
+      vera.occupancy = "live";
+      vera.endedAt = stamp - 14 * 60 * 60 * 1000;
+      vera.updatedAt = stamp;
+      vera.pr = {
+        number: 501, repo: "demo/HubTown", url: "https://github.com/demo/HubTown/pull/501",
+        title: "stale parcel", state: "open", reviewState: "open", headSha: "demo-vera",
+        source: "demo", checkedAt: stamp, openedAt: stamp - 14 * 60 * 60 * 1000,
+      };
+    }
+    const kip = agents.find(a => a.name === "Kip");
+    if (kip) {
+      // Pin once so the practice Talk form keeps a stable request id; after a
+      // successful reply (inputRequest cleared), do not force blocked again.
+      if (!kip._folkloreLetter) {
+        kip.status = "blocked";
+        kip.occupancy = "live";
+        kip.updatedAt = stamp - 3 * 60 * 60 * 1000;
+        kip.inputRequest = demoInput(kip, stamp - 3 * 60 * 60 * 1000);
+        kip.attention = kip.inputRequest.prompt;
+        kip.activity = "Waiting for your choice about the scope of this task.";
+        kip._folkloreLetter = true;
+      } else if (kip.inputRequest) {
+        kip.status = "blocked";
+        kip.occupancy = "live";
+      }
+    }
+    const gus = agents.find(a => a.name === "Gus");
+    if (gus) {
+      gus.pr = {
+        number: 502, repo: "demo/HubTown", url: "https://github.com/demo/HubTown/pull/502",
+        title: "stormy checks", state: "open", reviewState: "waiting-ci",
+        labels: ["babysit:waiting-ci"], headSha: "demo-gus", source: "demo", checkedAt: stamp,
+        checks: [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }],
+      };
+    }
+  };
+  stampFolkloreDemo(now);
   let live = true;
   let demoBeat=0;
   setInterval(()=>{
     if(!live) return;
     demoBeat++;
+    stampFolkloreDemo();
     if(demoBeat===5){
       const parent=agents[0],stamp=Date.now(),id="demo-apprentice";
       agents.push({...parent,id,name:"Pip",parent:parent.id,status:"working",occupancy:"live",endedAt:0,inputRequest:null,attention:'',taskId:"demo-task-pip",task:"Check the webhook edge cases",originalAsk:"Please test the webhook edge cases while Bolt finishes the queue changes.",taskStartedAt:stamp,startedAt:stamp,sessionStartedAt:stamp,updatedAt:stamp,tokens:0,cost:0,events:[{id:id+":arrival",timestamp:stamp,kind:"request",text:"Please test the webhook edge cases while Bolt finishes the queue changes."}]});
@@ -260,6 +344,7 @@ const SIM = (() => {
       DEMO_META.handoffs.push(event);DEMO_META.handoffs=DEMO_META.handoffs.slice(-20);agents[0].events.push(event);
     }
     agents.forEach(a=>{
+      if(FOLKLORE_PINNED.has(a.name)) return;
       if(a.status==="working"){
         const d = Math.floor(Math.random()*900);
         a.tokens += d; a.cost += d * RATE;
@@ -1018,6 +1103,8 @@ function drawHouse(x, y, ag){
   px(dx+5, dy+9, 1, 2, "#ffd166");
   px(dx-3, bodyY+bodyH, 14, 3, C.stone);
   px(dx-3, bodyY+bodyH+2, 14, 1, C.stoneDk);
+  paintHauntExtras(px, x, y, HOUSE_W, HOUSE_H, hauntStage(ag));
+  paintCheckStorm(px, x, y, checkWeather(ag));
 }
 
 function drawBranchPost(x, y, branch, dim){
@@ -1187,6 +1274,8 @@ function drawJackStoop(plot, n, on, over){
   const bob = reduce ? 0 : Math.round(Math.sin(t*2)*0.5);
   if(!observatory) drawJack(x+22, y+12+bob, 0);
   drawMailbox(x+38, y+8, n);
+  const crowed = letters().some(ag => letterNeglect(ag) === "crows");
+  if (crowed) paintLetterCrows(px, x + 38, y + 8, "crows");
   if(on || over){
     ctx.strokeStyle = on ? "#ffd166" : "#ffffff";
     ctx.lineWidth = 1;
@@ -1522,6 +1611,7 @@ function draw(){
 
     drawHouse(p.x, p.y, ag);
     drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch || ag.worktree, ag.status==="offline");
+    paintBranchWeeds(px, p.x, p.y, HOUSE_W, HOUSE_H, branchLane(ag));
     if(ag.status === "working"){
       const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
       drawSmoke(p.x+40, p.y+2, phase);
