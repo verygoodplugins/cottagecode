@@ -63,7 +63,7 @@ test("Hub input fields and pending transcript questions stay readable and clear 
 });
 
 test("an answer received during an activity read cannot resurrect the earlier question", async () => {
-  const session = sampleSession();
+  const session = { ...sampleSession(), taskId: "hub-question", taskStartedAt: now - 10_000 };
   let answered = false;
   let release;
   const wait = new Promise(resolve => { release = resolve; });
