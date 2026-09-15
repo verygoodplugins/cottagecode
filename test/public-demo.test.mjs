@@ -213,8 +213,14 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
     readCurrentFeed: async (...args) => { requests.push(args); return feedResponse || { kind: 'error', error: new Error('No live source should be reached.') }; },
     feedNote: (...args) => notes.push(args), refresh: () => refreshes.push('refresh'),
     isAllowedFeedUrl: value => /^https?:\/\//.test(value), stableLayout: { reset: () => resets.push('reset') },
+    snapshotForEndpoint: ({ snapshot, endpoint: observed }, requested) => observed === requested ? snapshot : null,
     lastSnapshot: null, lastEndpoint: null, layoutSignature: 'preserved', agents: [],
   });
+  context.clearFeedState = () => {
+    context.lastSnapshot = null;
+    context.lastEndpoint = null;
+    context.FEED_META = { source: 'none', relationships: [], handoffs: [] };
+  };
   const fetchStart = TOWN.indexOf('async function fetchAgents(){'), fetchEnd = TOWN.indexOf('/* ---- mock world ---- */', fetchStart);
   assert.ok(fetchStart >= 0 && fetchEnd > fetchStart, 'Fetch section should be testable');
   vm.runInContext(TOWN.slice(fetchStart, fetchEnd), context);

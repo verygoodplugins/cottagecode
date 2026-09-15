@@ -5,6 +5,16 @@ export function blankFeedMeta() {
   return { source: "", relationships: [], handoffs: [] };
 }
 
+/** A fresh connection cannot fall back to a prior endpoint's snapshot. */
+export function blankFeedState() {
+  return { snapshot: null, endpoint: null, meta: blankFeedMeta() };
+}
+
+/** Return only a snapshot that belongs to the endpoint currently being read. */
+export function snapshotForEndpoint({ snapshot, endpoint: snapshotEndpoint }, endpoint) {
+  return snapshot && snapshotEndpoint === endpoint ? snapshot : null;
+}
+
 /**
  * Read a feed only while its endpoint is still the selected endpoint. This
  * prevents a late response from one feed populating another feed's town.

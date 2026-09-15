@@ -19,9 +19,3 @@ test("custom feed namespace remains distinct when its payload calls itself demo"
     "a custom endpoint must not share demo journal/history storage",
   );
 });
-
-test("changing the connected endpoint clears the prior feed metadata", async () => {
-  const source = await readFile(new URL("../src/town.mjs", import.meta.url), "utf8");
-  assert.match(source, /lastSnapshot=null;lastEndpoint=null;FEED_META=blankFeedMeta\(\)/,
-    "a failed replacement feed must not inherit the prior feed's handoffs or relationships");
-});

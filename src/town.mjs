@@ -3,7 +3,7 @@ import { createTownLayout, advanceDuck } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
-import { createLatestRefresh, readCurrentFeed } from "./live-feed.mjs";
+import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 
@@ -25,6 +25,11 @@ let observatory;
 const stableLayout = createTownLayout();
 let sceneSolids = [], scenePonds = [], sceneDistricts = [];
 let showSettled = false;
+
+function clearFeedState(){
+  const next=blankFeedState();
+  lastSnapshot=next.snapshot;lastEndpoint=next.endpoint;FEED_META=next.meta;
+}
 
 function townKey(ag){
   return ag.town || ag.role || "WildTown";
@@ -113,7 +118,7 @@ async function fetchAgents(){
     const data=incoming.data;
     let bundledEmpty=false;
     try{const u=new URL(endpoint,location.href);bundledEmpty=!data.stale&&!data.agents.length&&u.origin===location.origin&&u.pathname==="/agents"&&(!data.source||data.source==="none");}catch{}
-    if(bundledEmpty){builtInDemo=true;LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
+    if(bundledEmpty){builtInDemo=true;LIVE=false;feedStale=false;clearFeedState();FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
     builtInDemo=false;LIVE=true;feedStale=!!data.stale;FEED_META=data;
     const list=data.agents.filter(a=>a&&typeof a==="object").map((a,i)=>normalizeCottage(data.stale?{...a,pr:{...a.pr,stale:true,reason:"The feed is stale; PR readiness is unverified."}}:a,i,{town:normalizeTown,model:shortModel,occupancy:classifyOccupancy}));
     lastSnapshot=list;lastEndpoint=endpoint;
@@ -122,7 +127,9 @@ async function fetchAgents(){
   }catch(err){
     if(!current())return null;
     feedStale=true;
-    if(lastSnapshot&&lastEndpoint===endpoint){LIVE=true;feedNote("Connection interrupted · showing last live snapshot. Retrying…","#e7b778");return lastSnapshot.map(a=>({...a,pr:normalizePr({...a.pr,stale:true,reason:"Feed connection interrupted; PR readiness is unverified."})}));}
+    const staleSnapshot=snapshotForEndpoint({snapshot:lastSnapshot,endpoint:lastEndpoint},endpoint);
+    if(staleSnapshot){LIVE=true;feedNote("Connection interrupted · showing last live snapshot. Retrying…","#e7b778");return staleSnapshot.map(a=>({...a,pr:normalizePr({...a.pr,stale:true,reason:"Feed connection interrupted; PR readiness is unverified."})}));}
+    if(builtInDemo){LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed unavailable. demo townmap until cottages show up.","#e7b778");return SIM.snapshot();}
     LIVE=false;feedNote("Feed unavailable · "+err.message+". Retrying…","#e7b778");
     return [];
   }finally{
@@ -1819,7 +1826,7 @@ document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
   if(!v){
     if(ENDPOINT!==null){
-      activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META={source:"none",relationships:[],handoffs:[]};
+      activeFeedAbort?.abort();feedRevision++;clearFeedState();
     }
     ENDPOINT=null;builtInDemo=true;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
   }
@@ -1829,7 +1836,7 @@ document.getElementById("connect").onclick = ()=>{
   }
   const nextEndpoint=new URL(v,location.href).href;
   if(nextEndpoint!==ENDPOINT){
-    activeFeedAbort?.abort();feedRevision++;lastSnapshot=null;lastEndpoint=null;FEED_META={source:"none",relationships:[],handoffs:[]};
+    activeFeedAbort?.abort();feedRevision++;clearFeedState();
   }
   ENDPOINT=nextEndpoint;builtInDemo=false;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh({latest:true});
 };
