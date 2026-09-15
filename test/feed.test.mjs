@@ -240,6 +240,26 @@ test("Hub logical tasks expose genuine original requests and durable PR receipts
   assert.equal(context.finalization, undefined, "mapping must not mutate the supplied context");
 });
 
+test("a dated context todo snapshot stays ahead of an undated checkpoint", () => {
+  const agent = toCottage({
+    id: "hub-run", record_kind: "logical_task", status: "running", task: "Current task",
+    context: { todos: { items: [{ id: "context", text: "Dated context checklist", status: "in_progress" }], updatedAt: now } },
+    todo_snapshot: JSON.stringify({ items: [{ id: "checkpoint", text: "Undated checkpoint checklist", status: "pending" }] }),
+    todo_updated_at: "not a timestamp",
+  }, now);
+
+  assert.equal(agent.todos.items[0].text, "Dated context checklist");
+  assert.equal(agent.todos.updatedAt, now);
+
+  const undated = toCottage({
+    id: "hub-run-undated", record_kind: "logical_task", status: "running", task: "Current task",
+    context: { todos: { items: [{ id: "context", text: "Undated context checklist", status: "in_progress" }] } },
+    todo_snapshot: JSON.stringify({ items: [{ id: "checkpoint", text: "Undated checkpoint checklist", status: "pending" }] }),
+    todo_updated_at: "not a timestamp",
+  }, now);
+  assert.equal(undated.todos.items[0].text, "Undated checkpoint checklist");
+});
+
 test("Hub external sessions never treat an assistant status label as the original ask", () => {
   const agent = toCottage({ id: "observed", record_kind: "external_session", task: "Latest assistant response", started_at: "2026-09-14 10:00:00", context: {}, status: "running" }, now);
   assert.equal(agent.originalAsk, "");
@@ -677,6 +697,37 @@ test("Hub retains old finalization-only result receipts", async t => {
   assert.equal(result.ok, true);
   assert.equal(result.agents.find(agent => agent.id === "receipt-number")?.pr.number, 73);
   assert.equal(result.agents.find(agent => agent.id === "receipt-url")?.pr.url, "https://github.com/owner/repo/pull/74");
+});
+
+test("Hub retains old context-only PR receipts", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "cottage-hub-context-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "hub.db");
+  const db = new DatabaseSync(path);
+  db.exec(`CREATE TABLE agent_runs (
+    id TEXT, agent TEXT, status TEXT, task TEXT, user TEXT, platform TEXT, model TEXT, parent_id TEXT, session_id TEXT,
+    context TEXT, queued_at TEXT, started_at TEXT, completed_at TEXT, updated_at TEXT, archived INTEGER,
+    input_tokens INTEGER, output_tokens INTEGER, cache_write_tokens INTEGER, cache_read_tokens INTEGER,
+    total_cost REAL, error TEXT, result_summary TEXT, attention_type TEXT, attention_message TEXT, result TEXT
+  )`);
+  const insert = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  const finished = "2000-01-01 00:00:00";
+  insert.run("context-finalization", "Resident", "completed", "Historic receipt", JSON.stringify({
+    repo: "owner/repo", finalization: { status: "ready", pullRequestNumber: 75 },
+  }), finished, finished);
+  insert.run("context-pr", "Resident", "completed", "Historic receipt", JSON.stringify({
+    repo: "owner/repo", pr: { number: 76, url: "https://github.com/owner/repo/pull/76" },
+  }), finished, finished);
+  insert.run("context-pr-receipt", "Resident", "completed", "Historic receipt", JSON.stringify({
+    repo: "owner/repo", pr: { finalization: { status: "ready", pullRequestNumber: 77 } },
+  }), finished, finished);
+  db.close();
+
+  const result = readHubAgents({ dbPath: path });
+  assert.equal(result.ok, true);
+  assert.equal(result.agents.find(agent => agent.id === "context-finalization")?.pr.number, 75);
+  assert.equal(result.agents.find(agent => agent.id === "context-pr")?.pr.url, "https://github.com/owner/repo/pull/76");
+  assert.equal(result.agents.find(agent => agent.id === "context-pr-receipt")?.pr.number, 77);
 });
 
 test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {
