@@ -421,6 +421,9 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         const body = await readFile(path);
         const headers = { ...cors, "content-type": contentType, "content-length": body.length };
         if (contentType === "audio/mpeg") {
+          // Bundled tracks are immutable deployment assets; media loop overlap
+          // must be able to reuse them while JSON endpoints remain no-store.
+          headers["cache-control"] = "public, max-age=31536000, immutable";
           headers["accept-ranges"] = "bytes";
           // A single byte range supports native media seeking and loop overlap.
           // HEAD describes the full resource and ignores Range per HTTP semantics.
