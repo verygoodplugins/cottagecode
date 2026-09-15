@@ -100,6 +100,13 @@ export function apprenticeResidentPosition(arrivals, id, plots, time, fallback, 
   return isApprenticeArrivalActive(arrivals,id,time,options.duration)||!fallback?null:fallback;
 }
 
+/** A hidden bedtime child can still be approached while their arrival sprite is visible. */
+export function apprenticeResidentTarget(kid, arrival, arriving=false){
+  if(arrival)return arrival;
+  if(arriving||kid?.hidden||!kid?.id||!Number.isFinite(kid.x)||!Number.isFinite(kid.y))return null;
+  return {id:kid.id,x:kid.x,y:kid.y};
+}
+
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();

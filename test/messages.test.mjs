@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appendFile,mkdtemp,readFile,rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {once} from 'node:events';
@@ -144,6 +145,36 @@ test('a prior receipt is returned when the cottage has advanced to another task'
     assert.equal((await retry.messenger.send(advanced,message)).body.delivery,'submitted');
     assert.equal(retry.calls.length,0,'a durable receipt is checked using the original payload task before current task validation');
   }finally{await rm(directory,{recursive:true,force:true});}
+});
+test('a receipt written before input request fields remains a durable retry match',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+  try{
+    const prior={status:200,body:{ok:true,delivery:'accepted',requestId:message.requestId,source:'autohub',timestamp:now}};
+    const legacyHash=createHash('sha256').update(JSON.stringify([agent.id,message.taskId,message.message])).digest('hex');
+    await appendFile(ledgerPath,JSON.stringify({id:message.requestId,hash:legacyHash,at:now,response:prior})+'\n');
+    const retry=fixture({ledgerPath});
+    const currentPayload={...message,inputRequestId:'question-a',inputRequestVersion:'question-a-v1'};
+    assert.deepEqual(await retry.messenger.send(agent,currentPayload),prior);
+    assert.equal(retry.calls.length,0,'the old durable receipt must prevent a second delivery');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test('HTTP retries return durable success and unconfirmed receipts after the cottage disappears',async()=>{
+  for(const {throws,delivery,status} of [{throws:false,delivery:'submitted',status:200},{throws:true,delivery:'unconfirmed',status:409}]){
+    const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+    try{
+      const first=fixture({ledgerPath,throws});
+      assert.equal((await first.messenger.send(agent,message)).body.delivery,delivery);
+      const retry=fixture({ledgerPath});
+      const server=createFeedServer({snapshot:()=>({agents:[],checkedAt:now,stale:false}),getActivity:async()=>null},{messages:retry.messenger});
+      server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
+      try{
+        const response=await fetch(base+'/agents/cottage-1/messages',{method:'POST',headers:{origin:base,'content-type':'application/json','x-cottagecode-request':'user-message'},body:JSON.stringify(message)});
+        assert.equal(response.status,status);assert.equal((await response.json()).delivery,delivery);
+        assert.equal(retry.calls.length,0,'a missing cottage must still honor an existing receipt without verifying or replaying the task');
+      }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+    }finally{await rm(directory,{recursive:true,force:true});}
+  }
 });
 test('an interrupted final receipt record preserves prior message reservations',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');

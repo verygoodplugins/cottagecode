@@ -167,6 +167,47 @@ test("a retained Hub resolution suppresses the same lingering raw Hub prompt", a
   assert.equal(feed.snapshot().agents[0].status, "blocked");
 });
 
+test("a retained Hub resolution clears an old prompt after its linked transcript advances tasks", async () => {
+  let answered = true;
+  let localTaskId = "hub-question";
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => {
+      const localInput = { id: "local-question", kind: "question", prompt: "New task question", questions: [], updatedAt: now + 2_000 };
+      const local = {
+        id: "session-1", source: "claude", taskId: localTaskId, taskStartedAt: now + 1_000,
+        sessionStartedAt: now - 10_000, status: "blocked", originalAsk: "The new local task", inputRequest: localInput,
+      };
+      return { ok: true, agents: [local], sessions: [{ ...local, events: [], sidechains: new Map(), resolvedInputRequests: new Set() }] };
+    },
+    readHub: () => {
+      const row = {
+        id: "hub-question", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+        task: "The Hub task", attention_message: "Which target?", attention_type: "question", updated_at: now + 1_000,
+        context: { integration: { requestId: "hub-question-round" } },
+        ...(answered ? { attention_response: "Local", attention_resolved_at: now } : {}),
+      };
+      return { ...emptyHub(), agents: [toCottage(row, now)], keys: new Set(["session-1"]), links: new Map([["hub-question", new Set(["hub-question", "session-1"])]]) };
+    },
+  });
+
+  await feed.scan();
+  localTaskId = "new-local-task";
+  answered = false;
+  await feed.scan();
+
+  const snapshot = feed.snapshot();
+  const hub = snapshot.agents.find(agent => agent.id === "hub-question");
+  const local = snapshot.agents.find(agent => agent.id === "session-1");
+  assert.equal(hub.inputRequest, null);
+  assert.equal(hub.status, "idle");
+  assert.equal(hub.attention, "");
+  assert.equal(hub.originalAsk, "The Hub task", "the Hub cottage keeps its own task diagnostics");
+  assert.equal((await feed.getActivity(hub.id)).inputRequest, null);
+  assert.equal(local.taskId, "new-local-task");
+  assert.equal(local.inputRequest.prompt, "New task question", "the distinct transcript task remains separate");
+  assert.equal(snapshot.letters, 1, "only the new transcript task contributes an input letter");
+});
+
 test("resolved terminal Hub attention does not remain blocked or visible", () => {
   for (const status of ["failed", "cancelled", "interrupted"]) {
     for (const resolution of [{ attention_response: "Continue" }, { attention_resolved_at: now }]) {
