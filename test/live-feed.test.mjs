@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blankFeedMeta, createLatestRefresh, readCurrentFeed } from "../src/live-feed.mjs";
+import { blankFeedMeta, blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "../src/live-feed.mjs";
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -53,13 +53,15 @@ test("an endpoint switch reruns immediately and applies only its current respons
   assert.deepEqual(applied, ["from-b"]);
 });
 
-test("a new endpoint starts with empty metadata instead of prior handoffs", () => {
-  const prior = blankFeedMeta();
-  prior.relationships.push({ from: "HubTown", to: "AppTown" });
-  prior.handoffs.push({ id: "from-a" });
-  const next = blankFeedMeta();
+test("a demo fallback clears a prior endpoint snapshot and metadata", () => {
+  const prior = { snapshot: [{ id: "real-agent" }], endpoint: "http://localhost:8787/agents", meta: blankFeedMeta() };
+  prior.meta.relationships.push({ from: "HubTown", to: "AppTown" });
+  prior.meta.handoffs.push({ id: "from-real-feed" });
+  assert.deepEqual(snapshotForEndpoint(prior, prior.endpoint), prior.snapshot);
 
-  assert.deepEqual(next, { source: "", relationships: [], handoffs: [] });
-  assert.notEqual(next, prior);
-  assert.deepEqual(next.handoffs, []);
+  const fallback = blankFeedState();
+  assert.deepEqual(fallback, { snapshot: null, endpoint: null, meta: { source: "", relationships: [], handoffs: [] } });
+  assert.equal(snapshotForEndpoint(fallback, prior.endpoint), null,
+    "a later local-feed failure must not restore real cottages into the demo namespace");
+  assert.notEqual(fallback.meta, prior.meta);
 });
