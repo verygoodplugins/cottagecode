@@ -34,6 +34,25 @@ export const handoffAction=url=>safeHttpsUrl(url)?button('handoff','Open handoff
 export function appendInlineHandoffs(events,append){
   for(const event of events||[])if(event?.kind==='handoff'&&event.from&&event.to)append(event);
 }
+export function applyActivityPage(cache,data,{older=false}={}){
+  if(!Array.isArray(data?.events))throw new Error('Activity response has no events');
+  if(data.cursorReset){
+    if(!older)cache.events=[];
+    cache.hasMore=!!data.hasMore;cache.warning='An activity cursor expired. Only retained source history is available.';
+  }
+  cache.events=(older?mergeActivity(data.events,cache.events):mergeActivity(cache.events,data.events)).slice(-1500);
+  cache.source=String(data.source||'feed');
+  if(older||!cache.cursor)cache.hasMore=!!data.hasMore;
+  if(!older)cache.cursor=data.cursor||cache.events.at(-1)?.id||cache.cursor;
+  cache.stale=!!data.stale;cache.error=data.error||'';cache.unavailable=!!data.unavailable;
+  return cache;
+}
+export function activityJournalPresentation(cache={}){
+  const source=String(cache.source||'feed');
+  if(cache.unavailable)return {state:'unavailable',text:source+' · activity unavailable from this source'};
+  if(cache.stale)return {state:'stale',text:source+' · stale — '+String(cache.error||'connection interrupted')};
+  return {state:'live',text:source+' · live activity'};
+}
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
@@ -233,7 +252,7 @@ export function createObservatory(api){
     const identity=(a.taskId||'')+'|'+(a.activityUrl||'');
     if(activity.get(a.id)?.identity!==identity){
       inflight.get(a.id)?.abort();inflight.delete(a.id);
-      activity.set(a.id,{identity,events:[],source:'none',cursor:null,hasMore:false,stale:false});
+      activity.set(a.id,{identity,events:[],source:'none',cursor:null,hasMore:false,stale:false,unavailable:false});
     }
     return activity.get(a.id);
   }
@@ -246,7 +265,7 @@ export function createObservatory(api){
     if(!a)return;
     const cache=cacheFor(a);
     if(Array.isArray(a.events)){
-      cache.events=mergeActivity(cache.events,a.events);cache.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');
+      cache.events=mergeActivity(cache.events,a.events);cache.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');cache.unavailable=false;
       appendInlineHandoffs(cache.events,appendHandoff);return;
     }
     const url=activityAddress(a,api.getEndpoint());if(!url||inflight.has(a.id))return;
@@ -257,16 +276,9 @@ export function createObservatory(api){
     try{
       const res=await fetch(url,{signal:controller.signal,headers:{accept:'application/json'}});
       if(!res.ok)throw new Error('Activity HTTP '+res.status);
-      const data=await res.json();if(!Array.isArray(data.events))throw new Error('Activity response has no events');
+      const data=await res.json();
       if(epoch!==sourceKey||activity.get(a.id)!==cache)return;
-      if(data.cursorReset){
-        if(!older)cache.events=[];
-        cache.hasMore=!!data.hasMore;cache.warning='An activity cursor expired. Only retained source history is available.';
-      }
-      cache.events=(older?mergeActivity(data.events,cache.events):mergeActivity(cache.events,data.events)).slice(-1500);cache.source=String(data.source||'feed');
-      if(older||!cache.cursor)cache.hasMore=!!data.hasMore;
-      if(!older)cache.cursor=data.cursor||cache.events.at(-1)?.id||cache.cursor;
-      cache.stale=!!data.stale;cache.error=data.error||'';
+      applyActivityPage(cache,data,{older});
       if(Object.hasOwn(data,'todos'))cache.todos=normalizeTodos(data.todos);
       recordActivity(a,data.events);
       for(const e of data.events)if(e.kind==='handoff'&&e.from&&e.to)appendHandoff(e);
@@ -349,7 +361,8 @@ export function createObservatory(api){
     }else if(tab==='request'){
       content='<h3>Pinned request</h3><p class="hint">'+(a.originalAskSource==='session'?'First request recorded in this session. Current task boundaries are unavailable.':'Original request supplied by the task source.')+'</p><div class="request-paper">'+esc(a.originalAsk||'The feed has not supplied the original request.')+'</div>';
     }else if(tab==='journal'){
-      content='<div class="section-head"><h3>At the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint">'+esc(cache.source)+(cache.stale?' · stale — '+esc(cache.error||'connection interrupted'):' · live activity')+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>';
+      const presentation=activityJournalPresentation(cache);
+      content='<div class="section-head"><h3>At the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint activity-'+esc(presentation.state)+'">'+esc(presentation.text)+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+(cache.unavailable?'<p class="hint">This source has not made a task journal available.</p>':'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>');
     }else if(tab==='review'){
       content='<h3>Review desk</h3><div class="pr-summary" style="--pr-color:'+s.color+'"><strong>'+s.symbol+' '+s.label+'</strong><p>'+esc(pr.title||'')+'</p>'+link(pr.url,pr.number?'Open PR #'+pr.number:'Open PR')+'</div><dl><dt>Evidence</dt><dd>'+esc(pr.source||'Unavailable')+'</dd><dt>Checked</dt><dd>'+esc(clock(pr.checkedAt))+(pr.stale?' · stale':'')+'</dd><dt>Head</dt><dd class="mono">'+esc(pr.headSha?.slice(0,12)||'Unavailable')+'</dd><dt>Review</dt><dd>'+esc(pr.labels?.filter(l=>String(l).startsWith('babysit:')).join(', ')||pr.reviewState||'Not supplied')+'</dd></dl>'+(pr.reason?'<p class="hint review-reason">'+esc(pr.reason)+'</p>':'')+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
     }else if(tab==='artifacts'){
@@ -463,7 +476,7 @@ export function createObservatory(api){
         knownKids.add(a.id);if(historyInitialized)apprentices.push({id:a.id,parent:a.parent,start:performance.now()/1000});
       }
       const c=cacheFor(a);if(Array.isArray(a.events)){
-        c.events=mergeActivity(c.events,a.events);c.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');recordActivity(a,a.events);
+        c.events=mergeActivity(c.events,a.events);c.source=a.activitySource||a.source||(api.getEndpoint()?'feed':'demo');c.unavailable=false;recordActivity(a,a.events);
         appendInlineHandoffs(c.events,appendHandoff);
       }
       const line=latestLine(a),oldLine=activityLines.get(a.id),p=plotFor(a.id);
