@@ -206,19 +206,20 @@ export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12)
   const { width, height } = world || {}, state = stateOf(timeState);
   const result = { phase: state.phase, windows: 0, fireflies: 0 };
   if (!ctx || !finite(width) || !finite(height) || width <= 0 || height <= 0) return result;
-  if (state.darkness <= .0001 && state.warmth <= .0001 && state.windowGlow <= .001 && state.fireflies <= .01) return result;
-  const plots = (Array.isArray(world.plots) ? world.plots : []).slice(0, LIMITS.plots).filter(plot => finite(plot.x) && finite(plot.y));
-  const frame = reduce || !finite(time) ? 0 : time, style = sceneStyle(state);
+  const hasAtmosphere = state.darkness > .0001 || state.warmth > .0001 || state.windowGlow > .001 || state.fireflies > .01;
   ctx.save();
   try {
     ctx.imageSmoothingEnabled = false;
-    // Dynamic town sprites that belong to the scenery paint before this pass so
-    // they receive the same dusk/night palette as their destination cottage.
+    // Dynamic town sprites are a render pass of their own. Run them even during
+    // the zero-effect Day preview, then keep them ahead of the dusk/night palette.
     if (typeof beforePalette === 'function') {
       ctx.save();
       try { ctx.globalCompositeOperation = 'source-over'; beforePalette(ctx); }
       finally { ctx.restore(); }
     }
+    if (!hasAtmosphere) return result;
+    const plots = (Array.isArray(world.plots) ? world.plots : []).slice(0, LIMITS.plots).filter(plot => finite(plot.x) && finite(plot.y));
+    const frame = reduce || !finite(time) ? 0 : time, style = sceneStyle(state);
     // Standalone callers retain the parcel/label colors. The live renderer draws
     // those once more after this palette pass, avoiding rectangular light gaps.
     clipped(ctx, width, height, signalsPaintedAfter ? [] : plots.flatMap(plot => [

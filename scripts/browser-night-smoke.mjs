@@ -70,7 +70,9 @@ try{
   await until("window.cottageObservatory.state.apprentices===1&&!!window.cottageObservatory.apprenticeArrival('night-arrival')",'New apprentice did not begin their arrival walk');
   const arrivalParcel=await evaluate(`(async()=>{await new Promise(requestAnimationFrame);const c=document.getElementById('town'),p=window.cottageObservatory.apprenticeArrival('night-arrival');return p?Array.from(c.getContext('2d').getImageData(Math.round(p.x+6),Math.round(p.y-6),1,1).data).slice(0,3):null;})()`);
   assert.ok(arrivalParcel[2]>arrivalParcel[0]+20,'new arrival parcel should use the blue night palette: '+arrivalParcel);
-  pass('a newly arriving apprentice and parcel share the night palette');
+  await evaluate(`(()=>{const p=window.cottageObservatory.apprenticeArrival('night-arrival'),player=window.cottageObservatory.player;if(!p||!player)throw new Error('Arrival target is unavailable');player.x=p.x;player.y=p.y;const canvas=document.getElementById('town');canvas.focus();canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'e',bubbles:true}));window.dispatchEvent(new KeyboardEvent('keyup',{key:'e',bubbles:true}));})()`);
+  await until("window.cottageObservatory.state.selected==='night-arrival'&&window.cottageObservatory.state.tab==='talk'",'A visibly arriving tucked apprentice could not be spoken to');
+  pass('a newly arriving apprentice shares the night palette and stays talkable while their bedtime frame is hidden');
   await click('[data-cottage="night-sleeper"]');await click('[data-action="enter"]');
   await until('window.cottageObservatory.state.resting','Host did not go to bed');
   const roomSeed=(await state()).scene.roomSeed;

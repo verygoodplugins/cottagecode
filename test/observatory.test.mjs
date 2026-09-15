@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -64,6 +64,15 @@ test('an arriving apprentice uses its visible walking position and never a stale
   assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,103,familyPosition),{id:'pip',x:147.5,y:256},'talk and click follow the visible walk');
   assert.deepEqual(apprenticeResidentPosition(arrivals,'pip',plots,108,familyPosition),familyPosition,'family interaction resumes after the arrival');
   assert.equal(apprenticeResidentPosition(arrivals,'pip',[],103,familyPosition),null,'an active arrival with no visible position cannot expose a stale hitbox');
+});
+
+test('a visible arriving apprentice remains a talk target after its bedtime frame tucks them in',()=>{
+  const arrival={id:'pip',x:147.5,y:256};
+  const tucked={id:'pip',x:168,y:240,hidden:true};
+  assert.deepEqual(apprenticeResidentTarget(tucked,arrival,true),arrival,'the arrival walk owns the interaction target');
+  assert.equal(apprenticeResidentTarget(tucked,null,true),null,'an active but unpaintable arrival never exposes the stale tucked position');
+  assert.equal(apprenticeResidentTarget(tucked,null,false),null,'a settled child remains indoors after arrival');
+  assert.deepEqual(apprenticeResidentTarget({...tucked,hidden:false},null,false),{id:'pip',x:168,y:240});
 });
 
 test('activity cache clears task artifacts when a session-only cottage advances to a new session',()=>{

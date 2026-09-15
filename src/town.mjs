@@ -1,7 +1,7 @@
 import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
 import { createTownLayout, advanceDuck, normalizeTown } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
-import { createObservatory } from "./observatory.mjs";
+import { createObservatory, apprenticeResidentTarget } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
@@ -1906,10 +1906,9 @@ observatory=createObservatory({
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
   getResidents:()=>residentTargets(actors,plots).concat([...bedtimeFrames].flatMap(([parentId,r])=>{
     if(!plots.some(plot=>plot.agent.id===parentId))return [];
-    return r.kids.filter(k=>!k.hidden).map(k=>{
-    const arrival=observatory?.apprenticeArrival(k.id,t);
-    return arrival||(observatory?.isApprenticeArriving(k.id,t)?null:{id:k.id,x:k.x,y:k.y});
-    }).filter(Boolean);
+    return r.kids.map(k=>apprenticeResidentTarget(
+      k,observatory?.apprenticeArrival(k.id,t),observatory?.isApprenticeArriving(k.id,t)
+    )).filter(Boolean);
   })),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,

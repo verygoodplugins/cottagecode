@@ -169,6 +169,22 @@ test('details painted before the town palette join the dusk and night scene', ()
   assert.ok(luminance(arrival) < luminance(daylight) * .6, 'arrival parcel should be darker than its daytime paint: ' + arrival);
 });
 
+test('daylight still paints dynamic arrivals when the palette has no effect', () => {
+  const ctx = recordingContext();
+  let painted = 0;
+  const result = paintTownAtmosphere(ctx, { width: 24, height: 24 }, villageTime('day'), {
+    beforePalette(canvas) {
+      painted++;
+      canvas.fillStyle = '#b97847';
+      canvas.fillRect(12, 14, 6, 5);
+    },
+  });
+  assert.equal(result.phase, 'day');
+  assert.equal(painted, 1, 'an arriving apprentice must not disappear in the Day preview');
+  assert.ok(ctx.calls.some(call => call[0] === 'fillRect' && call[1] === 12 && call[2] === 14));
+  assert.equal(ctx.depth, 0, 'the optional painter keeps canvas state balanced');
+});
+
 test('night replaces previously bright inactive panes, keeps only working windows warm, and respects filters', () => {
   const points = Object.fromEntries(WORLD.plots.map((plot, i) => [i, { x: plot.x + 13, y: plot.y + 47, rgb: [255, 240, 180] }]));
   const ctx = pixelContext(points);
