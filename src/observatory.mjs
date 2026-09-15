@@ -51,6 +51,12 @@ export function activityJournalPresentation(cache={}){
   if(cache.stale)return {state:'stale',text:source+' · stale — '+String(cache.error||'connection interrupted')};
   return {state:'live',text:source+' · live activity'};
 }
+export function activityCacheFor(cache,a={}){
+  const sessionIdentity=a.sessionId||a.sessionStartedAt||null;
+  const identity=JSON.stringify([a.taskId||null,sessionIdentity,a.activityUrl||null]);
+  if(cache?.identity===identity)return cache;
+  return {identity,events:[],source:'none',cursor:null,hasMore:false,stale:false,unavailable:false};
+}
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
@@ -235,10 +241,10 @@ export function createObservatory(api){
     if(todoScroll&&panel.querySelector('.todo-list'))panel.querySelector('.todo-list').scrollTop=todoScroll;
   }
   function cacheFor(a){
-    const identity=(a.taskId||'')+'|'+(a.activityUrl||'');
-    if(activity.get(a.id)?.identity!==identity){
+    const previous=activity.get(a.id),cache=activityCacheFor(previous,a);
+    if(cache!==previous){
       inflight.get(a.id)?.abort();inflight.delete(a.id);
-      activity.set(a.id,{identity,events:[],source:'none',cursor:null,hasMore:false,stale:false,unavailable:false});
+      activity.set(a.id,cache);
     }
     return activity.get(a.id);
   }
