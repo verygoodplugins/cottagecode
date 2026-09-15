@@ -278,7 +278,7 @@ test("remote todo observations survive subsequent feed polls and explicit cleari
 });
 
 test("Hub cottages with local journals refresh dedicated todos without reading the remote timeline", async () => {
-  const session = sampleSession();
+  const session = { ...sampleSession(), taskId: "hub-run", taskStartedAt: now - 20_000 };
   const hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 20000, status: "running", task: "Current task", context: {} }, now);
   let todos = { items: [{ id: "one", text: "Inspect results", status: "pending" }], source: "hub:todo", updatedAt: now };
   const calls = [];
@@ -313,7 +313,7 @@ test("Hub cottages with local journals refresh dedicated todos without reading t
 });
 
 test("pending todo reads only update the matching cottage task and session identity", async () => {
-  const session = sampleSession();
+  const session = { ...sampleSession(), taskId: "hub-run", taskStartedAt: now - 20_000 };
   let hubAgent = toCottage({ id: "hub-run", record_kind: "logical_task", session_id: "session-1", started_at: now - 20000, status: "running", task: "Current task", context: {} }, now);
   let release;
   const pending = new Promise(resolve => { release = resolve; });
