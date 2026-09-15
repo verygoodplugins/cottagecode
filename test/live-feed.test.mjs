@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createLatestRefresh, readCurrentFeed } from "../src/live-feed.mjs";
+import { blankFeedMeta, createLatestRefresh, readCurrentFeed } from "../src/live-feed.mjs";
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -51,4 +51,15 @@ test("an endpoint switch reruns immediately and applies only its current respons
 
   assert.deepEqual(requests, ["https://feed.example/a", "https://feed.example/b"]);
   assert.deepEqual(applied, ["from-b"]);
+});
+
+test("a new endpoint starts with empty metadata instead of prior handoffs", () => {
+  const prior = blankFeedMeta();
+  prior.relationships.push({ from: "HubTown", to: "AppTown" });
+  prior.handoffs.push({ id: "from-a" });
+  const next = blankFeedMeta();
+
+  assert.deepEqual(next, { source: "", relationships: [], handoffs: [] });
+  assert.notEqual(next, prior);
+  assert.deepEqual(next.handoffs, []);
 });

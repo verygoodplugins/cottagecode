@@ -61,6 +61,24 @@ test("structured receipts preserve review heads and require current-head verific
   assert.equal(prStage({ ...base, finalization, labels: [] }, now), "open");
 });
 
+test("live PR identity and a finalization receipt must agree", () => {
+  const ready = { ...base, labels: ["babysit:ready"] };
+  const receipt = {
+    status: "ready", terminalLabel: "babysit:ready", pullRequestNumber: 12,
+    pullRequestUrl: base.url, branchHeadSha: "head-a", checkedAt: now,
+  };
+  for (const finalization of [
+    { ...receipt, pullRequestNumber: 13, pullRequestUrl: "https://github.com/example/cottage/pull/13" },
+    { ...receipt, pullRequestUrl: "https://github.com/example/other/pull/12" },
+  ]) {
+    const normalized = normalizePr({ ...ready, finalization }, now);
+    assert.equal(normalized.state, "unknown");
+    assert.equal(normalized.stage, "unknown");
+    assert.equal(normalized.reviewUncertain, true);
+    assert.match(normalized.reason, /different pull requests/i);
+  }
+});
+
 test("normalization is stable and rejects URL/number identity conflicts", () => {
   const p = normalizePr({ ...base, labels: ["babysit:ready"] }, now);
   assert.deepEqual(normalizePr(p, now), p);
