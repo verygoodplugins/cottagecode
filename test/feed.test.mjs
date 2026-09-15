@@ -507,6 +507,33 @@ test("Hub database adapter accepts older schemas without optional task columns",
   assert.equal(readHubAgents({ dbPath: join(directory, "missing.db") }).ok, false);
 });
 
+test("Hub retains old finalization-only result receipts", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "cottage-hub-result-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "hub.db");
+  const db = new DatabaseSync(path);
+  db.exec(`CREATE TABLE agent_runs (
+    id TEXT, agent TEXT, status TEXT, task TEXT, user TEXT, platform TEXT, model TEXT, parent_id TEXT, session_id TEXT,
+    context TEXT, queued_at TEXT, started_at TEXT, completed_at TEXT, updated_at TEXT, archived INTEGER,
+    input_tokens INTEGER, output_tokens INTEGER, cache_write_tokens INTEGER, cache_read_tokens INTEGER,
+    total_cost REAL, error TEXT, result_summary TEXT, attention_type TEXT, attention_message TEXT, result TEXT
+  )`);
+  const insert = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, result, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const finished = "2000-01-01 00:00:00";
+  insert.run("receipt-number", "Resident", "completed", "Historic receipt", "{}", JSON.stringify({
+    finalization: { status: "ready", pullRequestNumber: 73 },
+  }), finished, finished);
+  insert.run("receipt-url", "Resident", "completed", "Historic receipt", "{}", JSON.stringify({
+    finalization: { status: "ready", pullRequestUrl: "https://github.com/owner/repo/pull/74" },
+  }), finished, finished);
+  db.close();
+
+  const result = readHubAgents({ dbPath: path });
+  assert.equal(result.ok, true);
+  assert.equal(result.agents.find(agent => agent.id === "receipt-number")?.pr.number, 73);
+  assert.equal(result.agents.find(agent => agent.id === "receipt-url")?.pr.url, "https://github.com/owner/repo/pull/74");
+});
+
 test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {
   const local = {
     id: "session-1", source: "claude", taskId: "local-task", taskStartedAt: now - 10_000,
@@ -525,7 +552,9 @@ test("Hub logical tasks do not inherit diagnostics from a different local task",
   });
 
   await feed.scan();
-  const [agent] = feed.snapshot().agents;
+  const cottages = feed.snapshot().agents;
+  const agent = cottages.find(cottage => cottage.id === "hub-task");
+  assert.deepEqual(cottages.map(cottage => cottage.id).sort(), ["hub-task", "session-1"]);
   assert.equal(agent.originalAsk, "Hub task request");
   assert.equal(agent.activity, "Hub diagnostic");
   assert.equal(agent.lastLine, "Hub diagnostic");
@@ -551,7 +580,9 @@ test("Hub logical tasks do not inherit diagnostics from an unscoped local transc
   });
 
   await feed.scan();
-  const [agent] = feed.snapshot().agents;
+  const cottages = feed.snapshot().agents;
+  const agent = cottages.find(cottage => cottage.id === "hub-task");
+  assert.deepEqual(cottages.map(cottage => cottage.id).sort(), ["hub-task", "session-1"]);
   assert.equal(agent.originalAsk, "Hub task request");
   assert.equal(agent.activity, "Hub diagnostic");
   assert.equal(agent.lastLine, "Hub diagnostic");

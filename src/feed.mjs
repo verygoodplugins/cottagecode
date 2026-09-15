@@ -240,6 +240,7 @@ export function createFeed({
       nextActivity.set(session.id, session.events);
       for (const child of session.sidechains.values()) nextActivity.set(`${session.id}:${child.root.slice(0, 8)}`, child.events);
     }
+    const suppressedLocalIds = new Set();
     const combined = hub.agents.map(agent => {
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
@@ -254,6 +255,10 @@ export function createFeed({
         nextActivity.set(agent.id, []);
         return { ...agent, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
       }
+      // An external-session row intentionally represents the transcript as a
+      // whole. A logical Hub task can take a local cottage's place only when
+      // the task identity itself agrees.
+      if (sameExplicitTask || agent.originalAskSource === "session") suppressedLocalIds.add(local.id);
       const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
         !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
       const localTodos = normalizeTodos(local.todos);
@@ -277,7 +282,7 @@ export function createFeed({
         todos,
       };
     });
-    for (const agent of claude.agents) if (!hub.keys?.has(agent.id)) combined.push({ ...agent });
+    for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push({ ...agent });
     const seen = new Set(combined.map(agent => agent.id));
     // A live PR outlives a transcript window or DB scan window.
     for (const old of cache) if (!seen.has(old.id) && hasOutstandingPr(old, now())) combined.push({ ...old, status: "offline" });
