@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {feedEnvelope,normalizeCottage,mergeActivity,activityAddress} from '../src/feed-client.mjs';
+import {feedEnvelope,normalizeCottage,mergeActivity,activityAddress,elapsedMs} from '../src/feed-client.mjs';
 test('bare and wrapped feeds are compatible but missing agents is invalid',()=>{
   assert.deepEqual(feedEnvelope([]).agents,[]);assert.equal(feedEnvelope({agents:[],source:'custom'}).source,'custom');
   assert.throws(()=>feedEnvelope({source:'oops'}));
@@ -24,10 +24,15 @@ test('source staleness is preserved even for a successful HTTP response',()=>{
   const data=feedEnvelope({agents:[],source:'claude',stale:true,errors:['scan failed']});
   assert.equal(data.stale,true);assert.deepEqual(data.errors,['scan failed']);
 });
-test('completed duration stays fixed and unknown boundaries stay unavailable',async()=>{
-  const {elapsedMs}=await import('../src/feed-client.mjs');
+test('completed duration stays fixed and unknown boundaries stay unavailable',()=>{
   const start=1700000000000;
   assert.equal(elapsedMs({taskStartedAt:start,status:'done',endedAt:start+1000},start+9000),1000);
   assert.equal(elapsedMs({taskStartedAt:start,status:'done'},start+9000),null);
   assert.equal(elapsedMs({startedAt:start,status:'working'},start+9000),null);
+});
+test('terminal attention keeps its known elapsed duration after normalizing',()=>{
+  const start=1700000000000;
+  const cottage=normalizeCottage({taskStartedAt:start,status:'blocked',terminal:true,endedAt:start+1000},0,{town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'});
+  assert.equal(cottage.terminal,true);
+  assert.equal(elapsedMs(cottage,start+9000),1000);
 });

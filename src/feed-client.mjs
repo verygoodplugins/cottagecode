@@ -17,7 +17,7 @@ export function normalizeCottage(a,i,{town,model,occupancy,now=Date.now()}){
     originalAsk:typeof a.originalAsk==='string'?a.originalAsk:'',
     taskId:a.taskId?String(a.taskId):null,
     taskStartedAt:validTime(a.taskStartedAt),sessionStartedAt:validTime(a.sessionStartedAt),
-    startedAt:validTime(a.startedAt),endedAt:validTime(a.endedAt),updatedAt:validTime(a.updatedAt),
+    startedAt:validTime(a.startedAt),endedAt:validTime(a.endedAt),updatedAt:validTime(a.updatedAt),terminal:!!a.terminal,
     worktree:String(a.worktree||''),worktreePath:String(a.worktreePath||''),branch:String(a.branch||''),
     activity:String(a.activity||''),lastLine:String(a.lastLine||''),result:String(a.result||''),
     attention:String(a.attention||''),model:model(a.model),tokens:Number(a.tokens)||0,cost:Number(a.cost)||0,
@@ -45,7 +45,7 @@ export function mergeActivity(current,incoming){
 export function elapsedMs(agent,now=Date.now()){
   const start=validTime(agent.taskStartedAt);
   if(!start)return null;
-  const terminal=['done','offline'].includes(agent.status);
+  const terminal=['done','offline'].includes(agent.status)||agent.terminal===true;
   const end=terminal?validTime(agent.endedAt):now;
   return end&&end>=start?end-start:null;
 }

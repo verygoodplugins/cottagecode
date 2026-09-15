@@ -44,9 +44,22 @@ export function createBedtimeRoutine() {
       const namespace = String(source ?? '');
       const nextEvening = isBedtime(light);
       if (evening !== nextEvening) { evening = nextEvening; started = time; cycle++; }
+      const keyFor = agent => JSON.stringify([namespace, agent.id, agent.taskId ?? null]);
+      const active = new Set();
+      for (const source of Array.isArray(present) ? present : []) {
+        const agent = source?.agent || source;
+        if (!agent?.id) continue;
+        const key = keyFor(agent);
+        active.add(key);
+        if (agent.parent) continue;
+        // The settled filter can hide a cottage exactly as a new evening
+        // begins. Presence in the feed still starts its family routine; a
+        // later reveal must use this evening's elapsed time, not a new walk.
+        if (!homes.has(key)) homes.set(key, { seed: hash(key), arrived: time });
+      }
       const frames = new Map();
       for (const plot of plots) {
-        const agent = plot.agent || {}, key = JSON.stringify([namespace, agent.id, agent.taskId ?? null]);
+        const agent = plot.agent || {}, key = keyFor(agent);
         if (!homes.has(key)) homes.set(key, { seed: hash(key), arrived: time });
         const home = homes.get(key), seed = home.seed;
         const elapsed = reduce || home.tuckedCycle === cycle ? 100 : Math.max(0, time - Math.max(started, home.arrived) - (seed % 17) / 10);
@@ -76,11 +89,6 @@ export function createBedtimeRoutine() {
       // A filtered town can temporarily omit a settled cottage. Its family is
       // still part of the feed, so retain the home until the task itself goes
       // away; otherwise revealing the settled filter restarts homecoming.
-      const active = new Set();
-      for (const source of Array.isArray(present) ? present : []) {
-        const agent = source?.agent || source;
-        if (agent?.id) active.add(JSON.stringify([namespace, agent.id, agent.taskId ?? null]));
-      }
       for (const key of homes.keys()) if (!active.has(key)) homes.delete(key);
       return frames;
     },
