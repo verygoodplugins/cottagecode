@@ -285,12 +285,27 @@ test("Hub database adapter accepts older schemas without optional task columns",
     total_cost REAL, error TEXT, result_summary TEXT, attention_type TEXT, attention_message TEXT
   )`);
   db.prepare("INSERT INTO agent_runs(id, agent, status, task, context) VALUES (?, ?, ?, ?, ?)").run("old-task", "Resident", "running", "Original request", "{}");
+  db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    "historic-pr", "Resident", "completed", "Historic PR work",
+    JSON.stringify({ githubAutoJackRequest: { repo: "owner/repo", targetType: "pull_request", targetNumber: 72 } }),
+    "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+  );
+  db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    "historic-issue", "Resident", "completed", "Historic issue work",
+    JSON.stringify({ githubAutoJackRequest: { repo: "owner/repo", targetType: "issue", targetNumber: 73 } }),
+    "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+  );
   db.close();
   const result = readHubAgents({ dbPath: path });
   assert.equal(result.ok, true);
   assert.equal(result.agents[0].originalAsk, "Original request");
   assert.equal(result.agents[0].taskStartedAt, null);
   assert.equal(result.links.get("old-task").has("old-task"), true);
+  const retainedPr = result.agents.find(agent => agent.id === "historic-pr");
+  assert.equal(retainedPr.pr.number, 72);
+  assert.equal(retainedPr.pr.url, "https://github.com/owner/repo/pull/72");
+  assert.equal(retainedPr.occupancy, "live", "an identifiable old PR remains visible after restart");
+  assert.equal(result.agents.some(agent => agent.id === "historic-issue"), false);
   assert.equal(readHubAgents({ dbPath: join(directory, "missing.db") }).ok, false);
 });
 
@@ -298,6 +313,32 @@ test("Hub logical tasks do not inherit diagnostics from a different local task",
   const local = {
     id: "session-1", source: "claude", taskId: "local-task", taskStartedAt: now - 10_000,
     sessionStartedAt: now - 20_000, originalAsk: "Local task request", originalAskSource: "task",
+    activity: "Local diagnostic", lastLine: "Local diagnostic", status: "working",
+  };
+  const hubAgent = {
+    id: "hub-task", source: "hub", taskId: "hub-task", taskStartedAt: now - 5_000,
+    sessionStartedAt: null, originalAsk: "Hub task request", originalAskSource: "task",
+    activity: "Hub diagnostic", lastLine: "Hub diagnostic", status: "working",
+  };
+  const localEvents = [{ id: "local-progress", kind: "progress", text: "Local progress", timestamp: now - 2_000 }];
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [local], sessions: [{ id: "session-1", events: localEvents, sidechains: new Map() }] }),
+    readHub: () => ({ ok: true, agents: [hubAgent], keys: new Set(["hub-task", "session-1"]), links: new Map([["hub-task", new Set(["hub-task", "session-1"])]]) }),
+  });
+
+  await feed.scan();
+  const [agent] = feed.snapshot().agents;
+  assert.equal(agent.originalAsk, "Hub task request");
+  assert.equal(agent.activity, "Hub diagnostic");
+  assert.equal(agent.lastLine, "Hub diagnostic");
+  assert.equal(agent.sessionStartedAt, now - 20_000, "session timing is safe to retain");
+  assert.deepEqual((await feed.getActivity("hub-task")).events, []);
+});
+
+test("Hub logical tasks do not inherit diagnostics from an unscoped local transcript", async () => {
+  const local = {
+    id: "session-1", source: "claude", taskId: null, taskStartedAt: null,
+    sessionStartedAt: now - 20_000, originalAsk: "Local session request", originalAskSource: "session",
     activity: "Local diagnostic", lastLine: "Local diagnostic", status: "working",
   };
   const hubAgent = {

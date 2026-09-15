@@ -230,10 +230,13 @@ export function createFeed({
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
       if (!local) return agent;
-      const taskMismatch = agent.taskId && local.taskId && String(agent.taskId) !== String(local.taskId);
-      if (taskMismatch) {
-        // A transcript can be the same session but a later logical task. Its
-        // timing is session-scoped; its request, activity, and journal are not.
+      const hubHasExplicitTask = Boolean(agent.taskId);
+      const sameExplicitTask = hubHasExplicitTask && Boolean(local.taskId) &&
+        String(agent.taskId) === String(local.taskId);
+      if (hubHasExplicitTask && !sameExplicitTask) {
+        // A transcript can be the same session but a different or unscoped
+        // logical task. Its timing is session-scoped; its request, activity,
+        // and journal are not safe to attribute to the Hub task.
         nextActivity.set(agent.id, []);
         return { ...agent, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
       }
