@@ -276,6 +276,9 @@ Old `{ "number", "url", "title", "state" }` objects continue to work. Omitting `
 | `reviewedHeadSha` | string | Head covered by recorded review/finalization evidence. |
 | `source` | string | Evidence source, such as `github`, `finalization`, or the feed's own adapter name. |
 | `checkedAt` | number \| null | Time the evidence was actually checked. Refresh it only after a successful check. |
+| `openedAt` | number \| string \| null | When the PR opened (epoch ms or ISO). Used for decorative parcel-age scenery; the bundled GitHub adapter maps `createdAt` here. Without it, a live cottage falls back to other clocks and may stay visually fresh. |
+| `mergedAt` | number \| string \| null | Optional merge time when known. |
+| `closedAt` | number \| string \| null | Optional close time when known. |
 | `stale` | boolean | Evidence is out of date or its source failed. |
 | `reason` | string | Short explanation of uncertainty or failure. |
 | `isDraft` | boolean | A draft cannot be ready to merge. |
