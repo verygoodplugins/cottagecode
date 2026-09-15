@@ -310,6 +310,14 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
             OR (json_valid(context) AND (
               lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
               OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
+              -- Keep completed tasks whose durable context identifies a PR. These
+              -- forms are intentionally aligned with inferPr()/toCottage().
+              OR json_extract(context, '$.finalization.pullRequestNumber') IS NOT NULL
+              OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
+              OR json_extract(context, '$.pr.number') IS NOT NULL
+              OR json_extract(context, '$.pr.url') IS NOT NULL
+              OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
+              OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
             ))
             OR context LIKE '%"babysitHandoff"%'
             ${columns.has("result") ? `OR CASE WHEN json_valid(result) THEN
