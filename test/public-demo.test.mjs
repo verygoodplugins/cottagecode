@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { buildDemo, normalizeBase } from '../scripts/build-demo.mjs';
 import { isPublicDemoDocument, PUBLIC_DEMO } from '../src/runtime.mjs';
+import { isPracticeDemo } from '../src/observatory.mjs';
 
 const SOURCE = fileURLToPath(new URL('../src/', import.meta.url));
 const TOWN = await readFile(new URL('../src/town.mjs', import.meta.url), 'utf8');
@@ -198,7 +199,7 @@ test('base path cannot contain a host, traversal, HTML, query, or ambiguous esca
   assert.equal(normalizeBase('/preview/v2'), '/preview/v2/');
 });
 
-function controllerHarness({ publicDemo = true, search = '', endpoint = 'https://live.example/agents' } = {}) {
+function controllerHarness({ publicDemo = true, search = '', endpoint = 'https://live.example/agents', feedResponse } = {}) {
   const feed = { hidden: false }, listeners = new Map();
   const box = { value: endpoint, disabled: false, closest: () => feed, addEventListener: (name, fn) => listeners.set(name, fn) };
   const connect = { disabled: false, onclick: null, click() { this.onclick(); } };
@@ -209,7 +210,7 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
     document: { getElementById: id => id === 'endpoint' ? box : connect },
     location: { origin: 'https://sample.example', href: 'https://sample.example/cottagecode/' + search, protocol: 'https:', search },
     URL, URLSearchParams, AbortSignal, AbortController, activeFeedAbort: null, feedRevision: 0,
-    readCurrentFeed: async (...args) => { requests.push(args); return { kind: 'error', error: new Error('No live source should be reached.') }; },
+    readCurrentFeed: async (...args) => { requests.push(args); return feedResponse || { kind: 'error', error: new Error('No live source should be reached.') }; },
     feedNote: (...args) => notes.push(args), refresh: () => refreshes.push('refresh'),
     isAllowedFeedUrl: value => /^https?:\/\//.test(value), stableLayout: { reset: () => resets.push('reset') },
     lastSnapshot: null, lastEndpoint: null, layoutSignature: 'preserved', agents: [],
@@ -272,4 +273,19 @@ test('local builds retain explicit connect, query prefill, and their default loc
   demo.boot();
   assert.equal(demo.context.ENDPOINT, null);
   assert.equal(await demo.context.fetchAgents(), demo.snapshot);
+});
+
+test('an empty bundled local feed keeps its endpoint while enabling demo conversations', async () => {
+  const snapshot = [{ id: 'practice-resident', source: 'demo', inputRequest: { id: 'scope', prompt: 'Choose a scope.' } }];
+  const local = controllerHarness({
+    publicDemo: false,
+    endpoint: 'https://sample.example/agents',
+    feedResponse: { kind: 'data', data: { stale: false, source: 'none', agents: [] } },
+  });
+  local.snapshot.splice(0, 1, ...snapshot);
+
+  assert.equal(await local.context.fetchAgents(), local.snapshot);
+  assert.equal(local.context.ENDPOINT, 'https://sample.example/agents');
+  assert.equal(local.context.builtInDemo, true);
+  assert.equal(isPracticeDemo(local.snapshot[0], local.context.builtInDemo), true);
 });

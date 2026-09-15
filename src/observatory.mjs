@@ -36,8 +36,8 @@ export function appendInlineHandoffs(events,append){
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
-export function isPracticeDemo(agent, endpoint){
-  return !endpoint && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
+export function isPracticeDemo(agent, builtInDemo = false){
+  return builtInDemo && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
 }
 
 export function createObservatory(api){
@@ -68,7 +68,7 @@ export function createObservatory(api){
     if(!conversations.has(key))conversations.set(key,{text:'',phase:'idle',notice:'',sent:messageReceipts.get(taskKey),answers:{},requestId:null,payload:''});
     return conversations.get(key);
   };
-  const capabilityFor=a=>isPracticeDemo(a,api.getEndpoint())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
+  const capabilityFor=a=>isPracticeDemo(a,api.isBuiltInDemo?.())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
   const visible=a=>!prFilter||prStage(a.pr)===prFilter;
   const hint=text=>{if(text!==lastHint){$('scene-status').textContent=text;lastHint=text;}};
   function placePlayer(){
