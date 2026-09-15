@@ -40,7 +40,7 @@ Click the map to give it keyboard focus.
 |---|---|
 | Arrow keys or WASD | Walk around town or inside a cottage |
 | Walk into a doorway | Enter the cottage or walk back outside; no interaction key needed |
-| E or Enter | Talk to a nearby agent, or use a bench, noticeboard, or room object |
+| E or Enter | Talk to a nearby agent, or use a bench, noticeboard, gramophone, or room object |
 | Escape | Leave the cottage or bench while the map has focus |
 | Click a cottage or its roster button | Open its inspector without walking there |
 | Enter cottage / Leave cottage | Visit or exit using buttons |
@@ -51,6 +51,19 @@ Click the map to give it keyboard focus.
 Rooms and residents are generated from cottage and task identity. Return visits keep the furniture in place. A new explicit task gets a new home. HubTown sets the cozy base with switchboards and pigeonholes. AppTown fills its desks with computers, phones and charging leads. MemTown lines its walls with bookshelves. VaultTown is a clock-and-lock repair shop, with pendulums, key racks and scattered repair tools. Unknown projects get neutral homes.
 
 Walk near a duck and it'll head for the pond. Cats and a goose roam too. **Sound starts off.** Enable it for footsteps, doors, a little wordless murmur when you talk to a resident, and status alerts, with separate ambience and alert switches. Reduced-motion preferences are respected.
+
+The **gramophone** plays seven original, quiet low-bit instrumental pieces made
+with ElevenLabs. Music starts off independently of sound effects. It follows
+your local clock and Jack's position in the village, with daytime accents for
+AppTown, MemTown, and VaultTown. Interiors soften it; conversations hush it;
+leaving the tab pauses it. Open **Gramophone & light** to set the volume or
+preview morning, day, dusk, and night. Warm windows and fireflies follow the
+same clock. No geographic location is requested. [Soundtrack and credits](docs/MUSIC.md).
+
+**Make a postcard** in any cottage's inspector previews a PNG of its seeded
+interior and resident. It starts with no work details. You can choose one
+recorded milestone, review the picture, and save it. The image is made locally
+in the browser and is never uploaded by CottageCode.
 
 The PR desk has a changing status light, icon, and label. The **To-do** tab displays explicit task checklists when available; it never guesses a plan from progress prose. **Talk to agent** shows emitted updates alongside a message composer. Drafts and journal position survive feed refreshes. Messages require a supported connection and an explicit **Send**; unsupported sessions explain why sending is unavailable.
 

@@ -1578,6 +1578,7 @@ function draw(){
   });
   moveFauna();
   drawFauna();
+  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t);
 
   plots.forEach(p=>{
     if(filter && filter !== townKey(p.agent)) return;

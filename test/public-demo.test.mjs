@@ -63,12 +63,16 @@ test('default build contains the complete browser graph and no backend or local 
   for (const id of ['endpoint', 'connect']) assert.match(html, new RegExp('<[^>]+id="' + id + '"[^>]+disabled[^>]*>'));
   assert.match(html, /src="\.\/modules\/town\.mjs"/);
   assert.doesNotMatch(html, /(?:src|href)="\/modules\//);
-  for (const name of ['town', 'runtime', 'observatory', 'interiors', 'world', 'pr', 'history', 'sound', 'occupancy', 'feed-client'])
+  for (const name of ['town', 'runtime', 'observatory', 'interiors', 'world', 'pr', 'history', 'sound', 'occupancy', 'feed-client', 'village-extras', 'atmosphere', 'music', 'music-output', 'music-tracks', 'postcard'])
     assert.ok(result.files.includes(name + '.mjs'), name + ' should be included');
   const all = await listFiles(outDir), bundled = new Set(result.files);
   assert.deepEqual(all.filter(path => path.includes('/modules/')).map(path => path.slice('cottagecode/modules/'.length)).sort(), result.files);
   assert.doesNotMatch(all.join('\n'), /(?:^|\/)(?:feed|hub|messages|transcripts|activity|github|towns)\.mjs|\.jsonl?$|\.sqlite$|\.env|snapshot|secret/i);
   for (const path of result.files) {
+    if (path.endsWith('.mp3')) {
+      assert.deepEqual(await readFile(join(outDir, 'cottagecode/modules', path)), await readFile(join(SOURCE, path)));
+      continue;
+    }
     const content = await readFile(join(outDir, 'cottagecode/modules', path), 'utf8');
     assert.doesNotMatch(content, /(?:from\s*|import\s*)["']node:|\/Users\//);
     // Every actual source module currently uses these static ESM forms.
@@ -77,6 +81,7 @@ test('default build contains the complete browser graph and no backend or local 
       assert.ok(bundled.has(target), path + ' is missing its dependency ' + target);
     }
   }
+  assert.equal(result.files.filter(path => path.endsWith('.mp3')).length, 7);
   assert.deepEqual(all.filter(path => !path.includes('/modules/')), ['.cottagecode-demo-build', '404.html', '_headers', 'cottagecode/index.html']);
 });
 
@@ -90,7 +95,7 @@ test('headers deny live connections and 404 is a standalone response, not a town
   assert.match(html, /<base href="\/">/);
   assert.match(html, /src="\.\/modules\/town\.mjs"/);
   assert.match(headers, /^\/\*\n/);
-  for (const directive of ["connect-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "form-action 'none'"])
+  for (const directive of ["connect-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "form-action 'none'", "media-src 'self'", "img-src 'self' data: blob:"])
     assert.ok(headers.includes(directive));
   assert.match(headers, /https:\/\/fonts.googleapis.com/);
   assert.match(headers, /https:\/\/fonts.gstatic.com/);

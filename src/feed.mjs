@@ -407,12 +407,29 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
       let contentType = "";
       if (["/", "/index.html"].includes(url.pathname)) { filename = "town.html"; contentType = "text/html; charset=utf-8"; }
       else if (/^\/modules\/[a-z][a-z0-9-]*\.mjs$/.test(url.pathname)) { filename = url.pathname.slice("/modules/".length); contentType = "text/javascript; charset=utf-8"; }
+      else if (/^\/modules\/audio\/[a-z][a-z0-9-]*\.mp3$/.test(url.pathname)) { filename = url.pathname.slice("/modules/".length); contentType = "audio/mpeg"; }
       if (filename) {
         const root = await realpath(directory);
         const path = await realpath(join(root, filename));
         if (!path.startsWith(root + sep)) return json(404, { error: "Not found" });
         const body = await readFile(path);
-        res.writeHead(200, { ...cors, "content-type": contentType });
+        const headers = { ...cors, "content-type": contentType, "content-length": body.length };
+        if (contentType === "audio/mpeg") {
+          headers["accept-ranges"] = "bytes";
+          // A single byte range supports native media seeking and loop overlap.
+          // HEAD describes the full resource and ignores Range per HTTP semantics.
+          if (req.method === "GET" && req.headers.range) {
+            const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+            const start = range?.[1] ? Number(range[1]) : Math.max(0, body.length - Number(range?.[2]));
+            const end = range?.[1] && range[2] ? Math.min(body.length - 1, Number(range[2])) : body.length - 1;
+            if (!range || (!range[1] && !range[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= body.length || start > end) {
+              res.writeHead(416, { ...headers, "content-length": 0, "content-range": `bytes */${body.length}` }); return res.end();
+            }
+            res.writeHead(206, { ...headers, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}` });
+            return res.end(body.subarray(start, end + 1));
+          }
+        }
+        res.writeHead(200, headers);
         return res.end(req.method === "HEAD" ? undefined : body);
       }
       return json(404, { error: "Not found" });

@@ -32,7 +32,8 @@
     "build:demo": "node scripts/build-demo.mjs",
     "deploy:demo": "node scripts/deploy-demo.mjs",
     "test": "node --test",
-    "test:browser": "node scripts/browser-smoke.mjs"
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "test:ambience": "node scripts/browser-ambience-smoke.mjs"
   },
   "engines": {
     "node": ">=22.13"

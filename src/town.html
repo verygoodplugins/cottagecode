@@ -113,6 +113,25 @@
   #room-canvas:not([hidden]){margin-top:0}
   .scene-status{font-size:11px;color:#c9c9a9;margin:9px 0 1px;min-height:18px}
   #sound-settings{font-size:12px;color:#bdd2c4;margin-bottom:8px}
+  .village-settings{margin:0 0 10px;color:#c9d4c7;font-size:12px}
+  .village-settings summary{cursor:pointer;display:list-item;padding:3px 0;color:#d8c69b}
+  .village-settings summary span{color:#a6b7ae;margin-left:8px;font-size:11px}
+  .village-settings-body{padding:12px;background:#1d292a;border:1px solid #46564c;border-radius:3px;margin-top:7px}
+  .village-controls{display:flex;align-items:center;flex-wrap:wrap;gap:10px 22px}
+  .village-controls label{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .village-controls input[type="range"]{width:125px;accent-color:#d7bd7c}
+  select{font:12px ui-sans-serif,system-ui;color:#e6e3cf;background:#303e39;border:1px solid #5d7161;border-radius:3px;padding:7px;max-width:100%}
+  select:focus-visible{outline:2px solid #edcf85;outline-offset:3px}
+  #music-status{margin:10px 0 5px;color:#e1d4af;overflow-wrap:anywhere}
+  .postcard-dialog{width:min(750px,calc(100% - 24px));max-height:92vh;overflow:auto;background:#273238;color:var(--ink);border:1px solid #9d9779;border-radius:5px;padding:20px;box-shadow:0 15px 80px #0008}
+  .postcard-dialog::backdrop{background:#101d20c9}
+  .postcard-dialog h2{font:16px "Silkscreen",monospace;color:#f0e5c7;margin:0}
+  .postcard-heading,.postcard-actions{display:flex;gap:15px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+  .postcard-dialog button,.postcard-dialog a{font:12px "Silkscreen",monospace;padding:9px 13px;border:1px solid #8a9472;border-radius:3px;background:#485743;color:#f8ebc8;cursor:pointer;text-decoration:none}
+  .postcard-dialog label{display:block;margin:16px 0 7px;font-size:12px;color:#cdd6c9}
+  #postcard-milestone{width:100%}
+  #postcard-preview{display:block;width:100%;height:auto;image-rendering:pixelated;margin:15px 0;background:#dbcca6;border:5px solid #d5c398}
+  #postcard-status{flex:1;min-width:150px;font-size:12px;color:#c8cfbe}
   .card{padding:17px;background:#273238;border-color:#44524f;min-height:430px}
   .card h2{font-size:19px;margin-top:6px;color:#f0e5c7}
   .card h3{font:12px "Silkscreen",monospace;color:#dbd1b8;margin:20px 0 8px}
@@ -205,9 +224,21 @@
         <button id="noticeboard" type="button">Noticeboard</button>
         <button id="scrapbook" type="button">Scrapbook</button>
         <button id="sound-toggle" type="button" aria-pressed="false">Sound off</button>
+        <button id="music-toggle" type="button" aria-pressed="false" aria-label="Play village music">♫ Music off</button>
         <button id="leave-cottage" type="button" hidden>Leave cottage ↗</button>
       </div>
       <div id="sound-settings" hidden><label><input id="ambient-sound" type="checkbox" checked> Ambience</label> <label><input id="alert-sound" type="checkbox" checked> Alerts</label></div>
+      <details class="village-settings" id="village-settings">
+        <summary>Gramophone &amp; light <span id="village-clock"></span></summary>
+        <div class="village-settings-body">
+          <div class="village-controls">
+            <label for="music-volume">Music volume <input id="music-volume" type="range" min="0" max="50" step="1" value="16"><output id="music-volume-value" for="music-volume">16%</output></label>
+            <label for="village-time">Time of day <select id="village-time"><option value="auto">Follow my clock</option><option value="morning">Morning</option><option value="day">Day</option><option value="dusk">Dusk</option><option value="night">Night</option></select></label>
+          </div>
+          <p id="music-status" role="status">The gramophone is quiet.</p>
+          <p class="hint">Seven quiet pieces made with ElevenLabs. Music follows Jack between towns, softens indoors, and pauses when you leave this tab.</p>
+        </div>
+      </details>
       <div class="pr-tally" id="pr-tally" role="group"></div>
       <div id="map-viewport" class="map-viewport">
       <canvas id="town" tabindex="0" role="img" aria-label="Townmap: arrow keys or WASD to walk, walk into doors to enter, E near an agent to talk, click cottages to inspect"></canvas><canvas id="room-canvas" tabindex="0" role="img" aria-label="Cottage interior. Arrow keys to walk, walk through the doorway to leave, E near your host to talk or inspect objects, Escape to leave." hidden></canvas>
@@ -242,11 +273,20 @@
       </div>
     </div>
     <aside class="card" id="panel" aria-live="polite">
-      <p class="hint">Click a cottage to inspect its work, or walk up to a door and press E.</p>
+      <p class="hint">Click a cottage to inspect its work, or walk into its doorway.</p>
     </aside>
   </div>
   <details class="cottage-directory"><summary>Cottage directory · keyboard and direct access</summary><div id="cottage-list" class="cottage-list"></div></details>
 </div>
+
+<dialog class="postcard-dialog" id="postcard-dialog" aria-labelledby="postcard-title">
+  <div class="postcard-heading"><h2 id="postcard-title">Your cottage postcard</h2><button type="button" id="postcard-close" autofocus>Close</button></div>
+  <label for="postcard-milestone">Include a recorded milestone (optional)</label>
+  <select id="postcard-milestone"><option value="">Scenic postcard · no work details</option></select>
+  <img id="postcard-preview" alt="Cottage postcard preview" hidden>
+  <div class="postcard-actions"><p id="postcard-status" role="status"></p><a id="postcard-save" download hidden>Save PNG</a></div>
+  <p class="hint">Made here in your browser. Save a copy to share whenever you like.</p>
+</dialog>
 
 <script type="module" src="/modules/town.mjs"></script>
 </body>
