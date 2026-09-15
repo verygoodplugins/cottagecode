@@ -254,8 +254,9 @@ export function createFeed({
       const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
         !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
       const localTodos = normalizeTodos(local.todos);
-      const currentTaskTodos = localTodos && (!agent.taskId || local.taskId === agent.taskId ||
-        (agent.taskStartedAt && localTodos.updatedAt && localTodos.updatedAt >= agent.taskStartedAt)) ? localTodos : null;
+      const localTaskId = typeof local.taskId === "string" && local.taskId.trim();
+      const currentTaskTodos = localTodos && (!agent.taskId ||
+        (localTaskId ? localTaskId === agent.taskId : agent.taskStartedAt && localTodos.updatedAt && localTodos.updatedAt >= agent.taskStartedAt)) ? localTodos : null;
       const hubTodos = normalizeTodos(agent.todos);
       const todos = currentTaskTodos && (!hubTodos?.updatedAt || !currentTaskTodos.updatedAt || currentTaskTodos.updatedAt >= hubTodos.updatedAt) ? currentTaskTodos : hubTodos;
       const localInput = normalizeInputRequest(local.inputRequest);
