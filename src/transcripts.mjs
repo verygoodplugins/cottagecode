@@ -249,6 +249,9 @@ export function applyLine(session, line) {
     target.todos = null;
     target.inputRequest = null;
     target.resolvedInputRequests.clear();
+    target.tokens = 0;
+    target.cost = 0;
+    target.usageByMessage.clear();
   }
   trackPrMetadata(target, line);
   trackInputRequest(target, line, ts);

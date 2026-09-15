@@ -62,6 +62,23 @@ test("only explicit task identities create a new task request and timeline", () 
   assert.equal(observedMidTask.taskStartedAt, null);
 });
 
+test("an explicit task boundary resets task-scoped usage accounting", () => {
+  const session = blankSession();
+  applyLine(session, line("assistant", "Finished the first task", 1, {
+    taskId: "run-one",
+    message: { id: "usage-one", content: "Finished the first task", stop_reason: "end_turn", model: "sonnet", usage: { input_tokens: 17, output_tokens: 3 } },
+  }));
+  assert.equal(session.tokens, 20);
+  applyLine(session, line("user", "Start task two", 2, { taskId: "run-two" }));
+  assert.equal(session.tokens, 0);
+  assert.equal(session.cost, 0);
+  applyLine(session, line("assistant", "Working on the second task", 3, {
+    taskId: "run-two",
+    message: { id: "usage-two", content: "Working on the second task", stop_reason: "end_turn", model: "sonnet", usage: { output_tokens: 5 } },
+  }));
+  assert.equal(session.tokens, 5);
+});
+
 test("pending Claude questions resolve by tool ID without clearing a newer prompt", () => {
   const session = blankSession();
   const ask = (id, prompt) => ({ type: "tool_use", id, name: "AskUserQuestion", input: { questions: [{ question: prompt, options: [{ label: "Yes", description: "Use the fixture" }, { label: "No" }] }] } });
