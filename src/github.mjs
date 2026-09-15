@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { normalizePr, parsePrUrl, prKey } from "./pr.mjs";
 
 const execFileAsync = promisify(execFile);
-const FIELDS = "number,url,title,state,labels,headRefOid,headRefName,isCrossRepository,isDraft,mergedAt,closedAt,statusCheckRollup";
+const FIELDS = "number,url,title,state,labels,headRefOid,headRefName,isCrossRepository,isDraft,mergedAt,closedAt,createdAt,statusCheckRollup";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 const DEFAULT_NAMES = new Set(["main", "master", "trunk"]);
 
@@ -100,6 +100,7 @@ export function createGithubEnricher({
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid_pr_response");
         const value = {
           ...raw, repo: target.repo, headSha: raw.headSha || raw.headRefOid || "",
+          openedAt: raw.openedAt || raw.createdAt || undefined,
           source: "github", checkedAt: now(), stale: false, reviewUncertain: false,
           // A new GitHub observation supersedes a derived review state.
           reviewState: undefined,
@@ -169,6 +170,9 @@ export function createGithubEnricher({
         ...entry.value,
         ...(samePr && initial.finalization ? { finalization: initial.finalization } : {}),
         ...(samePr && initial.reviewedHeadSha ? { reviewedHeadSha: initial.reviewedHeadSha } : {}),
+        // Keep a feed-supplied open clock when GitHub did not return createdAt.
+        ...(samePr && initial.openedAt && !(entry.value.openedAt || entry.value.createdAt)
+          ? { openedAt: initial.openedAt } : {}),
         stale: Boolean(entry.error),
         reason: entry.error || entry.value.reason || "",
       };
