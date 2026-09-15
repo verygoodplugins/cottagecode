@@ -110,6 +110,26 @@ test("Hub logical tasks expose genuine original requests and durable PR receipts
   assert.equal(context.finalization, undefined, "mapping must not mutate the supplied context");
 });
 
+test("a dated context todo snapshot stays ahead of an undated checkpoint", () => {
+  const agent = toCottage({
+    id: "hub-run", record_kind: "logical_task", status: "running", task: "Current task",
+    context: { todos: { items: [{ id: "context", text: "Dated context checklist", status: "in_progress" }], updatedAt: now } },
+    todo_snapshot: JSON.stringify({ items: [{ id: "checkpoint", text: "Undated checkpoint checklist", status: "pending" }] }),
+    todo_updated_at: "not a timestamp",
+  }, now);
+
+  assert.equal(agent.todos.items[0].text, "Dated context checklist");
+  assert.equal(agent.todos.updatedAt, now);
+
+  const undated = toCottage({
+    id: "hub-run-undated", record_kind: "logical_task", status: "running", task: "Current task",
+    context: { todos: { items: [{ id: "context", text: "Undated context checklist", status: "in_progress" }] } },
+    todo_snapshot: JSON.stringify({ items: [{ id: "checkpoint", text: "Undated checkpoint checklist", status: "pending" }] }),
+    todo_updated_at: "not a timestamp",
+  }, now);
+  assert.equal(undated.todos.items[0].text, "Undated checkpoint checklist");
+});
+
 test("Hub external sessions never treat an assistant status label as the original ask", () => {
   const agent = toCottage({ id: "observed", record_kind: "external_session", task: "Latest assistant response", started_at: "2026-09-14 10:00:00", context: {}, status: "running" }, now);
   assert.equal(agent.originalAsk, "");
