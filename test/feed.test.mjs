@@ -730,6 +730,29 @@ test("Hub retains old context-only PR receipts", async t => {
   assert.equal(result.agents.find(agent => agent.id === "context-pr-receipt")?.pr.number, 77);
 });
 
+test("Hub retains old explicit open PR state without an identity", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "cottage-hub-open-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "hub.db");
+  const db = new DatabaseSync(path);
+  db.exec(`CREATE TABLE agent_runs (
+    id TEXT, agent TEXT, status TEXT, task TEXT, user TEXT, platform TEXT, model TEXT, parent_id TEXT, session_id TEXT,
+    context TEXT, queued_at TEXT, started_at TEXT, completed_at TEXT, updated_at TEXT, archived INTEGER,
+    input_tokens INTEGER, output_tokens INTEGER, cache_write_tokens INTEGER, cache_read_tokens INTEGER,
+    total_cost REAL, error TEXT, result_summary TEXT, attention_type TEXT, attention_message TEXT
+  )`);
+  db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    "context-open-state", "Resident", "completed", "Historic receipt", JSON.stringify({ pr: { state: "open" } }),
+    "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+  );
+  db.close();
+
+  const result = readHubAgents({ dbPath: path });
+  const retained = result.agents.find(agent => agent.id === "context-open-state");
+  assert.equal(retained?.pr.state, "open");
+  assert.equal(retained?.occupancy, "live");
+});
+
 test("Hub logical tasks do not inherit diagnostics from a different local task", async () => {
   const local = {
     id: "session-1", source: "claude", taskId: "local-task", taskStartedAt: now - 10_000,

@@ -25,10 +25,12 @@ export const STAGES={
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl=raw=>{try{const u=new URL(raw);return ['http:','https:'].includes(u.protocol)?u.href:'';}catch{return '';}};
+export const safeHttpsUrl=raw=>{try{const u=new URL(raw);return u.protocol==='https:'?u.href:'';}catch{return '';}};
 const clock=value=>{const ms=validTime(value);return ms?new Date(ms).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';};
 const elapsed=agent=>{const duration=elapsedMs(agent);if(duration===null)return 'Unavailable';const sec=Math.floor(duration/1000);return Math.floor(sec/60)+'m '+(sec%60)+'s';};
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 export const button=(action,label,extra='')=>'<button type="button" data-action="'+esc(action)+'" '+extra+'>'+label+'</button>';
+export const handoffAction=url=>safeHttpsUrl(url)?button('handoff','Open handoff') : '';
 export function appendInlineHandoffs(events,append){
   for(const event of events||[])if(event?.kind==='handoff'&&event.from&&event.to)append(event);
 }
@@ -361,7 +363,7 @@ export function createObservatory(api){
     }
     const nav=[['overview','Clock'],['request','Request'],['journal','Journal'],['todos','To-do'],['review','PR desk'],['artifacts','Shelves']].map(([key,label])=>button('tab:'+key,label,'aria-pressed="'+(tab===key)+'"')).join('');
     const header='<div class="inspector-heading"><span class="eyebrow">'+esc(a.town)+' · '+(mode==='room'?'INSIDE':'COTTAGE')+'</span><h2>'+esc(a.name)+'</h2></div><div class="inspector-chips"><span class="status-chip">'+esc(a.status)+'</span><span class="pr-chip" style="--pr-color:'+s.color+'">'+s.symbol+' '+s.label+'</span></div>';
-    const actions='<div class="cottage-actions">'+button(mode==='room'?'leave':'enter',mode==='room'?'Leave cottage ↗':'Enter cottage ↗')+button('talk','Talk to '+esc(a.name),'aria-pressed="'+(tab==='talk')+'"')+button('follow',followId===a.id?'Leave bench':'Follow from bench')+'</div>';
+    const actions='<div class="cottage-actions">'+button(mode==='room'?'leave':'enter',mode==='room'?'Leave cottage ↗':'Enter cottage ↗')+button('talk','Talk to '+esc(a.name),'aria-pressed="'+(tab==='talk')+'"')+button('follow',followId===a.id?'Leave bench':'Follow from bench')+handoffAction(a.handoffUrl)+'</div>';
     const worktree=a.worktreePath?'<div class="launch">'+button('copy','Copy worktree path')+(a.worktreePath.startsWith('/')?'<a href="cursor://file'+a.worktreePath.split('/').map(encodeURIComponent).join('/')+'">Open worktree</a>':'')+'</div>':'';
     replacePanel(header+actions+'<nav class="room-tabs" aria-label="Cottage objects">'+nav+'</nav>'+content+worktree,(mode==='room'?interiorId:id)+'|'+(a.taskId||'')+':'+tab);
     return true;
@@ -408,6 +410,7 @@ export function createObservatory(api){
     else if(action.startsWith('tab:')){tab=action.slice(4);selectedObject=({request:'request',journal:'workbench',review:'review',artifacts:'shelf',overview:'clock'})[tab];renderPanel(selected);if(['journal','todos'].includes(tab))ensureActivity(byId(interiorId||selected));}
     else if(action==='older')await ensureActivity(byId(interiorId||selected),{older:true});
     else if(action==='copy'){try{await navigator.clipboard.writeText(byId(interiorId||selected).worktreePath);e.target.textContent='Copied';}catch{e.target.textContent='Copy unavailable';}}
+    else if(action==='handoff'){const url=safeHttpsUrl(byId(interiorId||selected)?.handoffUrl);if(url)window.open(url,'_blank','noopener,noreferrer');}
     else if(action.startsWith('jump:'))focusCottage(action.slice(5));
     else if(action.startsWith('history:')){historyView=action.slice(8);renderHistory();}
     else if(action==='back'){setMode('town');renderPanel(selected);}
