@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isPracticeDemo,button,appendInlineHandoffs} from '../src/observatory.mjs';
 import {isPracticeDemo,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
