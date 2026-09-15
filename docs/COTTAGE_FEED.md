@@ -31,7 +31,7 @@ An empty custom feed stays empty. The bundled same-origin `/agents` endpoint has
 
 The browser polls every 1.5 seconds. HTTP failures keep the last snapshot from the same endpoint, marked stale; they never substitute another feed. The Node adapters refresh every 2 seconds. GitHub enrichment runs on its own slower cache.
 
-CORS: the browser fetches the URL entered in the connect box. Serve `Access-Control-Allow-Origin: *` (or the CottageCode origin) for feeds and activity endpoints on another host. The bundled server defaults to `127.0.0.1:8787`. Reads allow CORS; message writes require this server's own origin, JSON, and the explicit message header described below.
+CORS: the browser fetches the URL entered in the connect box. Serve `Access-Control-Allow-Origin: *` (or the CottageCode origin) for feeds and activity endpoints on another host. The bundled server defaults to `127.0.0.1:8787` and permits its `/agents` and activity routes only to a Townmap loaded from that same origin; it does not provide CORS access to its local agent data. To use a separately hosted Townmap, point it at a separate feed/activity service that allows the Townmap origin, or host that service and the Townmap together. Message writes require this server's own origin, JSON, and the explicit message header described below.
 
 ## Cottage object
 
@@ -88,6 +88,7 @@ Full shape (everything else is optional):
 | `sessionStartedAt` | number \| null | Start of the enclosing session, in epoch milliseconds. |
 | `startedAt` | number \| null | Legacy start value, still accepted for occupancy. It does not replace the explicit task/session clocks. |
 | `endedAt` | number \| null | Known completion time. The task clock uses it to stop elapsed time for terminal tasks. |
+| `terminal` | boolean | Optional. Set when a terminal source record is presented as `blocked` for attention; the task clock stops at `endedAt`. |
 | `updatedAt` | number \| null | Time of the last signal. |
 | `tokens` | number | |
 | `cost` | number | USD for this run. |
