@@ -106,8 +106,9 @@ export function createVillageExtras({getPostcard,clearKeys}) {
   renderMusic();
   return {
     update,toggleMusic,openPostcard,
-    drawTown(ctx,world,time,reduce){updateClock(time);return paintTownAtmosphere(ctx,world,light,{time,reduce});},
-    drawRoom(ctx,room,time,reduce){return paintRoomAtmosphere(ctx,room,light,{time,reduce});},
+    drawTown(ctx,world,time,reduce,beforePalette){updateClock(time);return paintTownAtmosphere(ctx,world,light,{time,reduce,signalsPaintedAfter:true,beforePalette});},
+    drawRoom(ctx,room,time,reduce,agent){return paintRoomAtmosphere(ctx,room,light,{time,reduce,agent});},
+    lightAt(time){updateClock(time);return light;},
     drawGramophone(ctx,point,time,reduce){if(point)paintGramophone(ctx,point.x-12,point.y-14,{time,reduce,playing:music.state.audible});},
     get state(){return {timeMode,phase:light.phase,town:scene.town,music:music.state,postcardOpen:dialog.open};},
   };

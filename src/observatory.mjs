@@ -10,6 +10,7 @@ import {conversationCapability,MAX_MESSAGE_LENGTH} from './conversation.mjs';
 import {normalizeInputRequest,inputRequestVersion} from './input-request.mjs';
 import {PUBLIC_DEMO} from './runtime.mjs';
 import {createVillageExtras} from './village-extras.mjs';
+import {roomRest,paintBed} from './bedtime.mjs';
 
 export const STAGES={
   none:{label:'No PR',color:'#a3a99d',symbol:'—'},
@@ -67,6 +68,45 @@ export function isPracticeDemo(agent, builtInDemo = false){
   return builtInDemo && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
 }
 
+function activeArrivalEntry(arrival, time, duration=8){
+  const age=time-arrival?.start;
+  return Number.isFinite(age)&&age>=0&&age<duration;
+}
+
+/** Arrival sprites own the child until their short walk to the shed completes. */
+export function isApprenticeArrivalActive(arrivals, id, time, duration=8){
+  if(!Array.isArray(arrivals)||!id||!Number.isFinite(time))return false;
+  return arrivals.some(arrival=>arrival?.id===id&&activeArrivalEntry(arrival,time,duration));
+}
+
+/** The same walking position drives both the sprite and its talk/click target. */
+export function apprenticeArrivalPosition(arrivals, id, plots, time, {reduce=false,duration=8}={}){
+  if(!Array.isArray(arrivals)||!Array.isArray(plots)||!id||!Number.isFinite(time))return null;
+  const arrival=arrivals.find(entry=>entry?.id===id&&activeArrivalEntry(entry,time,duration));
+  if(!arrival)return null;
+  const from=plots.find(plot=>plot?.agent?.id===arrival.parent);
+  const to=plots.find(plot=>plot?.agent?.id===arrival.id)||(from?.kids||[]).find(kid=>kid?.agent?.id===arrival.id);
+  if(!from||!to)return null;
+  const destination=to.parentPlot?to:to.agent?.id===arrival.id?{x:to.x,y:to.y}:null;
+  if(!destination)return null;
+  const fraction=reduce?1:Math.min(1,(time-arrival.start)/6);
+  return {id:arrival.id,x:from.x+27+(destination.x-from.x-19)*fraction,y:from.y+76+(destination.y-from.y-60)*fraction};
+}
+
+/** Active arrivals never leave a stale family coordinate interactive. */
+export function apprenticeResidentPosition(arrivals, id, plots, time, fallback, options={}){
+  const arrival=apprenticeArrivalPosition(arrivals,id,plots,time,options);
+  if(arrival)return arrival;
+  return isApprenticeArrivalActive(arrivals,id,time,options.duration)||!fallback?null:fallback;
+}
+
+/** A hidden bedtime child can still be approached while their arrival sprite is visible. */
+export function apprenticeResidentTarget(kid, arrival, arriving=false){
+  if(arrival)return arrival;
+  if(arriving||kid?.hidden||!kid?.id||!Number.isFinite(kid.x)||!Number.isFinite(kid.y))return null;
+  return {id:kid.id,x:kid.x,y:kid.y};
+}
+
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
@@ -88,6 +128,8 @@ export function createObservatory(api){
     const milestones=(history?.events()||[]).filter(e=>e.agentId===id&&(e.taskId||'')===(agent.taskId||'')&&['result','pr','status'].includes(e.kind)).slice(-30).reverse();
     return {agent,room:roomFor(agent),milestones};
   }});
+  const restForRoom=()=>roomRest(room,byId(interiorId),extras.lightAt(performance.now()/1000),api.getBedtimeRoutine?.(interiorId));
+  const roomHost=()=>restForRoom()?.host||room?.resident;
   const conversationFor=a=>{
     const taskKey=sourceKey+'|'+a.id+'|'+(a.taskId||''),request=normalizeInputRequest(a.inputRequest);
     const key=taskKey+'|'+(inputRequestVersion(request)||'conversation');
@@ -140,7 +182,7 @@ export function createObservatory(api){
   }
   function interact(){
     if(mode==='room'){
-      if(distance(roomPlayer,room.resident)<30){talk(interiorId);return;}
+      if(distance(roomPlayer,roomHost())<30){talk(interiorId);return;}
       const nearest=room.objects.filter(o=>o.interactable&&o.id!=='exit').sort((a,b)=>nearRect(roomPlayer,a)-nearRect(roomPlayer,b))[0];
       if(nearest&&nearRect(roomPlayer,nearest)<30)inspect(nearest.id);
       return;
@@ -222,7 +264,8 @@ export function createObservatory(api){
     if(!room||transition<1)return;
     const r=roomCanvas.getBoundingClientRect(),scale=Math.min(r.width/room.width,r.height/room.height);
     const p={x:(e.clientX-r.left-(r.width-room.width*scale)/2)/scale,y:(e.clientY-r.top-(r.height-room.height*scale)/2)/scale};
-    if(inside(p,{x:room.resident.x-9,y:room.resident.y-21,w:18,h:24})){talk(interiorId);return;}
+    const host=roomHost();
+    if(inside(p,{x:host.x-9,y:host.y-21,w:18,h:24})){talk(interiorId);return;}
     const obj=room.objects.find(o=>o.interactable&&inside(p,o));
     if(obj){if(obj.id==='exit')leave();else inspect(obj.id);}
   });
@@ -511,6 +554,15 @@ export function createObservatory(api){
     if(mode==='room'&&byId(interiorId)){const newRoom=roomFor(byId(interiorId));if(newRoom.seed!==room.seed){room=newRoom;roomPlayer={...room.door};}}
     updatePrTally();updateRoster();ensureActivity(byId(interiorId||selected));renderPanel(selected);
   }
+  function drawApprenticeArrivals(ctx,time){
+    if(mode!=='town')return;
+    apprentices=apprentices.filter(e=>activeArrivalEntry(e,time));
+    for(const kid of apprentices){
+      const to=plotFor(kid.id),position=apprenticeArrivalPosition(apprentices,kid.id,api.getPlots(),time,{reduce});
+      if(!to||!position)continue;
+      renderResident(ctx,position.x,position.y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(position.x+4,position.y-8,6,5);
+    }
+  }
   function drawTown(ctx,time,dt,moving){
     placePlayer();const w=api.getWorld();
     // Relationship paths are explicit metadata, not guessed from project names.
@@ -531,12 +583,6 @@ export function createObservatory(api){
       let traveled=fraction*total,index=0;while(index<2&&traveled>lengths[index]){traveled-=lengths[index];index++;}
       const f=lengths[index]?traveled/lengths[index]:0,x=pts[index].x+(pts[index+1].x-pts[index].x)*f,y=pts[index].y+(pts[index+1].y-pts[index].y)*f;
       ctx.fillStyle='#eed19b';ctx.fillRect(x-3,y-8,7,6);ctx.strokeStyle='#564431';ctx.strokeRect(x-3,y-8,7,6);
-    }
-    apprentices=apprentices.filter(e=>time-e.start<8);
-    for(const kid of apprentices){
-      const from=plotFor(kid.parent),to=plotFor(kid.id);if(!from||!to)continue;
-      const f=reduce?1:Math.min(1,(time-kid.start)/6),x=from.x+27+(to.x-from.x-19)*f,y=from.y+76+(to.y-from.y-60)*f;
-      renderResident(ctx,x,y,roomFor(to.agent).resident,{time:time*1000,walking:!reduce,scale:.7});ctx.fillStyle='#b97847';ctx.fillRect(x+4,y-8,6,5);
     }
     if(board){
       ctx.fillStyle='#59402c';ctx.fillRect(board.x-14,board.y-17,28,21);ctx.fillRect(board.x-11,board.y+4,3,8);ctx.fillRect(board.x+8,board.y+4,3,8);
@@ -567,35 +613,42 @@ export function createObservatory(api){
       const scale=Math.min(width/room.width,height/room.height),eased=1-Math.pow(1-transition,3);
       roomCtx.save();roomCtx.translate(width/2,height/2);roomCtx.scale(scale*(.83+.17*eased),scale*(.83+.17*eased));roomCtx.translate(-room.width/2,-room.height/2);
       roomCtx.globalAlpha=eased;
-      renderInterior(roomCtx,room,{time:time*1000,agent:byId(interiorId)||{},player:{...roomPlayer,walking:moving},selectedObject,reduce,talking:talkingId===interiorId&&performance.now()<talkingUntil});
-      extras.drawRoom(roomCtx,room,time,reduce);
+      const rest=restForRoom();
+      renderInterior(roomCtx,room,{time:time*1000,agent:byId(interiorId)||{},player:{...roomPlayer,walking:moving},selectedObject,reduce,talking:talkingId===interiorId&&performance.now()<talkingUntil,rest,paintRest:paintBed});
+      extras.drawRoom(roomCtx,room,time,reduce,byId(interiorId));
       if(transition<1){roomCtx.globalAlpha=(1-eased)*.85;roomCtx.fillStyle='#b57d4d';roomCtx.beginPath();roomCtx.moveTo(8,60-eased*120);roomCtx.lineTo(120,-8-eased*120);roomCtx.lineTo(232,60-eased*120);roomCtx.closePath();roomCtx.fill();}
       roomCtx.restore();
       const near=room.objects.filter(o=>o.interactable&&o.id!=='exit').sort((a,b)=>nearRect(roomPlayer,a)-nearRect(roomPlayer,b))[0];
-      hint(distance(roomPlayer,room.resident)<30?'E · Talk to '+(byId(interiorId)?.name||'your host')+' · Walk out through the door to leave':near&&nearRect(roomPlayer,near)<30?'E · '+near.label+' · Walk out through the door to leave':'Walk around your host’s cottage · E near your host to talk · Walk into the doorway to leave');
+      hint(distance(roomPlayer,roomHost())<30?'E · Talk to '+(byId(interiorId)?.name||'your host')+' · Walk out through the door to leave':near&&nearRect(roomPlayer,near)<30?'E · '+near.label+' · Walk out through the door to leave':rest?'Your host is tucked in · E beside the bed to talk · Walk into the doorway to leave':'Walk around your host’s cottage · E near your host to talk · Walk into the doorway to leave');
     }else drawTown(api.ctx,time,dt,moving);
     if(replaying){replayTimer+=dt;if(replayTimer>1.8){replayTimer=0;replayIndex++;if(replayIndex>=replayEvents.length){replaying=false;replayIndex=replayEvents.length-1;renderHistory();}showReplay();}}
   }
   function drawDispatch(ctx,p,time){
     const stage=prStage(p.agent.pr),s=STAGES[stage],x=p.x-15,y=p.y+55;
+    const label=extras.lightAt(time).darkness>.1?'#d0def0':'#253729';
+    ctx.textBaseline='top';
     ctx.fillStyle='#354231';ctx.fillRect(x-2,y+5,17,3);ctx.fillRect(x,y+8,2,9);ctx.fillRect(x+10,y+8,2,9);
     if(stage!=='none'){
       ctx.fillStyle=s.color;ctx.fillRect(x+1,y-3,10,9);ctx.strokeStyle='#344232';ctx.lineWidth=1;ctx.strokeRect(x+.5,y-3.5,10,9);
       if(stage==='ready'){ctx.fillStyle='#fff4b8';ctx.fillRect(x+5,y-5,2,13);ctx.fillRect(x-1,y,14,2);}
       if(stage==='merged'){ctx.clearRect(x+3,y-3,6,3);ctx.fillStyle='#c4e2a4';ctx.fillRect(x-1,y-6,5,3);ctx.fillRect(x+8,y-6,5,3);}
     }
-    ctx.font='8px "Silkscreen",monospace';ctx.fillStyle=stage==='blocked'?'#ffe8d2':'#233728';
+    ctx.font='8px "Silkscreen",monospace';ctx.fillStyle=stage==='blocked'?'#ffe8d2':label;
     const sym={none:'—',open:'+',active:'*','waiting-codex':'?','waiting-ci':':',blocked:'!',ready:'*',merged:'✓',closed:'×',unknown:'?'}[stage];
     if(stage==='blocked'){ctx.fillStyle='#d95540';ctx.fillRect(x+2,y-18,9,11);ctx.fillStyle='#fff2df';}
     ctx.fillText(sym,x+4,y-8+(stage==='active'&&!reduce?Math.floor(time*3)%2:0));
-    if(p.agent.pr?.number){ctx.fillStyle='#253729';ctx.fillText('#'+p.agent.pr.number,x-2,y+26);}
-    else if(stage==='none'){ctx.fillStyle='#253729';ctx.font='6px "Silkscreen",monospace';ctx.fillText('NO PR',x-4,y+26);}
+    if(p.agent.pr?.number){ctx.fillStyle=label;ctx.fillText('#'+p.agent.pr.number,x-2,y+26);}
+    else if(stage==='none'){ctx.fillStyle=label;ctx.font='6px "Silkscreen",monospace';ctx.fillText('NO PR',x-4,y+26);}
   }
   return {update,draw,renderPanel,handleClick,enter,leave,follow,focusCottage,drawDispatch,latestLine,visible,talk,
-    drawAtmosphere:(ctx,world,time)=>extras.drawTown(ctx,world,time,reduce),
+    drawAtmosphere:(ctx,world,time,beforePalette)=>extras.drawTown(ctx,world,time,reduce,beforePalette),
+    drawApprenticeArrivals,
+    lightAt:time=>extras.lightAt(time),
     resident:a=>roomFor(a).resident,sound,
+    isApprenticeArriving:(id,time=performance.now()/1000)=>isApprenticeArrivalActive(apprentices,id,time),
+    apprenticeArrival:(id,time=performance.now()/1000)=>apprenticeResidentPosition(apprentices,id,api.getPlots(),time,null,{reduce}),
     isTalking:id=>talkingId===id&&performance.now()<talkingUntil,
     get player(){return player;},get mode(){return mode;},
-    get state(){return {mode,selected,interiorId,roomSeed:room?.seed,roomPlayer,resident:room?.resident,roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(interiorId||selected),...extras.state};}
+    get state(){return {mode,selected,interiorId,roomSeed:room?.seed,roomPlayer,resident:room?{...room.resident,...roomHost()}:null,resting:!!restForRoom(),roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(interiorId||selected),...extras.state};}
   };
 }

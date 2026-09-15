@@ -7,19 +7,19 @@ const color = (rgb, alpha = 1) => `rgba(${rgb.map(Math.round).join(',')},${clamp
 const PHASES = Object.freeze({ morning: 7, day: 12, dusk: 19, night: 23 });
 const LIMITS = Object.freeze({ ponds: 6, trees: 12, particles: 40, litCottages: 96, plots: 256 });
 
-// Neighboring keyframes interpolate smoothly, including across midnight. The
-// darkest wash is 22%; paths, labels, and Jack keep most of their original color.
+// Neighboring keyframes interpolate smoothly, including across midnight.
+// Darkness drives a real palette change; it is not a translucent navy veil.
 const LIGHT = [
-  { hour: 0, darkness: .22, warmth: 0, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [37, 53, 86] },
-  { hour: 4, darkness: .22, warmth: 0, windowGlow: 1, fireflies: .85, windowShade: 1, tint: [22, 37, 70], sky: [44, 60, 91] },
-  { hour: 5, darkness: .12, warmth: .25, windowGlow: .4, fireflies: .15, windowShade: .7, tint: [100, 104, 127], sky: [115, 137, 157] },
+  { hour: 0, darkness: .52, warmth: 0, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [26, 40, 70] },
+  { hour: 4, darkness: .52, warmth: 0, windowGlow: 1, fireflies: .85, windowShade: 1, tint: [22, 37, 70], sky: [34, 49, 81] },
+  { hour: 5, darkness: .21, warmth: .25, windowGlow: .4, fireflies: .15, windowShade: .7, tint: [100, 104, 127], sky: [115, 137, 157] },
   { hour: 7, darkness: .025, warmth: .4, windowGlow: 0, fireflies: 0, windowShade: .12, tint: [183, 139, 95], sky: [187, 198, 184] },
   { hour: 9, darkness: 0, warmth: 0, windowGlow: 0, fireflies: 0, windowShade: 0, tint: [50, 75, 94], sky: [157, 191, 194] },
   { hour: 16, darkness: 0, warmth: 0, windowGlow: 0, fireflies: 0, windowShade: 0, tint: [50, 75, 94], sky: [157, 191, 194] },
-  { hour: 17, darkness: .035, warmth: .45, windowGlow: .1, fireflies: 0, windowShade: .2, tint: [163, 101, 92], sky: [210, 174, 150] },
-  { hour: 19, darkness: .13, warmth: .65, windowGlow: .75, fireflies: .45, windowShade: .82, tint: [86, 64, 99], sky: [132, 115, 151] },
-  { hour: 21, darkness: .22, warmth: .15, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [46, 62, 97] },
-  { hour: 24, darkness: .22, warmth: 0, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [37, 53, 86] },
+  { hour: 17, darkness: .055, warmth: .45, windowGlow: .1, fireflies: 0, windowShade: .2, tint: [163, 101, 92], sky: [210, 174, 150] },
+  { hour: 19, darkness: .26, warmth: .65, windowGlow: .75, fireflies: .45, windowShade: .82, tint: [86, 64, 99], sky: [115, 98, 135] },
+  { hour: 21, darkness: .52, warmth: .15, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [35, 49, 81] },
+  { hour: 24, darkness: .52, warmth: 0, windowGlow: 1, fireflies: 1, windowShade: 1, tint: [22, 37, 70], sky: [26, 40, 70] },
 ];
 
 /**
@@ -46,7 +46,8 @@ export function villageTime(input = new Date()) {
   const t = smooth(clamp((hour - a.hour) / (b.hour - a.hour)));
   const state = { phase, hour, source, phaseProgress, label: phase[0].toUpperCase() + phase.slice(1) };
   for (const key of ['darkness', 'warmth', 'windowGlow', 'fireflies', 'windowShade']) state[key] = mix(a[key], b[key], t);
-  state.roomDarkness = state.darkness * .4;
+  state.roomDarkness = state.darkness * .7;
+  state.nightness = smooth(clamp(state.darkness / .52));
   state.tint = Object.freeze(a.tint.map((value, index) => mix(value, b.tint[index], t)));
   state.sky = Object.freeze(a.sky.map((value, index) => mix(value, b.sky[index], t)));
   return Object.freeze(state);
@@ -127,50 +128,118 @@ function clipped(ctx, width, height, protectedRects) {
 function stateOf(state) {
   return state && finite(state.darkness) && Array.isArray(state.tint) && Array.isArray(state.sky) ? state : villageTime(state ?? 12);
 }
+
+/** Pure visual settings for QA or other renderers; working must be explicit. */
+export function sceneStyle(timeState, { interior = false, working = false } = {}) {
+  const state = stateOf(timeState), nightness = smooth(clamp(state.darkness / .52));
+  return Object.freeze({
+    nightness,
+    desaturation: nightness * (interior ? working ? .34 : .78 : .9),
+    colorMix: nightness * (interior ? working ? .27 : .72 : .86),
+    darkness: nightness * (interior ? working ? .36 : .65 : .78),
+    coolColor: Object.freeze([91, 110, 148]),
+    multiplyColor: Object.freeze([52, 70, 112]),
+    windowCover: clamp(state.windowShade),
+    windowGlow: working ? clamp(state.windowGlow) : 0,
+  });
+}
+
+function palette(ctx, p, width, height, style, state) {
+  if (style.desaturation > .0001) {
+    ctx.globalCompositeOperation = 'saturation';
+    p(0, 0, width, height, color([128, 128, 128], style.desaturation));
+    ctx.globalCompositeOperation = 'color';
+    p(0, 0, width, height, color(style.coolColor, style.colorMix));
+    ctx.globalCompositeOperation = 'multiply';
+    p(0, 0, width, height, color(style.multiplyColor, style.darkness));
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  const warmth = state.warmth * .04 * (1 - style.nightness);
+  if (warmth > .0001) p(0, 0, width, height, color([246, 184, 119], warmth));
+}
+
 function glow(p, x, y, w, h, strength) {
-  p(x - 4, y - 3, w + 8, h + 7, color([255, 195, 105], strength * .045));
-  p(x - 2, y - 1, w + 4, h + 3, color([255, 207, 133], strength * .075));
+  p(x - 6, y - 4, w + 12, h + 10, color([255, 178, 85], strength * .10));
+  p(x - 3, y - 2, w + 6, h + 5, color([255, 204, 115], strength * .17));
+}
+
+function panes(p, x, y, fill) {
+  p(x, y, 3, 3, fill); p(x + 4, y, 4, 3, fill);
+  p(x, y + 4, 3, 4, fill); p(x + 4, y + 4, 4, 4, fill);
+}
+
+function windowLight(p, x, y, agent, opacity, state, style, small = false) {
+  const working = agent?.status === 'working', strength = working ? state.windowGlow * opacity * opacity : 0;
+  const warmth = .25 + (hash(agent?.id || x + ':' + y) % 25) / 100;
+  const warm = [255, 201 + warmth * 20, 111 + warmth * 35], dark = [20, 30, 49];
+  // Full night replaces the glass, including a previous frame's bright panes.
+  // Filter opacity affects the light's color, rather than letting old pixels leak.
+  const glass = working ? dark.map((value, i) => mix(value, warm[i], opacity)) : dark;
+  if (strength > .001) {
+    glow(p, x, y, small ? 2 : 8, small ? 3 : 8, strength);
+    for (let i = 0; i < (small ? 2 : 4); i++) p(x - 1 - i * 2, y + (small ? 4 : 10) + i * 4,
+      (small ? 4 : 10) + i * 4, 4, color([249, 187, 98], strength * (.16 - i * .025)));
+  }
+  if (small) p(x, y, 2, 3, color(glass, style.windowCover));
+  else panes(p, x, y, color(glass, style.windowCover));
+  if (working) {
+    p(x, y, small ? 1 : 3, 1, color([255, 235, 174], strength * .8));
+  } else if (style.nightness > .001 && !small) {
+    const shutter = color([43, 57, 79], style.nightness);
+    panes(p, x, y, shutter);
+    for (const side of [0, 4]) {
+      p(x + side, y + 1, side ? 4 : 3, 1, color([73, 88, 113], style.nightness * .8));
+      p(x + side, y + 5, side ? 4 : 3, 1, color([22, 32, 51], style.nightness));
+    }
+  }
+  return working && strength > .001;
 }
 
 /**
  * Paint after houses/fauna and before thought bubbles, Jack, and other UI.
  * Optional `trees` are actual trunk rectangles (treeTo emits 6×8 solids).
- * Plots may supply opacity when their town has been faded by a filter.
+ * Plots may supply opacity when their town has been faded by a filter. Prefer
+ * signalsPaintedAfter:true and repaint dispatch stands after this pass: this
+ * preserves semantic colors without leaving daylight patches in the scenery.
  */
-export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12), { time = 0, reduce = false } = {}) {
+export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12), { time = 0, reduce = false, signalsPaintedAfter = false, beforePalette = null } = {}) {
   const { width, height } = world || {}, state = stateOf(timeState);
   const result = { phase: state.phase, windows: 0, fireflies: 0 };
   if (!ctx || !finite(width) || !finite(height) || width <= 0 || height <= 0) return result;
-  if (state.darkness <= .0001 && state.warmth <= .0001 && state.windowGlow <= .001 && state.fireflies <= .01) return result;
-  const plots = (Array.isArray(world.plots) ? world.plots : []).slice(0, LIMITS.plots).filter(plot => finite(plot.x) && finite(plot.y));
-  const frame = reduce || !finite(time) ? 0 : time;
+  const hasAtmosphere = state.darkness > .0001 || state.warmth > .0001 || state.windowGlow > .001 || state.fireflies > .01;
   ctx.save();
   try {
     ctx.imageSmoothingEnabled = false;
-    // Match drawDispatch: parcel, state icon, and number are outside the house.
-    clipped(ctx, width, height, plots.flatMap(plot => [
-      { x: plot.x - 19, y: plot.y + 35, w: 22, h: 40 },
+    // Dynamic town sprites are a render pass of their own. Run them even during
+    // the zero-effect Day preview, then keep them ahead of the dusk/night palette.
+    if (typeof beforePalette === 'function') {
+      ctx.save();
+      try { ctx.globalCompositeOperation = 'source-over'; beforePalette(ctx); }
+      finally { ctx.restore(); }
+    }
+    if (!hasAtmosphere) return result;
+    const plots = (Array.isArray(world.plots) ? world.plots : []).slice(0, LIMITS.plots).filter(plot => finite(plot.x) && finite(plot.y));
+    const frame = reduce || !finite(time) ? 0 : time, style = sceneStyle(state);
+    // Standalone callers retain the parcel/label colors. The live renderer draws
+    // those once more after this palette pass, avoiding rectangular light gaps.
+    clipped(ctx, width, height, signalsPaintedAfter ? [] : plots.flatMap(plot => [
+      { x: plot.x - 16, y: plot.y + 49, w: 16, h: 13 },
+      { x: plot.x - 14, y: plot.y + 37, w: 13, h: 12 },
       { x: plot.x - 21, y: plot.y + 80, w: 56, h: 11 },
+      ...(plot.kids || []).slice(0, 3).filter(kid => finite(kid.x) && finite(kid.y)).map(kid => ({ x: kid.x + 5, y: kid.y - 4, w: 7, h: 7 })),
     ]));
     const p = painter(ctx);
-    if (state.darkness > .0001) p(0, 0, width, height, color(state.tint, Math.min(.22, state.darkness)));
-    if (state.warmth > .0001) p(0, 0, width, height, color([246, 184, 119], state.warmth * .028));
-    if (state.windowGlow > .001) for (const plot of plots.slice(0, LIMITS.litCottages)) {
+    palette(ctx, p, width, height, style, state);
+    if (style.windowCover > .001) for (const plot of plots.slice(0, LIMITS.litCottages)) {
       const agent = plot.agent || {};
-      if (agent.status === 'offline') continue;
-      const strength = state.windowGlow * (agent.status === 'working' ? 1 : .62) * (finite(plot.opacity) ? clamp(plot.opacity) : 1);
-      if (strength <= .001) continue;
-      const warmth = .25 + (hash(agent.id || plot.x + ':' + plot.y) % 25) / 100;
+      const opacity = finite(plot.opacity) ? clamp(plot.opacity) : 1;
+      if (opacity <= .001) continue;
       for (const x of [plot.x + 12, plot.x + 34]) {
         const y = plot.y + 41;
-        glow(p, x, y, 8, 8, strength);
-        // Four glass panes leave the original wooden mullions and frame intact.
-        const fill = color([255, 213 + warmth * 20, 125 + warmth * 35], strength * .63);
-        p(x, y, 3, 3, fill); p(x + 4, y, 4, 3, fill);
-        p(x, y + 4, 3, 4, fill); p(x + 4, y + 4, 4, 4, fill);
-        p(x, y, 3, 1, color([255, 238, 184], strength * .35));
-        result.windows++;
+        if (windowLight(p, x, y, agent, opacity, state, style)) result.windows++;
       }
+      for (const kid of (plot.kids || []).slice(0, 3)) if (finite(kid.x) && finite(kid.y))
+        if (windowLight(p, kid.x + 4, kid.y + 10, kid.agent, opacity, state, style, true)) result.windows++;
     }
     if (state.fireflies > .01) for (const accent of atmosphereAccents(world)) {
       const x = clamp(accent.x + Math.sin(frame * accent.speed + accent.phase) * accent.drift, 3, width - 4);
@@ -187,12 +256,17 @@ export function paintTownAtmosphere(ctx, world = {}, timeState = villageTime(12)
 }
 
 /** Paint in the room's existing 240×176 coordinate system after its renderer. */
-export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { time = 0, reduce = false } = {}) {
+export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { time = 0, reduce = false, agent = null } = {}) {
   const state = stateOf(timeState), result = { phase: state.phase, windows: 0 };
   if (!ctx || !room || !finite(room.width) || !finite(room.height)) return result;
   if (state.roomDarkness <= .0001 && state.windowShade <= .001 && state.windowGlow <= .001) return result;
   const review = room.objects?.find(object => object.id === 'review');
-  const protectedRects = review ? [{ x: review.x - 2, y: review.y - 15, w: review.w + 4, h: review.h + 20 }] : [];
+  const protectedRects = review ? [
+    { x: review.x + 2, y: review.y - 12, w: review.w - 4, h: 14 },
+    { x: review.x + review.w - 22, y: review.y + 2, w: 18, h: 11 },
+    { x: review.x + 3, y: review.y + review.h - 12, w: review.w - 6, h: 2 },
+  ] : [];
+  const working = agent?.status === 'working', style = sceneStyle(state, { interior: true, working });
   const frame = reduce || !finite(time) ? 0 : time;
   ctx.save();
   try {
@@ -201,7 +275,7 @@ export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { ti
     // unknown remains gray, and no warm ambient light changes those meanings.
     clipped(ctx, room.width, room.height, protectedRects);
     const p = painter(ctx);
-    if (state.roomDarkness > .0001) p(0, 0, room.width, room.height, color(state.tint, Math.min(.09, state.roomDarkness)));
+    palette(ctx, p, room.width, room.height, style, state);
     const win = room.window;
     if (validRect(win) && state.windowShade > .001) {
       ctx.save();
@@ -214,7 +288,7 @@ export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { ti
         p(win.x, win.y, win.w, win.h, color(state.sky, state.windowShade));
         p(win.x, win.y + 17, win.w, 6, color([48, 73, 61], state.windowShade * .85));
         p(win.x + 7, win.y + 14, 9, 8, color([55, 77, 65], state.windowShade * .85));
-        const moon = state.darkness / .22;
+        const moon = style.nightness;
         p(win.x + 14, win.y + 4, 4, 4, color([246, 227, 172], state.windowShade * .75));
         p(win.x + 16, win.y + 3, 3, 4, color(state.sky, state.windowShade * moon));
         if (state.fireflies > .2) p(win.x + 6, win.y + 5, 1, 1, color([223, 230, 218], state.fireflies * .6));
@@ -222,13 +296,26 @@ export function paintRoomAtmosphere(ctx, room, timeState = villageTime(12), { ti
       } finally { ctx.restore(); }
       // A small moonlit projection follows the existing authored window shaft.
       for (let i = 0; i < 4; i++) p(win.x + 4 + i * 3, 54 + i * 7, 21, 6,
-        color(state.darkness > .12 ? [123, 157, 196] : [253, 203, 138], state.windowShade * .055));
+        color(style.nightness > .3 ? [112, 145, 195] : [253, 203, 138], state.windowShade * .08));
     }
     const hearth = room.objects?.find(object => object.id === 'hearth');
-    if (validRect(hearth) && state.windowGlow > .001) {
+    if (validRect(hearth) && working && state.windowGlow > .001) {
       const flicker = .9 + Math.sin(frame * 1.7 + Number(room.seed || 0) % 17) * .1;
       glow(p, hearth.x + 3, hearth.y + hearth.h - 10, hearth.w - 6, 8, state.windowGlow * flicker);
-      p(hearth.x - 5, hearth.y + hearth.h - 2, hearth.w + 10, 6, color([255, 190, 105], state.windowGlow * flicker * .07));
+      p(hearth.x - 5, hearth.y + hearth.h - 2, hearth.w + 10, 6, color([255, 190, 105], state.windowGlow * flicker * .15));
+    } else if (validRect(hearth) && style.nightness > .001) {
+      // Bedtime hearths settle to embers; the renderer's original bright flames
+      // are covered rather than being left shining underneath a dark overlay.
+      p(hearth.x + 7, hearth.y + hearth.h - 15, hearth.w - 14, 12, color([29, 34, 43], style.nightness));
+      p(hearth.x + 11, hearth.y + hearth.h - 5, 2, 1, color([128, 78, 55], style.nightness));
+      p(hearth.x + 17, hearth.y + hearth.h - 4, 2, 1, color([103, 68, 53], style.nightness));
+    }
+    const desk = room.objects?.find(object => object.id === 'workbench');
+    if (working && validRect(desk) && state.windowGlow > .001) {
+      ctx.globalCompositeOperation = 'screen';
+      glow(p, desk.x + 3, desk.y + 2, desk.w - 6, 16, state.windowGlow * .75);
+      p(desk.x + 4, desk.y + 4, desk.w - 8, 12, color([242, 175, 89], state.windowGlow * .12));
+      ctx.globalCompositeOperation = 'source-over';
     }
   } finally { ctx.restore(); }
   return result;

@@ -1,11 +1,12 @@
 import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
 import { createTownLayout, advanceDuck, normalizeTown } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
-import { createObservatory } from "./observatory.mjs";
+import { createObservatory, apprenticeResidentTarget } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
+import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 import { residentTargets } from "./interaction.mjs";
 
 
@@ -389,7 +390,10 @@ let reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change",e=>{reduce=e.matches;});
 
 let agents = [], plots = [], gardens = [];
+let layoutSource = '';
 const actors = new Map();   // agent id -> villager sprite state, survives each poll
+const bedtime = createBedtimeRoutine();
+let bedtimeFrames = new Map(), lastBedtimeLabel = '';
 let pops = 0;               // how many thought bubbles are currently popped open
 let selectedId = null, hoverId = null, filter = null, paused = false, t = 0, frameDt=1/60, lastDrawAt=0;
 const JACK_ID = "__jack__";
@@ -930,6 +934,14 @@ function gardenTo(p, x, y, w, h){
 }
 
 /* ---------- sprites ---------- */
+function cottageName(raw){
+  ctx.font = '8px "Silkscreen", monospace';
+  let name=String(raw||'');
+  while(name.includes('-')&&ctx.measureText(name).width>40)name=name.slice(0,name.lastIndexOf('-'));
+  while(name.length>1&&ctx.measureText(name).width>40)name=name.slice(0,-1);
+  return name;
+}
+
 function drawHouse(x, y, ag){
   const d = townStyle(ag);
   const dead = ag.status==="offline";
@@ -983,12 +995,7 @@ function drawHouse(x, y, ag){
   px(nb.x+1, nb.y+1, nb.w-2, 1, dead ? "#7d8288" : C.woodLt);
   ctx.font = '8px "Silkscreen", monospace';
   ctx.textBaseline = "top";
-  let nm = ag.name;
-  // prefer chopping at a word boundary over sawing a word in half
-  while(nm.includes("-") && ctx.measureText(nm).width > nb.w-6){
-    nm = nm.slice(0, nm.lastIndexOf("-"));
-  }
-  while(nm.length > 1 && ctx.measureText(nm).width > nb.w-6) nm = nm.slice(0,-1);
+  const nm = cottageName(ag.name);
   ctx.fillStyle = dead ? "#2d3238" : "#2b1d10";
   ctx.fillText(nm, nb.x + Math.round((nb.w - ctx.measureText(nm).width)/2), nb.y+3);
 
@@ -1266,8 +1273,8 @@ function stockTown(){
     box, flip:false, bob:Math.random()*6
   });
   const spread = [
-    ["goose", 0.14, 0.30], ["goose", 0.62, 0.18], ["hen", 0.28, 0.66],
-    ["hen",   0.78, 0.74], ["duck",  0.46, 0.52], ["pig", 0.34, 0.44],
+    ["goose", 0.14, 0.30], ["goose", 0.62, 0.18],
+    ["duck", 0.46, 0.52], ["pig", 0.34, 0.44],
     ["cat",   0.18, 0.82], ["cat",   0.86, 0.36]
   ];
   spread.forEach(([k, fx, fy]) => add(k, Math.round(W*fx), Math.round(H*fy)));
@@ -1488,6 +1495,10 @@ function placeJack(){
 function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
+  const villageLight=observatory?.lightAt(t);
+  bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents,source:layoutSource||feedNamespace(ENDPOINT,builtInDemo)});
+  const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
+  if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
 
   TOWNS.forEach((d, di)=>{
@@ -1510,14 +1521,15 @@ function draw(){
     ctx.globalAlpha = faded ? 0.3 : 1;
 
     drawHouse(p.x, p.y, ag);
-    observatory?.drawDispatch(ctx,p,t);
     drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch || ag.worktree, ag.status==="offline");
     if(ag.status === "working"){
       const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
       drawSmoke(p.x+40, p.y+2, phase);
     }
 
-    // ---- villager: walks out to the bench when there's work on ----
+    const routine=bedtimeFrames.get(ag.id);
+    if(routine)paintCoop(ctx,routine);
+    // Villagers bring their family home; real work continues behind lit glass.
     const door = {x: p.x+22, y: p.y+HOUSE_H-15};
     let a = actors.get(ag.id);
     if(!a){
@@ -1541,9 +1553,11 @@ function draw(){
     } else if(ag.status === "offline"){
       target = door;
     }
+    if(routine?.evening){target={x:routine.parent.x-5,y:routine.parent.y-14};working=false;}
+    if(routine?.settled){a.indoors=true;a.x=routine.door.x-5;a.y=routine.door.y-14;}
 
-    if(!(ag.status === "offline" && a.indoors)){
-      const spd = reduce ? 99 : 0.5;
+    if(!routine?.settled&&!(ag.status === "offline" && a.indoors)){
+      const spd = reduce ? 999 : frameDt*40;
       const dx = target.x - a.x, dy = target.y - a.y;
       const dist = Math.hypot(dx, dy);
       a.x += Math.max(-spd, Math.min(spd, dx));
@@ -1559,10 +1573,6 @@ function draw(){
         if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1,talking:observatory.isTalking(ag.id),reduce});
         else drawPerson(Math.round(a.x),Math.round(a.y)+bob,townStyle(ag).roof,step);
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
-        if(ag.status === "blocked" || ag.status === "done"){
-          const bb = reduce ? 0 : Math.round(Math.sin(t*3 + p.x));
-          drawBubble(Math.round(a.x)+9, Math.round(a.y)-15+bb, ag.status);
-        }
       }
     }
     (p.kids||[]).forEach(k=>{
@@ -1579,6 +1589,15 @@ function draw(){
         ctx.strokeRect(k.x-1.5, k.y-1.5, 19, 19);
       }
     });
+    for(const kid of visibleBedtimeKids(routine,id=>observatory?.isApprenticeArriving(id,t))){
+      const agent=p.kids.find(k=>k.agent.id===kid.id)?.agent;
+      if(agent)renderResident(ctx,Math.round(kid.x),Math.round(kid.y),observatory.resident(agent),{time:t*1000,walking:kid.walking,scale:.62,reduce});
+    }
+    for(const hen of routine?.hens||[]){
+      if(hen.hidden)continue;
+      const hop=!reduce&&hen.walking&&Math.floor(t*5+hen.index)%2?-1:0;
+      drawSprite('hen',Math.round(hen.x)-4,Math.round(hen.y)-9+hop,hen.flip);
+    }
     ctx.globalAlpha = 1;
 
     const on = ag.id===selectedId, over = ag.id===hoverId;
@@ -1590,17 +1609,46 @@ function draw(){
   });
   moveFauna();
   drawFauna();
-  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t);
+  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t,paletteCtx=>observatory.drawApprenticeArrivals(paletteCtx,t));
+  const nightInk=Math.min(1,(observatory?.lightAt(t).darkness||0)/.4);
+  if(nightInk>0){
+    ctx.textBaseline='top';ctx.fillStyle='#bacbe2';
+    TOWNS.forEach((d,di)=>{
+      const r=DR[di];if(!r)return;
+      const label=d.key==='HubTown'?'HOME HUBTOWN':d.label;
+      const sx=r.col===1?r.x+r.w-PAD-signWidth(label):r.x+PAD;
+      ctx.globalAlpha=nightInk*((filter&&filter!==d.key) ? .35 : 1);
+      ctx.fillText(label,sx+6,r.y+PAD+4);
+    });
+    for(const p of plots){
+      ctx.globalAlpha=nightInk*(((filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)) ? .3 : 1);
+      const name=cottageName(p.agent.name);
+      ctx.fillText(name,p.x+4+Math.round((46-ctx.measureText(name).width)/2),p.y+26);
+    }
+    ctx.globalAlpha=1;
+  }
+  // Operational colors are drawn after the blue palette, without daylight holes.
+  for(const p of plots){
+    ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
+    observatory?.drawDispatch(ctx,p,t);
+    const bubble=statusBubbleAnchor({agent:p.agent,plot:p,routine:bedtimeFrames.get(p.agent.id),actor:actors.get(p.agent.id),time:t,reduce});
+    if(bubble)drawBubble(bubble.x,bubble.y,bubble.status);
+    for(const kid of p.kids||[])if(['blocked','done'].includes(kid.agent.status)){
+      px(kid.x+6,kid.y-3,5,5,C.outline);px(kid.x+7,kid.y-2,3,3,kid.agent.status==='blocked'?C.alert:C.ok);
+    }
+  }
+  ctx.globalAlpha=1;
 
   plots.forEach(p=>{
     if(filter && filter !== townKey(p.agent)) return;
     const a = actors.get(p.agent.id);
-    if(!a || a.indoors) return;
+    if(!a) return;
+    if(a.indoors&&!(bedtimeFrames.get(p.agent.id)?.evening&&(p.agent.id===hoverId||p.agent.id===selectedId)))return;
     const show = p.agent.id===hoverId || p.agent.id===selectedId || (a.popUntil && t < a.popUntil);
     if(!show) return;
     const revealed = reduce ? Infinity : (t - (a.streamAt ?? 0)) * 26;
     const thought = observatory?.latestLine(p.agent) || p.agent.activity || p.agent.lastLine;
-    drawThought(Math.round(a.x)+5, Math.round(a.y)-2, thought, revealed);
+    drawThought(Math.round(a.x)+5, a.indoors?p.y+20:Math.round(a.y)-2, thought, revealed);
   });
 
   observatory?.draw(t);
@@ -1843,7 +1891,6 @@ document.getElementById("pause").onclick = (e)=>{
   e.target.textContent = paused ? "resume feed" : "pause feed";
 };
 
-let layoutSource="";
 const refresh=createLatestRefresh(async ()=>{
     const incoming=await fetchAgents();
     if(incoming===null)return true;
@@ -1856,13 +1903,19 @@ const refresh=createLatestRefresh(async ()=>{
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
-  getResidents:()=>residentTargets(actors,plots),
+  getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
+  getResidents:()=>residentTargets(actors,plots).concat([...bedtimeFrames].flatMap(([parentId,r])=>{
+    if(!plots.some(plot=>plot.agent.id===parentId))return [];
+    return r.kids.map(k=>apprenticeResidentTarget(
+      k,observatory?.apprenticeArrival(k.id,t),observatory?.isApprenticeArriving(k.id,t)
+    )).filter(Boolean);
+  })),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh
 });
 window.cottageObservatory=observatory;
-window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
+window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
 
 (function boot(){
   const box = document.getElementById("endpoint");

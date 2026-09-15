@@ -19,6 +19,18 @@ music. Location means Jack's feet in a town or the cottage he has entered;
 selecting a distant inspector does not move the soundtrack. Unknown towns use
 the shared time-of-day pieces. No geolocation or weather services are called.
 
+Night uses a desaturated blue palette inspired by Game Boy Color scenes, with
+moonlit paths and warm window light only where an agent is still working.
+From 18:30, residents gather their recorded child agents and garden chickens,
+then head indoors. Chickens close up in their coops; nonworking hosts tuck
+under a blanket while working hosts remain at the workbench. Visiting and
+talking still work at any hour. Bedtime is scenery, never a task-status update.
+Previewing Day wakes the village; Dusk or Night starts the short homecoming.
+Reduced motion immediately shows the settled scene. Homes and flocks retain
+their task seeds across refreshes.
+`npm run test:night` checks the rendered night colors, working windows, family
+homecoming, and walking to a sleeping host to talk with E in real Chrome.
+
 Each piece is about 65 seconds. Two native audio elements overlap loops and
 crossfade between tracks, with a four-second delay to avoid changing songs at
 every step along a town boundary. Playback starts off on every page load. The
