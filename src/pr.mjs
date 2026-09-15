@@ -34,10 +34,22 @@ function checkName(value) { return str(value).replace(/[\u0000-\u001f\u007f]/g, 
 function checkWord(value) { return str(value).toUpperCase().replace(/[^A-Z_]/g, "").slice(0, 40); }
 function normalizeChecks(value) {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 50).map((entry) => ({
-    name: checkName(entry?.name || entry?.context), status: checkWord(entry?.status || entry?.state),
-    conclusion: checkWord(entry?.conclusion), url: safeCheckUrl(entry?.url || entry?.detailsUrl || entry?.targetUrl),
-  })).filter(entry => entry.name || entry.status || entry.conclusion);
+  return value.map((entry) => {
+    let status = checkWord(entry?.status);
+    let conclusion = checkWord(entry?.conclusion);
+    const state = checkWord(entry?.state);
+    // StatusContext has `state` instead of CheckRun's `status`/`conclusion`.
+    if (!status && !conclusion && state) {
+      if (["SUCCESS", "FAILURE", "ERROR"].includes(state)) {
+        status = "COMPLETED";
+        conclusion = state;
+      } else status = state;
+    }
+    return {
+      name: checkName(entry?.name || entry?.context), status, conclusion,
+      url: safeCheckUrl(entry?.url || entry?.detailsUrl || entry?.targetUrl),
+    };
+  }).filter(entry => entry.name || entry.status || entry.conclusion);
 }
 
 /** A concise, factual rollup for presentation. It never determines merge readiness. */
