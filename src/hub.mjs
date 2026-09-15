@@ -329,6 +329,10 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
          WHERE updated_at > datetime('now', '-24 hours')
             OR status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')
             OR context LIKE '%"pullRequest"%'
+            OR (json_valid(context) AND (
+              lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
+              OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
+            ))
             OR context LIKE '%"babysitHandoff"%'
             ${columns.has("result") ? `OR result LIKE '%"pullRequest"%'` : ""}
          ORDER BY
