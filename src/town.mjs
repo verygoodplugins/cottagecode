@@ -5,6 +5,7 @@ import { createObservatory } from "./observatory.mjs";
 import { normalizeCottage } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
+import { residentTargets } from "./interaction.mjs";
 
 
 /* =======================================================================
@@ -157,6 +158,11 @@ const LINES = {
   offline:["- shut down cleanly"]
 };
 const pick = a => a[Math.floor(Math.random()*a.length)];
+const demoTodos=(a,stamp)=>({source:'demo',updatedAt:stamp,items:[
+  {id:'read',text:'Read the existing behavior and the pinned request',status:'completed'},
+  {id:'change',text:a.task,status:['done','offline'].includes(a.status)?'completed':a.status==='idle'?'pending':'in_progress'},
+  {id:'check',text:'Verify the result and leave a reviewable handoff',status:a.status==='done'?'completed':'pending'}
+]});
 
 const DEMO_META={source:"demo",relationships:[
   {id:"hub-app",from:"HubTown",to:"AppTown",label:"Application API"},
@@ -205,6 +211,7 @@ const SIM = (() => {
     a.originalAsk="Please "+a.task+". Check the existing behavior, make the smallest useful change, and leave a clear result I can review.";
     a.taskStartedAt=a.startedAt;a.sessionStartedAt=a.startedAt-8*60000;a.updatedAt=now;
     a.endedAt=['done','offline'].includes(a.status)?Math.max(a.startedAt,now-20*60000):0;
+    a.todos=demoTodos(a,now);
     a.events=[
       {id:a.id+":request",timestamp:a.startedAt,kind:"request",text:a.originalAsk},
       {id:a.id+":read",timestamp:a.startedAt+12000,kind:"progress",text:"I’m reading the existing implementation and checking the task requirements."},
@@ -233,6 +240,7 @@ const SIM = (() => {
     if(demoBeat===5){
       const parent=agents[0],stamp=Date.now(),id="demo-apprentice";
       agents.push({...parent,id,name:"Pip",parent:parent.id,status:"working",occupancy:"live",endedAt:0,taskId:"demo-task-pip",task:"Check the webhook edge cases",originalAsk:"Please test the webhook edge cases while Bolt finishes the queue changes.",taskStartedAt:stamp,startedAt:stamp,sessionStartedAt:stamp,updatedAt:stamp,tokens:0,cost:0,events:[{id:id+":arrival",timestamp:stamp,kind:"request",text:"Please test the webhook edge cases while Bolt finishes the queue changes."}]});
+      agents.at(-1).todos=demoTodos(agents.at(-1),stamp);
     }
     if(demoBeat%14===6){
       const stamp=Date.now(),event={id:"demo-handoff-"+stamp,timestamp:stamp,kind:"handoff",from:"HubTown",to:"AppTown",agentId:"a0",name:"Bolt",text:"Demo handoff: the queue contract is ready for AppTown’s interface work."};
@@ -255,6 +263,7 @@ const SIM = (() => {
         if(s !== a.status){
           a.status = s; a.lastLine = pick(LINES[s]); a.activity = pick(ACTIVITY[s]);
           a.endedAt=['done','offline'].includes(s)?Date.now():0;
+          a.todos=demoTodos(a,Date.now());
         }
       } else if(Math.random() > 0.8){ a.lastLine = pick(LINES[a.status]); }
       const last=a.events.at(-1);
@@ -272,6 +281,7 @@ const SIM = (() => {
       const a = agents.find(x=>x.id===id); if(!a) return;
       a.status = status; a.lastLine = pick(LINES[status]); a.activity = pick(ACTIVITY[status]);
       a.endedAt=['done','offline'].includes(status)?Date.now():0;
+      a.todos=demoTodos(a,Date.now());
       if(status==="offline") a.task = "-";
     },
     setLive(v){ live = v; }
@@ -1516,7 +1526,7 @@ function draw(){
         const atBench = working && dist < 2;
         const step = reduce ? 0 : (moving ? (Math.floor(t*6 + p.x) % 2) : 0);
         const bob  = (atBench && !reduce) ? (Math.floor(t*7) % 2) : 0;
-        if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1});
+        if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1,talking:observatory.isTalking(ag.id),reduce});
         else drawPerson(Math.round(a.x),Math.round(a.y)+bob,townStyle(ag).roof,step);
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
         if(ag.status === "blocked" || ag.status === "done"){
@@ -1771,7 +1781,7 @@ document.getElementById("connect").onclick = ()=>{
     if(ENDPOINT!==null){
       activeFeedAbort?.abort();feedRevision++;clearFeedState();
     }
-    ENDPOINT=null;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
+    ENDPOINT=null;builtInDemo=true;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
   }
   if(!isAllowedFeedUrl(v)){
     feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
@@ -1810,6 +1820,7 @@ const refresh=createLatestRefresh(async ()=>{
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
+  getResidents:()=>residentTargets(actors,plots),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack
 });

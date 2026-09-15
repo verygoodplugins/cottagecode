@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,applyActivityPage,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
 
 test('history jump actions escape untrusted cottage identifiers in button markup',()=>{
   const html=button('jump:agent" onfocus="alert(1)','Open cottage');
@@ -36,4 +36,20 @@ test('unavailable activity is retained and presented apart from an empty live jo
   applyActivityPage(cache,{events:[],source:'hub timeline',unavailable:false});
   assert.equal(cache.unavailable,false);
   assert.deepEqual(activityJournalPresentation(cache),{state:'live',text:'hub timeline · live activity'});
+});
+
+test('activity cache clears task artifacts when a session-only cottage advances to a new session',()=>{
+  const first={taskId:null,sessionId:'session-one',activityUrl:'/agents/cottage/activity'};
+  const cache=activityCacheFor(null,first);
+  cache.events=[{id:'old',text:'Earlier task'}];
+  cache.todos={items:[{id:'old-todo',text:'Earlier task checklist',status:'pending'}]};
+  cache.cursor='old';
+
+  assert.equal(activityCacheFor(cache,{...first,task:'Updated same task'}),cache,'a same-session refresh keeps journal state and scroll anchors');
+
+  const next=activityCacheFor(cache,{...first,sessionId:'session-two'});
+  assert.notEqual(next,cache);
+  assert.deepEqual(next.events,[]);
+  assert.equal(next.todos,undefined,'an omitted new-session todo snapshot cannot reuse the prior task checklist');
+  assert.equal(next.cursor,null);
 });

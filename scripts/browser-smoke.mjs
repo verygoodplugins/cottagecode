@@ -11,13 +11,15 @@ import {pageActivity} from '../src/activity.mjs';
 const run=promisify(execFile),page='cottagecode-browser-smoke';
 const stamp=Date.now(),pr={number:123,url:'https://github.com/example/observatory/pull/123',state:'open',labels:['babysit:ready'],headSha:'head-one',source:'browser-fixture',checkedAt:stamp};
 let agents=[
-  {id:'host',taskId:'task-one',name:'Hazel',town:'HubTown',status:'working',task:'Verify the observatory',originalAsk:'Keep the original request pinned while progress arrives.',taskStartedAt:stamp-130000,sessionStartedAt:stamp-600000,updatedAt:stamp,activityUrl:'/agents/host/activity',pr},
+  {id:'host',taskId:'task-one',name:'Hazel',town:'HubTown',status:'working',task:'Verify the observatory',originalAsk:'Keep the original request pinned while progress arrives.',taskStartedAt:stamp-130000,sessionStartedAt:stamp-600000,updatedAt:stamp,activityUrl:'/agents/host/activity',pr,todos:{source:'browser-fixture',updatedAt:stamp,items:[{id:'one',text:'Keep the request visible',status:'completed'},{id:'two',text:'Verify doors and conversations',status:'in_progress'}]}},
   {id:'neighbor',taskId:'task-neighbor',name:'Fern',town:'AppTown',status:'done',task:'Shared PR companion',pr:{...pr},endedAt:stamp-60000},
 ];
 let events=Array.from({length:130},(_,i)=>({id:'event-'+i,timestamp:stamp-130000+i*1000,kind:i%3?'progress':'tool',text:'Recorded observation '+i+' with enough detail to make this journal scroll.'}));
 let handoffs=[],stale=false,fail=false;
 const feed={snapshot:()=>{if(fail)throw new Error('Simulated source outage');return {source:'browser-fixture',agents,stale,relationships:[{from:'HubTown',to:'AppTown',label:'Explicit test contract'}],handoffs};},getActivity:async(id,options)=>pageActivity(events,{...options,source:'browser-fixture'})};
-const app=createFeedServer(feed),html=await readFile(new URL('../src/town.html',import.meta.url),'utf8');
+const sent=[];let unconfirmed=false;
+const messages={capability:(agent,{stale})=>agent.id==='host'&&!stale?{available:true,mode:'redirect',source:'browser-fixture',messageUrl:'/agents/host/messages',checkedAt:Date.now()}:{available:false,reason:'This fixture only observes the other cottages.'},send:async(agent,payload)=>{sent.push({agentId:agent.id,...payload});return unconfirmed?{status:409,body:{ok:false,delivery:'unconfirmed'}}:{status:200,body:{ok:true,delivery:'submitted',requestId:payload.requestId}};}};
+const app=createFeedServer(feed,{messages}),html=await readFile(new URL('../src/town.html',import.meta.url),'utf8');
 // Emulate the browser preference before scene modules load, without changing macOS settings.
 const preference='<script>const nativeMedia=window.matchMedia.bind(window);window.matchMedia=q=>q.includes("prefers-reduced-motion")?Object.assign(new EventTarget(),{matches:true,media:q}):nativeMedia(q);</script>';
 const server=createServer((req,res)=>{if(req.url==='/reduced-motion'){res.setHeader('content-type','text/html');res.end(html.replace('<head>','<head>'+preference));}else app.emit('request',req,res);});
@@ -65,15 +67,57 @@ try{
   assert.match(await evaluate('document.querySelector(\'.pr-summary\').textContent'),/Ready to merge/);
   assert.match(await evaluate('document.querySelector(\'.pr-summary a\').href'),/pull\/123$/);
   await key('Escape');assert.equal((await state()).mode,'town');
-  await key('e');assert.equal((await state()).mode,'room');
+  await key('e');assert.equal((await state()).mode,'town','E must not operate doors');
+  await key('ArrowUp',250);assert.equal((await state()).mode,'room');
   assert.equal((await state()).roomSeed,first.roomSeed);
+  await key('ArrowDown',300);assert.equal((await state()).mode,'town','Walking into the interior doorway exits');
+  await key('ArrowUp',250);assert.equal((await state()).mode,'room','Returning to the doorway enters without E');
+  await click('[data-action="tab:todos"]');
+  assert.match(await evaluate('document.querySelector(\'.todo-list\').textContent'),/Verify doors and conversations/);
+  // Walk through the actual room collision system to the host, then use E.
+  await evaluate(`(async()=>{
+    const {createInterior,isWalkable}=await import('/modules/interiors.mjs'),s=window.cottageState(),room=createInterior(s.agents.find(a=>a.id===s.scene.interiorId));
+    const start=s.scene.roomPlayer,step=4,queue=[{x:start.x,y:start.y,key:'0,0'}],parents=new Map([['0,0',null]]);let goal=null;
+    for(let i=0;i<queue.length;i++){
+      const p=queue[i];if(Math.hypot(p.x-room.resident.x,p.y-room.resident.y)<24){goal=p.key;break;}
+      const [gx,gy]=p.key.split(',').map(Number);
+      for(const [dx,dy] of [[1,0],[-1,0],[0,-1],[0,1]]){const key=(gx+dx)+','+(gy+dy),n={x:start.x+(gx+dx)*step,y:start.y+(gy+dy)*step,key};if(parents.has(key)||n.y>154||!isWalkable(room,n.x,n.y))continue;parents.set(key,{key:p.key,point:n});queue.push(n);}
+    }
+    if(!goal)throw new Error('Resident cannot be reached');const path=[];while(parents.get(goal)){const entry=parents.get(goal);path.unshift(entry.point);goal=entry.key;}
+    const canvas=document.getElementById('room-canvas');canvas.focus();
+    for(const target of path){let p=window.cottageObservatory.state.roomPlayer;const horizontal=Math.abs(target.x-p.x)>Math.abs(target.y-p.y),axis=horizontal?'x':'y',sign=Math.sign(target[axis]-p[axis]);if(Math.abs(target[axis]-p[axis])<1)continue;const key=horizontal?(sign>0?'ArrowRight':'ArrowLeft'):(sign>0?'ArrowDown':'ArrowUp');canvas.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true}));const end=performance.now()+800;while(sign*(target[axis]-window.cottageObservatory.state.roomPlayer[axis])>0&&performance.now()<end)await new Promise(requestAnimationFrame);window.dispatchEvent(new KeyboardEvent('keyup',{key,bubbles:true}));}
+    if(Math.hypot(window.cottageObservatory.state.roomPlayer.x-room.resident.x,window.cottageObservatory.state.roomPlayer.y-room.resident.y)>=30)throw new Error('Did not reach host');
+  })()`);
+  await key('e');assert.equal((await state()).tab,'talk');assert.equal((await state()).talking,true);assert.equal((await state()).sound,false);
+  await browser('snapshot');
+  await browser('fill',['--fields',JSON.stringify({'#agent-message':'Please keep the cottage furniture stable.'})]);
+  await evaluate('const input=document.getElementById(\'agent-message\');input.focus();input.setSelectionRange(7,11);');
+  events.push({id:'while-composing',timestamp:Date.now(),kind:'progress',text:'Fixture update during a composed message.'});
+  await until('!!document.querySelector(\'[data-event="while-composing"]\')','Conversation did not stream');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'Please keep the cottage furniture stable.');
+  assert.deepEqual(await evaluate('[document.activeElement.id,document.activeElement.selectionStart,document.activeElement.selectionEnd]'),['agent-message',7,11]);
+  const standing=(await state()).roomPlayer;await evaluate('document.getElementById(\'agent-message\').dispatchEvent(new KeyboardEvent(\'keydown\',{key:\'w\',bubbles:true}))');assert.deepEqual((await state()).roomPlayer,standing);
+  assert.equal(sent.length,0,'Drafting must never send automatically');
+  await click('[data-action="send-message"]');await until('document.getElementById(\'message-status\').textContent.includes(\'Submitted\')','Message receipt did not appear');
+  assert.equal(sent.length,1);assert.equal(sent[0].message,'Please keep the cottage furniture stable.');assert.equal(sent[0].taskId,'task-one');
+  assert.equal(await evaluate('document.getElementById(\'agent-message\').value'),'');
+  await click('#sound-toggle');await key('e');assert.equal((await state()).talking,true);await click('#sound-toggle');
+  unconfirmed=true;
+  await browser('fill',['--fields',JSON.stringify({'#agent-message':'A fixture message with uncertain delivery.'})]);
+  await click('[data-action="send-message"]');await until('document.getElementById(\'message-status\').textContent.includes(\'unconfirmed\')','Uncertain delivery did not remain explicit');
+  assert.equal(sent.length,2);assert.equal(await evaluate('document.querySelector(\'[data-action="send-message"]\').disabled'),true);
+  await evaluate('document.getElementById(\'agent-conversation\').dispatchEvent(new Event(\'submit\',{bubbles:true,cancelable:true}))');assert.equal(sent.length,2,'An uncertain message must not be resubmitted');unconfirmed=false;
+  agents[0].todos={source:'browser-fixture',updatedAt:Date.now(),items:[]};
+  await click('[data-action="tab:todos"]');await until('document.getElementById(\'panel\').textContent.includes(\'list is empty\')','Explicit empty checklist did not clear the old list');
+  agents[0].todos=null;await until('document.getElementById(\'panel\').textContent.includes(\'not supplied a to-do list\')','Unknown checklist appeared empty');
+  pass('automatic doors, E conversations, opt-in murmur, real checklist, preserved drafts and explicit fixture delivery');
   const plotBefore=await evaluate('window.cottageState().plots.find(p=>p.id===\'host\')');
   agents.push({...agents[0],id:'apprentice',name:'Pip',parent:'host',taskId:'apprentice-one'});
   handoffs=[{id:'handoff-one',from:'HubTown',to:'AppTown',agentId:'host',timestamp:Date.now(),text:'Recorded contract handed to Fern.'}];
   await until('window.cottageObservatory.state.apprentices===1&&window.cottageObservatory.state.couriers===1','Arrival or courier did not appear');
   const plotAfter=await evaluate('window.cottageState().plots.find(p=>p.id===\'host\')');
   assert.equal(plotAfter.x,plotBefore.x);assert.equal(plotAfter.y,plotBefore.y);assert.equal((await state()).roomSeed,first.roomSeed);
-  pass('keyboard exit/reentry, stable room and plot, apprentice arrival and recorded courier');
+  pass('stable room and plot, apprentice arrival and recorded courier');
   stale=true;
   await until('window.cottageObservatory.state.feedStale&&!document.querySelector(\'[data-pr="ready"]\')','Stale feed still advertised readiness');
   stale=false;await until('!!document.querySelector(\'[data-pr="ready"]\')','Fresh feed did not recover readiness');
