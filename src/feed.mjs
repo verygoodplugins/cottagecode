@@ -274,7 +274,9 @@ export function createFeed({
         localInput.updatedAt && localInput.updatedAt > inputRequestResolution.resolvedAt);
       const resolvedLocally = hubInput && [...keys].some(key => inputStates.get(key)?.resolvedInputRequests?.has(hubInput.id));
       const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
-      const inputRequest = terminal || resolvedLocally ? null : hubInput || (inputInTask && inputAfterResolution ? localInput : null);
+      const localReplacement = inputInTask && localInput &&
+        (!hubInput || localInput.id !== hubInput.id) && inputAfterResolution ? localInput : null;
+      const inputRequest = terminal ? null : !resolvedLocally && hubInput ? hubInput : localReplacement;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,

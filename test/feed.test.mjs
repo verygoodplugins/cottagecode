@@ -131,12 +131,37 @@ test("resolved terminal Hub attention does not remain blocked or visible", () =>
         ...resolution,
       };
       const cottage = toCottage(row, now);
-      assert.equal(mapHubStatus(row, now), "idle", `${status} is not blocked after attention resolves`);
-      assert.equal(cottage.status, "idle");
+      assert.equal(mapHubStatus(row, now), "done", `${status} remains terminal after attention resolves`);
+      assert.equal(cottage.status, "done");
+      assert.equal(cottage.occupancy, "settled");
       assert.equal(cottage.inputRequest, null);
       assert.equal(cottage.attention, "");
     }
   }
+});
+
+test("a resolved Hub prompt does not hide a distinct newer local prompt", async () => {
+  const hubAgent = toCottage({
+    id: "hub-task", record_kind: "logical_task", session_id: "session-1", status: "awaiting_input",
+    attention_message: "Old Hub prompt", attention_type: "question", updated_at: now,
+    context: { integration: { requestId: "prompt-a" } },
+  }, now);
+  const localInput = { id: "prompt-b", kind: "question", prompt: "New local prompt", questions: [{ id: "question-1", prompt: "New local prompt", options: [] }], source: "transcript", updatedAt: now + 1 };
+  const local = { id: "session-1", source: "claude", taskId: "hub-task", taskStartedAt: now - 1_000,
+    sessionStartedAt: now - 2_000, status: "blocked", inputRequest: localInput };
+  const localSession = { id: "session-1", events: [], sidechains: new Map(), inputRequest: localInput,
+    resolvedInputRequests: new Set(["prompt-a"]) };
+  const feed = createFeed({ ...feedOptions,
+    scanClaude: async () => ({ ok: true, agents: [local], sessions: [localSession] }),
+    readHub: () => ({ ...emptyHub(), agents: [hubAgent], keys: new Set(["session-1"]), links: new Map([["hub-task", new Set(["hub-task", "session-1"])]]) }),
+  });
+
+  await feed.scan();
+  const [combined] = feed.snapshot().agents;
+  assert.equal(combined.inputRequest.id, "prompt-b");
+  assert.equal(combined.inputRequest.prompt, "New local prompt");
+  assert.equal(combined.status, "blocked");
+  assert.equal(combined.attention, "New local prompt");
 });
 
 test("feed and incremental activity expose the same explicit latest todo snapshot", async () => {

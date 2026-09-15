@@ -37,6 +37,8 @@ export function createHubMessenger({
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
     if(stale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
+    const resolution=agent.inputRequestResolution;
+    if(resolution&&(!agent.inputRequest||!resolution.id||agent.inputRequest.id===resolution.id))return unavailable('This input request was already resolved. Refresh before replying.');
     const target=agent.conversationTarget;
     if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
     let mode='';

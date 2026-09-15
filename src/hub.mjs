@@ -103,8 +103,7 @@ export function mapHubStatus(row, now = Date.now()) {
     return aged(completed || updated) ? "offline" : "done";
   }
   if (status === "failed" || status === "cancelled" || status === "interrupted") {
-    if (attentionResolved(row)) return "idle";
-    if (row.attention_type || row.attention_message) return "blocked";
+    if (!attentionResolved(row) && (row.attention_type || row.attention_message)) return "blocked";
     return aged(updated) ? "offline" : "done";
   }
   if (status === "stale") return "offline";
