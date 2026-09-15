@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {appendFile,mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {once} from 'node:events';
@@ -68,6 +68,22 @@ test('uncertain deliveries and successful receipts survive restart without repla
     assert.equal((await second.messenger.send(agent,next)).body.delivery,'submitted');
     const third=fixture({ledgerPath});assert.equal((await third.messenger.send(agent,next)).body.delivery,'submitted');assert.equal(third.calls.length,0);
     const stored=await readFile(ledgerPath,'utf8');assert.equal(stored.includes(message.message),false);assert.equal(stored.includes('fixture-token'),false);
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+test('an interrupted final receipt record preserves prior message reservations',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+  try{
+    const first=fixture({throws:true,ledgerPath});
+    assert.equal((await first.messenger.send(agent,message)).body.delivery,'unconfirmed');
+    await appendFile(ledgerPath,'{"id":"interrupted');
+    const restarted=fixture({ledgerPath});
+    assert.equal((await restarted.messenger.send(agent,message)).body.delivery,'unconfirmed');
+    assert.equal(restarted.calls.length,0,'a prior reservation must still prevent a replay');
+    const next={...message,requestId:'after-interruption'};
+    assert.equal((await restarted.messenger.send(agent,next)).body.delivery,'submitted');
+    const final=fixture({ledgerPath});
+    assert.equal((await final.messenger.send(agent,next)).body.delivery,'submitted');
+    assert.equal(final.calls.length,0,'a completed receipt remains deduplicated after recovery');
   }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('upstream rejection is distinct from uncertainty and omits private error context',async()=>{

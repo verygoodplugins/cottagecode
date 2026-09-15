@@ -45,9 +45,20 @@ export function createHubMessenger({
   async function load(){
     if(loaded)return;
     if(ledgerPath){
-      try{for(const line of (await readFile(ledgerPath,'utf8')).split('\n').filter(Boolean)){
-        const entry=JSON.parse(line);if(!entry.id||!entry.hash)throw new Error('Invalid receipt ledger');entries.set(entry.id,entry);
-      }}catch(error){if(error.code!=='ENOENT')throw error;}
+      try{
+        const text=await readFile(ledgerPath,'utf8'),endsWithNewline=text.endsWith('\n'),lines=text.split('\n');
+        const last=endsWithNewline?lines.length-1:lines.length;
+        for(let index=0;index<last;index++){
+          const line=lines[index];if(!line)continue;
+          try{const entry=JSON.parse(line);if(!entry||!entry.id||!entry.hash)throw new Error('Invalid receipt ledger');entries.set(entry.id,entry);}
+          catch(error){
+            if(index!==last-1||endsWithNewline)throw error;
+            const partial=await open(ledgerPath,'r+');
+            try{await partial.truncate(Buffer.byteLength(text.slice(0,text.lastIndexOf('\n')+1)));await partial.sync();}finally{await partial.close();}
+            break;
+          }
+        }
+      }catch(error){if(error.code!=='ENOENT')throw error;}
     }
     loaded=true;
   }
