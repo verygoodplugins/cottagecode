@@ -10,6 +10,7 @@ const pr={number:123,url:'https://github.com/example/cottage/pull/123',state:'op
 let agents=[
   {id:'night-host',taskId:'night-task',name:'Night Owl',town:'HubTown',status:'working',pr},
   {id:'night-sleeper',taskId:'quiet-task',name:'Sleepy',town:'HubTown',status:'idle',originalAsk:'A recorded request remains accessible after bedtime.',pr:{state:'none',source:'browser-fixture',checkedAt:stamp}},
+  {id:'night-done',taskId:'complete-task',name:'Finished Finch',town:'HubTown',status:'done',pr},
   {id:'night-kid',name:'Pip',parent:'night-host',town:'HubTown',status:'working',pr},
 ];
 const server=createFeedServer({snapshot:()=>({agents,source:'browser-fixture',checkedAt:Date.now()})}).listen(0,'127.0.0.1');
@@ -30,9 +31,9 @@ function pass(label){process.stdout.write('PASS '+label+'\n');}
 const samples=()=>evaluate(`(()=>{
   const c=document.getElementById('town'),ctx=c.getContext('2d'),s=window.cottageState();let total=[0,0,0],n=0;
   for(let y=16;y<c.height;y+=24)for(let x=16;x<c.width;x+=24){const d=ctx.getImageData(x,y,1,1).data;for(let i=0;i<3;i++)total[i]+=d[i];n++;}
-  const p=s.plots.find(p=>p.id==='night-host'),q=s.plots.find(p=>p.id==='night-sleeper');
+  const p=s.plots.find(p=>p.id==='night-host'),q=s.plots.find(p=>p.id==='night-sleeper'),r=s.plots.find(p=>p.id==='night-done');
   const pixel=(x,y)=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3);
-  return {mean:total.map(v=>v/n),working:pixel(p.x+13,p.y+43),sleeping:pixel(q.x+13,q.y+43),pr:pixel(p.x-9,p.y+54)};
+  return {mean:total.map(v=>v/n),working:pixel(p.x+13,p.y+43),sleeping:pixel(q.x+13,q.y+43),done:pixel(r.x+47,r.y+22),pr:pixel(p.x-9,p.y+54)};
 })()`);
 try{
   await browser('open',['--url','http://127.0.0.1:'+server.address().port]);
@@ -51,6 +52,7 @@ try{
   assert.ok(luminance(dark.mean)<luminance(daylight.mean)*.7,JSON.stringify({daylight,dark}));
   assert.ok(dark.mean[2]>dark.mean[1]&&dark.mean[1]>dark.mean[0]);
   assert.ok(dark.working[0]>dark.working[2]*1.5&&luminance(dark.working)>luminance(dark.sleeping)*2);
+  assert.deepEqual(dark.done,[121,194,95],'completed residents retain a green status marker after settling');
   assert.deepEqual(dark.pr,daylight.pr,'PR readiness color must survive the palette');
   pass('actual night pixels are darker and blue, working windows warm, PR colors unchanged, families tucked in');
   await click('.cottage-directory > summary');await click('[data-cottage="night-sleeper"]');await click('[data-action="enter"]');

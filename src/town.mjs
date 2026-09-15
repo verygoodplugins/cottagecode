@@ -1624,7 +1624,7 @@ function draw(){
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
     observatory?.drawDispatch(ctx,p,t);
-    if(bedtimeFrames.get(p.agent.id)?.settled&&p.agent.status==='blocked')drawBubble(p.x+47,p.y+22,'blocked');
+    if(bedtimeFrames.get(p.agent.id)?.settled&&['blocked','done'].includes(p.agent.status))drawBubble(p.x+47,p.y+22,p.agent.status);
     for(const kid of p.kids||[])if(['blocked','done'].includes(kid.agent.status)){
       px(kid.x+6,kid.y-3,5,5,C.outline);px(kid.x+7,kid.y-2,3,3,kid.agent.status==='blocked'?C.alert:C.ok);
     }
