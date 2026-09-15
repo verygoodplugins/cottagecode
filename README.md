@@ -9,8 +9,10 @@ CottageCode is a local townmap for agent fleets. Walk up to a cottage, lift its 
 Point it at any URL that returns cottages as JSON, or explore the built-in demo. Projects become towns (`HubTown`, `MemTown`, or `{Stem}Town` from a folder name). Townmap is the atlas view.
 
 **[Visit the public sample village](https://autojack.ai/cottagecode/)** — walk,
-explore, and try a practice reply with fictional residents. No live task data is
-connected. [Build or publish your own demo](docs/PUBLIC_DEMO.md).
+explore, and try a practice reply with fictional residents. It is a static,
+browser-only build: live feeds, task routes, and private local data are
+disabled, and practice replies affect only that sample village in your browser.
+[Build or publish your own demo](docs/PUBLIC_DEMO.md).
 
 Zero npm dependencies. Pixel canvas, native browser modules, and a small Node server.
 
@@ -30,7 +32,14 @@ npm start
 
 Open [http://localhost:8787](http://localhost:8787). For the built-in demo town only: [http://localhost:8787/?demo=1](http://localhost:8787/?demo=1).
 
-Run the checks with `npm test`. With the Browser Hand CLI and Chrome extension available, `npm run test:browser` exercises the playable journey against a temporary local fixture feed.
+Run the Node suite with `npm test`. The optional real-Chrome journeys need the
+Browser Hand CLI and its Chrome extension:
+
+```bash
+npm run test:browser   # walking, rooms, PR desk, activity, input, and recovery
+npm run test:ambience  # gramophone, light, and locally rendered postcards
+npm run test:night     # night palette, bedtime scenery, and visiting a host
+```
 
 ## 🚪 Visit a cottage
 
@@ -59,6 +68,12 @@ AppTown, MemTown, and VaultTown. Interiors soften it; conversations hush it;
 leaving the tab pauses it. Open **Gramophone & light** to set the volume or
 preview morning, day, dusk, and night. Warm windows and fireflies follow the
 same clock. No geographic location is requested. [Soundtrack and credits](docs/MUSIC.md).
+
+Dusk and night use a desaturated, Game Boy Color-inspired blue palette. From
+18:30, residents gather their recorded child agents and chickens before bed;
+nonworking hosts sleep while working hosts remain at the bench. This is visual
+scenery only: it never changes task status or prevents you from visiting or
+talking to a resident.
 
 **Make a postcard** in any cottage's inspector previews a PNG of its seeded
 interior and resident. It starts with no work details. You can choose one
