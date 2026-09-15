@@ -191,7 +191,7 @@ export function normalizePr(value, now = Date.now()) {
     labels, checks, headSha, reviewedHeadSha, source, checkedAt, stale, reason,
     stage, reviewUncertain: uncertain,
   };
-  for (const key of ["repo", "host", "observedReadyHeadSha", "isDraft", "mergedAt", "closedAt"])
+  for (const key of ["repo", "host", "observedReadyHeadSha", "isDraft", "mergedAt", "closedAt", "openedAt"])
     if (p[key] !== undefined) result[key] = p[key];
   if (receipt) result.finalization = { ...receipt };
   return result;

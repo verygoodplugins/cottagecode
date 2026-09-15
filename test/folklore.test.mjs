@@ -94,7 +94,7 @@ test("branchLane weeds only on settled feature branches", () => {
   });
 });
 
-test("parcelReclaim stays none without an outstanding PR", () => {
+test("parcelReclaim stays none without a verified open PR", () => {
   assert.equal(parcelReclaim({ pr: { state: "none" } }, NOW), "none");
   assert.equal(
     parcelReclaim({ pr: { state: "unknown", source: "unavailable" } }, NOW),
@@ -103,6 +103,41 @@ test("parcelReclaim stays none without an outstanding PR", () => {
   assert.equal(
     parcelReclaim({ pr: { state: "merged", number: 1 } }, NOW),
     "none",
+  );
+  assert.equal(
+    parcelReclaim(
+      {
+        pr: {
+          state: "unknown",
+          number: 9,
+          url: "https://github.com/demo/repo/pull/9",
+        },
+        endedAt: NOW - PARCEL_SHRINE_MS,
+      },
+      NOW,
+    ),
+    "none",
+  );
+});
+
+test("parcelReclaim preserves openedAt through normalizePr for age", async () => {
+  const { normalizePr } = await import("../src/pr.mjs");
+  const openedAt = NOW - PARCEL_NEST_MS;
+  const pr = normalizePr(
+    {
+      state: "open",
+      number: 12,
+      url: "https://github.com/demo/repo/pull/12",
+      openedAt,
+      checkedAt: NOW,
+      headSha: "abc",
+    },
+    NOW,
+  );
+  assert.equal(pr.openedAt, openedAt);
+  assert.equal(
+    parcelReclaim({ pr, occupancy: "live", updatedAt: NOW }, NOW),
+    "nest",
   );
 });
 

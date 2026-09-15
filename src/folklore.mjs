@@ -3,7 +3,7 @@
  * Never changes feed status, occupancy, or input/PR access.
  */
 
-import { hasOutstandingPr, normalizePr, prCi, prStage } from "./pr.mjs";
+import { normalizePr, prCi, prStage } from "./pr.mjs";
 
 export const HAUNT_IVY_MS = 6 * 60 * 60 * 1000;
 export const HAUNT_RUINS_MS = 24 * 60 * 60 * 1000;
@@ -59,12 +59,12 @@ export function branchLane(agent = {}) {
 }
 
 /**
- * Outstanding PR parcels only. Missing / unknown identity stays none so the
- * lawn does not celebrate an unverified absence.
+ * Verified open PRs only. Unknown identity stays none so the lawn does not
+ * invent moss for an unverified outstanding pull request.
  */
 export function parcelReclaim(agent, now = Date.now()) {
-  if (!hasOutstandingPr(agent, now)) return "none";
   const pr = normalizePr(agent?.pr, now);
+  if (pr.state !== "open") return "none";
   const age = ageMs(agent, now, pr.openedAt, agent?.pr?.openedAt);
   if (age == null) return "fresh";
   if (age >= PARCEL_SHRINE_MS) return "shrine";

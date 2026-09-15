@@ -302,12 +302,20 @@ const SIM = (() => {
     }
     const kip = agents.find(a => a.name === "Kip");
     if (kip) {
-      kip.status = "blocked";
-      kip.occupancy = "live";
-      kip.updatedAt = stamp - 3 * 60 * 60 * 1000;
-      kip.inputRequest = demoInput(kip, stamp - 3 * 60 * 60 * 1000);
-      kip.attention = kip.inputRequest.prompt;
-      kip.activity = "Waiting for your choice about the scope of this task.";
+      // Pin once so the practice Talk form keeps a stable request id; after a
+      // successful reply (inputRequest cleared), do not force blocked again.
+      if (!kip._folkloreLetter) {
+        kip.status = "blocked";
+        kip.occupancy = "live";
+        kip.updatedAt = stamp - 3 * 60 * 60 * 1000;
+        kip.inputRequest = demoInput(kip, stamp - 3 * 60 * 60 * 1000);
+        kip.attention = kip.inputRequest.prompt;
+        kip.activity = "Waiting for your choice about the scope of this task.";
+        kip._folkloreLetter = true;
+      } else if (kip.inputRequest) {
+        kip.status = "blocked";
+        kip.occupancy = "live";
+      }
     }
     const gus = agents.find(a => a.name === "Gus");
     if (gus) {
