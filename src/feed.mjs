@@ -24,8 +24,8 @@ const POLL_MS = 2000;
 const execFileAsync = promisify(execFile);
 
 function statusOf(session, now, windowMs) {
-  if (!session.lastTs || now - session.lastTs > windowMs) return "offline";
   if (session.inputRequest) return "blocked";
+  if (!session.lastTs || now - session.lastTs > windowMs) return "offline";
   if (session.turnOpen) return "working";
   return "idle";
 }
@@ -90,11 +90,15 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
     for (const child of session.sidechains.values()) {
       index++;
       const stale = !child.lastTs || now - child.lastTs > 5 * 60e3;
+      const childInput = normalizeInputRequest(child.inputRequest);
       const id = `${session.id}:${child.root.slice(0, 8)}`;
       const cottage = {
         ...agent,
         id, name: `${name}-${index}`, parent: session.id, dispatchedBy: name,
-        status: stale ? "done" : child.inputRequest ? "blocked" : child.open ? "working" : "idle",
+        // A child can be quiet for longer than the live window while still
+        // waiting on an explicit AskUserQuestion. Keep that request visible
+        // and letter-worthy until the transcript records its resolution.
+        status: childInput ? "blocked" : stale ? "done" : child.open ? "working" : "idle",
         task: child.originalAsk.replace(/\s+/g, " ").slice(0, 150) || `shed of ${name}`,
         taskId: child.taskId,
         originalAsk: child.originalAsk, originalAskSource: child.originalAskSource,
@@ -102,8 +106,8 @@ export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } 
         taskStartedAt: child.taskStartedAt, sessionStartedAt: child.startTs,
         activityUrl: `/agents/${encodeURIComponent(id)}/activity`,
         todos: normalizeTodos(child.todos),
-        inputRequest: normalizeInputRequest(child.inputRequest),
-        attention: child.inputRequest?.prompt || "",
+        inputRequest: childInput,
+        attention: childInput?.prompt || "",
         activity: child.lastTool || child.lastText || "Working",
         model: shortModel(child.model || session.model),
         result: !child.open ? child.lastText : "",

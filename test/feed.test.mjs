@@ -45,6 +45,18 @@ test("ordinary completed Claude turns are idle while explicit pending questions 
   assert.equal(agent.inputRequest.questions[0].options[0].label, "Local");
 });
 
+test("an unanswered stale sidechain question remains a blocked cottage", () => {
+  const session = parseTranscript(JSON.stringify({
+    type: "assistant", sessionId: "parent-session", isSidechain: true, uuid: "child-root",
+    timestamp: new Date(now - 5 * 60e3 - 1).toISOString(),
+    message: { stop_reason: "tool_use", content: [{ type: "tool_use", id: "child-question", name: "AskUserQuestion",
+      input: { questions: [{ question: "Which child target?" }] } }] },
+  }));
+  const child = toAgents([session], { now }).find(agent => agent.parent === "parent-session");
+  assert.equal(child.inputRequest.id, "child-question");
+  assert.equal(child.status, "blocked");
+});
+
 test("Hub input fields and pending transcript questions stay readable and clear on matched replies", async () => {
   const session = sampleSession();
   session.resolvedInputRequests.add("toolu_resolved");

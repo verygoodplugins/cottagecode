@@ -39,12 +39,18 @@ export function createHubMessenger({
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
     const target=agent.conversationTarget;
     if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
+    const shownInput=normalizeInputRequest(agent.inputRequest);
     let mode='';
     if(['awaiting_input','needs_input'].includes(target.taskStatus))mode='respond';
+    // A transitional Hub row can expose an explicit question before its raw
+    // status flips from running. Do not turn that answer into a free-form
+    // redirect: wait until Hub offers the matching response route.
+    else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
     else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection!==false)mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
     const resolution=agent.inputRequestResolution;
-    if(mode==='respond'&&resolution&&(!agent.inputRequest||!resolution.id||agent.inputRequest.id===resolution.id))return unavailable('This input request was already resolved. Refresh before replying.');
+    const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
+    if(mode==='respond'&&resolution&&(!shownInput||(resolution.id?shownInput.id===resolution.id:!newerThanUnidentifiedResolution)))return unavailable('This input request was already resolved. Refresh before replying.');
     return {available:true,mode,source:'autohub',checkedAt,messageUrl:'/agents/'+encodeURIComponent(agent.id)+'/messages'};
   }
   async function load(){

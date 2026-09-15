@@ -40,6 +40,24 @@ test('resolved input is unavailable even while the raw Hub status still awaits i
   const newer={...resolved,inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[]}};
   assert.equal(messenger.capability(newer).mode,'respond','A distinct current question stays answerable.');
 });
+test('a transcript question proven newer than an unidentified resolution is answerable',()=>{
+  const newer={...agent,
+    inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[],updatedAt:now+1},
+    inputRequestResolution:{id:null,resolvedAt:now,source:'hub:attention'},
+    conversationTarget:{...agent.conversationTarget,taskStatus:'needs_input',transport:'direct'},
+  };
+  assert.equal(fixture().messenger.capability(newer).mode,'respond');
+});
+test('a pending Hub input is never redirected while its raw status is still running',async()=>{
+  const transitional={...agent,
+    inputRequest:{id:'question-b',kind:'question',prompt:'Which target?',detail:'',questions:[]},
+    conversationTarget:{...agent.conversationTarget,taskStatus:'running',transport:'tmux'},
+  };
+  const {messenger,calls}=fixture();
+  assert.equal(messenger.capability(transitional).available,false);
+  assert.equal((await messenger.send(transitional,message)).body.delivery,'not_sent');
+  assert.equal(calls.length,0,'Do not verify or redirect a pending answer through a running task.');
+});
 test('a resolved prior question does not block redirecting guidance to a resumed tmux task',async()=>{
   const resumed={...agent,inputRequestResolution:{id:'question-a',resolvedAt:now,source:'hub:attention'}};
   const {messenger,calls}=fixture();
