@@ -30,7 +30,7 @@ test('families gather once, then children and hens get indoors without changing 
   const settled=routine.update(copy,night,{time:115});
   assert.equal(settled.get('home-0').mode,'working-late');
   assert.equal(settled.get('home-1').mode,'asleep');
-  assert.ok([...settled.values()].every(r=>r.settled&&r.hens.every(h=>h.hidden)&&r.kids.every(k=>k.hidden)));
+  assert.ok([...settled.values()].every(r=>r.settled&&r.hens.every(h=>h.hidden)));
   assert.deepEqual(copy,plots);
 });
 
@@ -122,6 +122,18 @@ test('a settled family supplies bedtime state to its nonworking shed apprentice'
   assert.ok(roomRest(createInterior(child),child,night,shared),'the tucked child uses its family arrival state');
   assert.equal(roomRest(createInterior(child),{...child,status:'working'},night,shared),null,'late child work stays awake');
   assert.equal(routineForAgent(frames,{id:'orphan',parent:'missing'}),null);
+});
+
+test('a working shed apprentice stays awake at their own lit shed after the family settles',()=>{
+  const routine=createBedtimeRoutine();
+  const frames=routine.update(plots,night,{time:0,reduce:true});
+  const parent=frames.get('home-0'),child=parent.kids.find(kid=>kid.id==='child');
+  assert.equal(parent.settled,true);
+  assert.equal(child.hidden,false,'a working apprentice must not be tucked into the parent cottage');
+  assert.equal(child.walking,false);
+  assert.deepEqual({x:child.x,y:child.y},{x:89,y:235},'the resident remains at the shed instead of the parent door');
+  assert.deepEqual(visibleBedtimeKids(parent).map(kid=>kid.id),['child']);
+  assert.equal(roomRest(createInterior(plots[0].kids[0].agent),plots[0].kids[0].agent,night,parent),null,'the shed interior stays awake');
 });
 
 test('sleeping bed keeps room geometry stable and a reachable host in every layout',()=>{

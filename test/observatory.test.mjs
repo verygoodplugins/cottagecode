@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isPracticeDemo,button,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
+import {isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -25,6 +25,12 @@ test('inline activity routes only complete handoffs to the append path',()=>{
     {id:'partial',kind:'handoff',from:'HubTown',text:'Missing destination'},
   ],event=>appended.push(event));
   assert.deepEqual(appended,[{id:'handoff',kind:'handoff',from:'HubTown',to:'AppTown',text:'Interface contract ready'}]);
+});
+
+test('handoff action only exposes an HTTPS handoff target',()=>{
+  assert.match(handoffAction('https://github.com/owner/repo/pull/9'),/data-action="handoff"/);
+  assert.equal(handoffAction('http://localhost:8787/handoff'),'');
+  assert.equal(handoffAction('javascript:alert(1)'), '');
 });
 
 test('an apprentice arrival stays active only during its visible walk',()=>{

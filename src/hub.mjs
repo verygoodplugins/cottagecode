@@ -343,6 +343,9 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
               OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
               OR json_extract(context, '$.pr.number') IS NOT NULL
               OR json_extract(context, '$.pr.url') IS NOT NULL
+              -- inferPr() accepts an explicit open state even before an
+              -- identity is available; hasOutstandingPr() keeps it visible.
+              OR lower(json_extract(context, '$.pr.state')) = 'open'
               OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
               OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
             ))
