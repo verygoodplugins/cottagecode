@@ -54,19 +54,39 @@ export function movePoint(point, dx, dy, canWalk) {
   }
   return {...point,x,y};
 }
+/** Browser-safe counterpart of townName(): aliases must match cottage normalization. */
+const TOWN_STEMS={autohub:'Hub',automem:'Mem','wp-fusion':'Fusion',wpfusion:'Fusion',autoapp:'App',autovault:'Vault'};
+const LEGACY_TOWNS={dev:'HubTown',research:'MemTown',ops:'FusionTown',content:'AppTown'};
+export function normalizeTown(raw){
+  const value=String(raw||'').trim();
+  if(!value)return 'WildTown';
+  const legacy=LEGACY_TOWNS[value.toLowerCase()];
+  if(legacy)return legacy;
+  const withoutTown=value.replace(/town$/i,'');
+  const words=withoutTown.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if(!words.length)return 'WildTown';
+  const key=words.join('-').toLowerCase();
+  if(TOWN_STEMS[key])return TOWN_STEMS[key]+'Town';
+  const stem=words.map(word=>word.charAt(0).toUpperCase()+word.slice(1).toLowerCase()).join('');
+  return stem+'Town';
+}
 export function normalizeRelationships(raw=[], towns=[]) {
-  const valid=new Set(towns), seen=new Set();
+  const valid=new Set((Array.isArray(towns)?towns:[]).map(normalizeTown)), seen=new Set();
   return (Array.isArray(raw)?raw:[]).flatMap(r=>{
-    if(!r||!valid.has(r.from)||!valid.has(r.to)||r.from===r.to) return [];
-    const key=[r.from,r.to].sort().join('|');
+    const from=normalizeTown(r?.from),to=normalizeTown(r?.to);
+    if(!r||!valid.has(from)||!valid.has(to)||from===to) return [];
+    const key=[from,to].sort().join('|');
     if(seen.has(key)) return [];
-    seen.add(key);return [{id:String(r.id||key),from:r.from,to:r.to,label:String(r.label||'Related projects')}];
+    seen.add(key);return [{id:String(r.id||key),from,to,label:String(r.label||'Related projects')}];
   });
 }
 export function normalizedHandoffs(raw=[]) {
   const seen=new Set();
-  return (Array.isArray(raw)?raw:[]).filter(e=>e&&e.id&&e.from&&e.to&&Number.isFinite(Number(e.timestamp)))
-    .filter(e=>!seen.has(e.id)&&seen.add(e.id)).map(e=>({...e,id:String(e.id),timestamp:Number(e.timestamp),text:String(e.text||'Work handed over')}));
+  return (Array.isArray(raw)?raw:[]).flatMap(e=>{
+    const from=normalizeTown(e?.from),to=normalizeTown(e?.to);
+    if(!e||!e.id||!e.from||!e.to||!Number.isFinite(Number(e.timestamp))||seen.has(e.id))return [];
+    seen.add(e.id);return [{...e,id:String(e.id),from,to,timestamp:Number(e.timestamp),text:String(e.text||'Work handed over')}];
+  });
 }
 export function advanceDuck(duck, player, pond, dt, time) {
   const distance=Math.hypot(duck.x-player.x,duck.y-player.y);

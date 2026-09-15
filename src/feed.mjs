@@ -261,11 +261,25 @@ export function createFeed({
       const hubInput = normalizeInputRequest(agent.inputRequest);
       // Keep an observed resolution across the Hub's later field cleanup while
       // a linked transcript may still contain the unanswered tool-use record.
-      const inputRequestResolution = agent.inputRequestResolution || (!hubInput &&
-        previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId ? previous?.inputRequestResolution : null) || null;
+      const sameCachedTask = previous?.taskId === agent.taskId && previous?.sessionId === agent.sessionId;
+      // Hub rows can keep reporting an old awaiting-input status after their
+      // response fields disappear. Keep its observed resolution until a
+      // distinct request proves it was asked later.
+      const inputRequestResolution = agent.inputRequestResolution || (sameCachedTask ? previous?.inputRequestResolution : null) || null;
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
-      if (!local) return { ...agent, inputRequestResolution };
+      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
+      if (!local) {
+        const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+          hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+          hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+        const inputRequest = terminal ? null : hubInput && hubInputAfterResolution ? hubInput : null;
+        return {
+          ...agent, inputRequest, inputRequestResolution,
+          ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+            inputRequestResolution ? { status: agent.status === "blocked" ? "idle" : agent.status, attention: "" } : {}),
+        };
+      }
       const hubHasExplicitTask = Boolean(agent.taskId);
       const sameExplicitTask = hubHasExplicitTask && Boolean(local.taskId) &&
         String(agent.taskId) === String(local.taskId);
@@ -297,11 +311,16 @@ export function createFeed({
       const inputAfterResolution = !inputRequestResolution || (localInput &&
         localInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
         localInput.updatedAt && localInput.updatedAt > inputRequestResolution.resolvedAt);
+      const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+        hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+        hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
       const resolvedLocally = hubInput && [...keys].some(key => inputStates.get(key)?.resolvedInputRequests?.has(hubInput.id));
-      const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(agent.conversationTarget?.taskStatus);
       const localReplacement = inputInTask && localInput &&
         (!hubInput || localInput.id !== hubInput.id) && inputAfterResolution ? localInput : null;
-      const inputRequest = terminal ? null : !resolvedLocally && hubInput ? hubInput : localReplacement;
+      const inputRequest = terminal ? null : !resolvedLocally && hubInput && hubInputAfterResolution ? hubInput : localReplacement;
+      const hasResolvedInput = !inputRequest && (resolvedLocally || inputRequestResolution);
+      const statusAfterResolution = resolvedLocally && local?.status && local.status !== "blocked" ? local.status :
+        agent.status === "blocked" ? "idle" : agent.status;
       nextActivity.set(agent.id, mergeActivityEvents([], events));
       return {
         ...agent,
@@ -315,7 +334,7 @@ export function createFeed({
         inputRequest,
         inputRequestResolution,
         ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
-          resolvedLocally ? { status: local.status, attention: "" } : {}),
+          hasResolvedInput ? { status: statusAfterResolution, attention: "" } : {}),
       };
     });
     for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push({ ...agent });
@@ -409,14 +428,27 @@ export function createFeed({
   };
 }
 
+function isSameOriginRequest(req) {
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return true; // CLI and health probes have no browser origin.
+  const host = String(req.headers.host || "").trim();
+  if (!host) return false;
+  try {
+    const url = new URL(origin);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.host === host;
+  } catch { return false; }
+}
+
 export function createFeedServer(feed, { directory = HERE, messages = createHubMessenger() } = {}) {
   return createServer(async (req, res) => {
-    const cors = { "access-control-allow-origin": "*", "cache-control": "no-store" };
-    const json = (status, body) => { res.writeHead(status, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    const headers = { "cache-control": "no-store" };
+    const json = (status, body) => { res.writeHead(status, { ...headers, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
-      if (req.method === "OPTIONS") { res.writeHead(204, { ...cors, "access-control-allow-methods": "GET, OPTIONS" }); return res.end(); }
       const url = new URL(req.url, "http://localhost");
       const messageRoute = url.pathname.match(/^\/agents\/([^/]+)\/messages$/);
+      const isAgentRoute = url.pathname === "/agents" || /^\/agents\/[^/]+\/activity$/.test(url.pathname);
+      if (isAgentRoute && !isSameOriginRequest(req)) return json(403, { error: "Cross-origin agent access is not allowed" });
+      if (req.method === "OPTIONS") { res.writeHead(204, { ...headers, "access-control-allow-methods": "GET, POST, OPTIONS" }); return res.end(); }
       if (req.method === "POST" && messageRoute) {
         if (!acceptsMessageOrigin(req)) return json(403, { error: "Messages require a local connection from this CottageCode origin.", delivery: "not_sent" });
         if (Number(req.headers["content-length"]) > 65536) { req.resume(); return json(413, { error: "Message too large", delivery: "not_sent" }); }
@@ -454,16 +486,16 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         const path = await realpath(join(root, filename));
         if (!path.startsWith(root + sep)) return json(404, { error: "Not found" });
         const body = await readFile(path);
-        const headers = { ...cors, "content-type": contentType, "content-length": body.length };
+        const assetHeaders = { ...headers, "content-type": contentType, "content-length": body.length };
         if (contentType === "audio/mpeg") {
           // Tracks can change under a stable path, so retain their cached body
           // but revalidate it before media loops select it again.
           const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
-          headers["cache-control"] = "public, max-age=0, must-revalidate";
-          headers["accept-ranges"] = "bytes";
-          headers.etag = etag;
+          assetHeaders["cache-control"] = "public, max-age=0, must-revalidate";
+          assetHeaders["accept-ranges"] = "bytes";
+          assetHeaders.etag = etag;
           if (req.headers["if-none-match"]?.split(",").some(value => [etag, "*"].includes(value.trim()))) {
-            const notModified = { ...headers };
+            const notModified = { ...assetHeaders };
             delete notModified["content-length"];
             res.writeHead(304, notModified);
             return res.end();
@@ -478,13 +510,13 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
             const start = range?.[1] ? Number(range[1]) : Math.max(0, body.length - Number(range?.[2]));
             const end = range?.[1] && range[2] ? Math.min(body.length - 1, Number(range[2])) : body.length - 1;
             if (!range || (!range[1] && !range[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= body.length || start > end) {
-              res.writeHead(416, { ...headers, "content-length": 0, "content-range": `bytes */${body.length}` }); return res.end();
+              res.writeHead(416, { ...assetHeaders, "content-length": 0, "content-range": `bytes */${body.length}` }); return res.end();
             }
-            res.writeHead(206, { ...headers, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}` });
+            res.writeHead(206, { ...assetHeaders, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}` });
             return res.end(body.subarray(start, end + 1));
           }
         }
-        res.writeHead(200, headers);
+        res.writeHead(200, assetHeaders);
         return res.end(req.method === "HEAD" ? undefined : body);
       }
       return json(404, { error: "Not found" });

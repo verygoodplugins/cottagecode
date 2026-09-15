@@ -120,6 +120,27 @@ test("explicit input clears tombstone the matching request and never clear a new
   }
 });
 
+test("idless transcript input requests derive stable identities and respect resolution", () => {
+  const session = blankSession();
+  const at = offset => new Date(start + offset).toISOString();
+  applyLine(session, { timestamp: at(1), inputRequest: { prompt: "Choose an object target" } });
+  const objectId = session.inputRequest.id;
+  assert.match(objectId, /^input-/);
+  applyLine(session, { timestamp: at(2), inputRequest: { resolved: true } });
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { timestamp: at(3), inputRequest: { prompt: "Choose an object target" } });
+  assert.equal(session.inputRequest, null);
+
+  applyLine(session, { timestamp: at(4), inputRequest: "Choose a string target" });
+  const stringId = session.inputRequest.id;
+  assert.match(stringId, /^input-/);
+  assert.notEqual(stringId, objectId);
+  applyLine(session, { timestamp: at(5), inputRequest: { resolved: true } });
+  assert.equal(session.inputRequest, null);
+  applyLine(session, { timestamp: at(6), inputRequest: "Choose a string target" });
+  assert.equal(session.inputRequest, null);
+});
+
 test("questions remain isolated from child work and ordinary tool calls", () => {
   const session = blankSession();
   const ask = { type: "tool_use", id: "child-question", name: "AskUserQuestion", input: { questions: [{ question: "Which child target?" }] } };

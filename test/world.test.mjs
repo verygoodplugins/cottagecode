@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTownLayout,movePoint,normalizeRelationships,advanceDuck} from '../src/world.mjs';
+import {createTownLayout,movePoint,normalizeRelationships,normalizedHandoffs,advanceDuck} from '../src/world.mjs';
 test('plots remain fixed through reorder, departure, overflow and new towns',()=>{
   const layout=createTownLayout({columns:2,rows:1});
   const a={id:'a',town:'HubTown'},b={id:'b',town:'AppTown'};
@@ -17,6 +17,17 @@ test('movement cannot tunnel through furniture',()=>{
 test('only explicit valid project relationships are accepted',()=>{
   assert.deepEqual(normalizeRelationships([],['HubTown','AppTown']),[]);
   assert.equal(normalizeRelationships([{from:'HubTown',to:'AppTown'},{from:'AppTown',to:'HubTown'},{from:'Other',to:'HubTown'}],['HubTown','AppTown']).length,1);
+});
+test('custom feed town stems share cottage aliases for paths and handoffs',()=>{
+  const towns=['HubTown','AppTown','MemTown','VaultTown'];
+  assert.deepEqual(normalizeRelationships([
+    {from:'autohub',to:'autoapp',label:'App route'},
+    {from:'AppTown',to:'Hub',label:'duplicate route'},
+    {from:'unknown',to:'hub'},
+  ],towns),[{id:'AppTown|HubTown',from:'HubTown',to:'AppTown',label:'App route'}]);
+  assert.deepEqual(normalizedHandoffs([{id:'h1',from:'mem',to:'autovault',timestamp:10,text:'Archive'}]),[
+    {id:'h1',from:'MemTown',to:'VaultTown',timestamp:10,text:'Archive'},
+  ]);
 });
 test('duck flees toward water, splashes, swims, and returns',()=>{
   const duck={x:15,y:55,mode:'wandering'},pond={x:0,y:0,w:60,h:30};
