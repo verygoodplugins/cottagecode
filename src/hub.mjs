@@ -277,6 +277,30 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
     const columns = new Set(db.prepare("PRAGMA table_info(agent_runs)").all().map(column => column.name));
     const optional = ["record_kind", "request_spec", "result"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
     const cap = Math.min(Math.max(limit, 1), 500);
+    const retainedPr = `(
+      context LIKE '%"pullRequest"%'
+      OR (json_valid(context) AND (
+        lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
+        OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
+        -- Keep completed tasks whose durable context identifies a PR. These
+        -- forms are intentionally aligned with inferPr()/toCottage().
+        OR json_extract(context, '$.finalization.pullRequestNumber') IS NOT NULL
+        OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
+        OR json_extract(context, '$.pr.number') IS NOT NULL
+        OR json_extract(context, '$.pr.url') IS NOT NULL
+        -- inferPr() accepts an explicit open state even before an
+        -- identity is available; hasOutstandingPr() keeps it visible.
+        OR lower(json_extract(context, '$.pr.state')) = 'open'
+        OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
+        OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
+      ))
+      ${columns.has("result") ? `OR CASE WHEN json_valid(result) THEN
+        json_extract(result, '$.pullRequest') IS NOT NULL
+        OR json_extract(result, '$.finalization.pullRequestNumber') IS NOT NULL
+        OR json_extract(result, '$.finalization.pullRequestUrl') IS NOT NULL
+      ELSE 0 END` : ""}
+    )`;
+    const activeStates = "status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')";
     const rows = db
       .prepare(
         `SELECT
@@ -287,33 +311,16 @@ export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH |
            ${optional}
          FROM agent_runs
          WHERE updated_at > datetime('now', '-24 hours')
-            OR status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')
-            OR context LIKE '%"pullRequest"%'
-            OR (json_valid(context) AND (
-              lower(json_extract(context, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request')
-              OR json_extract(context, '$.githubAutoJackRequest.targetUrl') LIKE '%/pull/%'
-              -- Keep completed tasks whose durable context identifies a PR. These
-              -- forms are intentionally aligned with inferPr()/toCottage().
-              OR json_extract(context, '$.finalization.pullRequestNumber') IS NOT NULL
-              OR json_extract(context, '$.finalization.pullRequestUrl') IS NOT NULL
-              OR json_extract(context, '$.pr.number') IS NOT NULL
-              OR json_extract(context, '$.pr.url') IS NOT NULL
-              -- inferPr() accepts an explicit open state even before an
-              -- identity is available; hasOutstandingPr() keeps it visible.
-              OR lower(json_extract(context, '$.pr.state')) = 'open'
-              OR json_extract(context, '$.pr.finalization.pullRequestNumber') IS NOT NULL
-              OR json_extract(context, '$.pr.finalization.pullRequestUrl') IS NOT NULL
-            ))
+            OR ${activeStates}
+            OR ${retainedPr}
             OR context LIKE '%"babysitHandoff"%'
-            ${columns.has("result") ? `OR CASE WHEN json_valid(result) THEN
-              json_extract(result, '$.pullRequest') IS NOT NULL
-              OR json_extract(result, '$.finalization.pullRequestNumber') IS NOT NULL
-              OR json_extract(result, '$.finalization.pullRequestUrl') IS NOT NULL
-            ELSE 0 END` : ""}
          ORDER BY
            CASE
-             WHEN status IN ('running', 'awaiting_input', 'needs_input', 'pending', 'queued', 'awaiting_review') THEN 0
-             ELSE 1
+             WHEN ${activeStates} THEN 0
+             -- A current default-sized view must not evict an old cottage
+             -- which still carries a PR the user needs to inspect.
+             WHEN ${retainedPr} THEN 1
+             ELSE 2
            END,
            updated_at DESC
          LIMIT ?`

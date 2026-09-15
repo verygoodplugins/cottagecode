@@ -336,6 +336,35 @@ test("Hub retains old finalization-only result receipts", async t => {
   assert.equal(result.agents.find(agent => agent.id === "receipt-url")?.pr.url, "https://github.com/owner/repo/pull/74");
 });
 
+test("Hub prioritizes historic PR evidence above the default completed-task cap", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "cottage-hub-pr-cap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "hub.db");
+  const db = new DatabaseSync(path);
+  db.exec(`CREATE TABLE agent_runs (
+    id TEXT, agent TEXT, status TEXT, task TEXT, user TEXT, platform TEXT, model TEXT, parent_id TEXT, session_id TEXT,
+    context TEXT, queued_at TEXT, started_at TEXT, completed_at TEXT, updated_at TEXT, archived INTEGER,
+    input_tokens INTEGER, output_tokens INTEGER, cache_write_tokens INTEGER, cache_read_tokens INTEGER,
+    total_cost REAL, error TEXT, result_summary TEXT, attention_type TEXT, attention_message TEXT
+  )`);
+  db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    "historic-pr", "Resident", "completed", "Keep this receipt", JSON.stringify({
+      repo: "owner/repo", finalization: { status: "ready", pullRequestNumber: 91 },
+    }), "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+  );
+  const fresh = db.prepare("INSERT INTO agent_runs(id, agent, status, task, context, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))");
+  for (let index = 0; index < 81; index++) {
+    fresh.run(`completed-${index}`, "Resident", "completed", "Recent task", "{}");
+  }
+  db.close();
+
+  const result = readHubAgents({ dbPath: path });
+  assert.equal(result.ok, true);
+  assert.equal(result.agents.length, 80, "the regular result cap stays bounded");
+  assert.equal(result.agents.find(agent => agent.id === "historic-pr")?.pr.number, 91,
+    "a completed row retained only for structured PR evidence wins a place in the default view");
+});
+
 test("Hub retains old context-only PR receipts", async t => {
   const directory = await mkdtemp(join(tmpdir(), "cottage-hub-context-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
