@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
+import {activityJournalPresentation,applyActivityPage,button,handoffAction,appendInlineHandoffs} from '../src/observatory.mjs';
 
 test('history jump actions escape untrusted cottage identifiers in button markup',()=>{
   const html=button('jump:agent" onfocus="alert(1)','Open cottage');
@@ -22,4 +22,18 @@ test('handoff action only exposes an HTTPS handoff target',()=>{
   assert.match(handoffAction('https://github.com/owner/repo/pull/9'),/data-action="handoff"/);
   assert.equal(handoffAction('http://localhost:8787/handoff'),'');
   assert.equal(handoffAction('javascript:alert(1)'), '');
+});
+
+
+test('unavailable activity is retained and presented apart from an empty live journal',()=>{
+  const cache={events:[],source:'none',cursor:null,hasMore:false,stale:false,error:'',unavailable:false};
+  applyActivityPage(cache,{events:[],source:'hub timeline',unavailable:true});
+  assert.equal(cache.unavailable,true);
+  assert.deepEqual(activityJournalPresentation(cache),{
+    state:'unavailable',text:'hub timeline · activity unavailable from this source',
+  });
+
+  applyActivityPage(cache,{events:[],source:'hub timeline',unavailable:false});
+  assert.equal(cache.unavailable,false);
+  assert.deepEqual(activityJournalPresentation(cache),{state:'live',text:'hub timeline · live activity'});
 });
