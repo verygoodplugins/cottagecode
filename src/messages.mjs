@@ -37,14 +37,14 @@ export function createHubMessenger({
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
     if(stale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
-    const resolution=agent.inputRequestResolution;
-    if(resolution&&(!agent.inputRequest||!resolution.id||agent.inputRequest.id===resolution.id))return unavailable('This input request was already resolved. Refresh before replying.');
     const target=agent.conversationTarget;
     if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
     let mode='';
     if(['awaiting_input','needs_input'].includes(target.taskStatus))mode='respond';
     else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection!==false)mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
+    const resolution=agent.inputRequestResolution;
+    if(mode==='respond'&&resolution&&(!agent.inputRequest||!resolution.id||agent.inputRequest.id===resolution.id))return unavailable('This input request was already resolved. Refresh before replying.');
     return {available:true,mode,source:'autohub',checkedAt,messageUrl:'/agents/'+encodeURIComponent(agent.id)+'/messages'};
   }
   async function load(){

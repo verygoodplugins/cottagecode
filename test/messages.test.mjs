@@ -40,6 +40,13 @@ test('resolved input is unavailable even while the raw Hub status still awaits i
   const newer={...resolved,inputRequest:{id:'question-b',kind:'question',prompt:'What should I do next?',detail:'',questions:[]}};
   assert.equal(messenger.capability(newer).mode,'respond','A distinct current question stays answerable.');
 });
+test('a resolved prior question does not block redirecting guidance to a resumed tmux task',async()=>{
+  const resumed={...agent,inputRequestResolution:{id:'question-a',resolvedAt:now,source:'hub:attention'}};
+  const {messenger,calls}=fixture();
+  assert.equal(messenger.capability(resumed).mode,'redirect');
+  assert.equal((await messenger.send(resumed,message)).body.delivery,'submitted');
+  assert.equal(calls[1].url,'http://hub.test/v1/tasks/task-1/redirect');
+});
 test('explicit messages verify current task then submit exact text, with concurrent duplicate protection',async()=>{
   const {messenger,calls}=fixture();
   const [one,two]=await Promise.all([messenger.send(agent,message),messenger.send(agent,message)]);
