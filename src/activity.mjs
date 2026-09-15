@@ -208,7 +208,11 @@ export function createHubTimelineReader({
       if (!options.after && entry.hasOlder) result.hasMore = true;
       let todos = latestTodos(entry.events, { source: entry.source });
       if (todos && entry.stale) todos = { ...todos, stale: true };
-      if (checkpointTodos && (!todos || !todos.updatedAt || !checkpointTodos.updatedAt || checkpointTodos.updatedAt >= todos.updatedAt)) todos = checkpointTodos;
+      const checkpointWins = checkpointTodos && (!todos ||
+        (checkpointTodos.updatedAt !== null
+          ? todos.updatedAt === null || checkpointTodos.updatedAt >= todos.updatedAt
+          : todos.updatedAt === null));
+      if (checkpointWins) todos = checkpointTodos;
       return { ...result, todos, checkedAt: entry.checkedAt, ...(entry.stale ? { stale: true, error: entry.error } : {}) };
     },
   };
