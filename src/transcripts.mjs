@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { normalizeActivityEvent, timestampMs } from "./activity.mjs";
 import { normalizeTodos, todosFromTool } from "./todos.mjs";
 import { normalizeInputRequest, inputRequestFromTool } from "./input-request.mjs";
+import { taskText } from "./task-text.mjs";
 
 // Existing estimated prices; these are not a billing source of truth.
 const PRICE = {
@@ -51,7 +52,7 @@ export function genuineRequest(line) {
   if (blocks.some(block => block?.type === "tool_result")) return "";
   const text = withoutLeadingSystemReminders(textOf(blocks));
   if (!text || /^\s*(?:<local-command-(?:caveat|stdout)|<command-name>|<system-reminder>|\[Request interrupted|This session is being continued from a previous conversation)/i.test(text)) return "";
-  return text;
+  return taskText(text);
 }
 
 export function toolLabel(block) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -31,6 +31,16 @@ test('handoff action only exposes an HTTPS handoff target',()=>{
   assert.match(handoffAction('https://github.com/owner/repo/pull/9'),/data-action="handoff"/);
   assert.equal(handoffAction('http://localhost:8787/handoff'),'');
   assert.equal(handoffAction('javascript:alert(1)'), '');
+});
+
+test('PR snapshot shows GitHub labels, CI state, freshness, and the GitHub link',()=>{
+  const html=prSnapshotHtml({number:42,url:'https://github.com/example/cottage/pull/42',title:'Refresh the sidebar',state:'open',source:'github',checkedAt:Date.parse('2026-09-14T12:00:00Z'),headSha:'abcdef123456',labels:['feature','babysit:waiting-ci'],statusCheckRollup:[{name:'smoke',status:'COMPLETED',conclusion:'SUCCESS',detailsUrl:'https://github.com/example/cottage/actions/runs/42'}]});
+  assert.match(html,/View on GitHub/);
+  assert.match(html,/feature/);
+  assert.match(html,/babysit:waiting-ci/);
+  assert.match(html,/Passing · 1 check/);
+  assert.match(html,/github/);
+  assert.match(html,/abcdef123456/);
 });
 
 test('unavailable activity is retained and presented apart from an empty live journal',()=>{

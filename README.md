@@ -174,7 +174,7 @@ Feed failures retain the last snapshot and mark it stale. Reconnecting restores 
 | Merged / Closed | Completed merge or closed without merging |
 | Unknown | Missing, conflicting, or unverified state |
 
-PR filters count shared pull requests once. The review desk shows the source, verification time, head, labels, and any uncertainty. Its lamp and symbol follow the same evidence as the outdoor parcel. Stale data or a known head change cannot declare a PR ready.
+PR filters count shared pull requests once. The inspector and review desk show the GitHub link, labels, CI rollup, source, verification time, head, and any uncertainty. Its lamp and symbol follow the same evidence as the outdoor parcel. Stale data or a known head change cannot declare a PR ready.
 
 Settled cottages stay hidden until **settled (N)** is enabled. Once observed, cottages with outstanding PRs stay on the map after execution finishes.
 

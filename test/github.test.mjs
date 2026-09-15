@@ -103,6 +103,18 @@ test("only explicit identity or repository/non-default branch can trigger lookup
   assert.equal(githubTarget({ repo: "example/repo", branch: "fix/thing" }).kind, "branch");
 });
 
+test("GitHub PR queries request the status check rollup", async () => {
+  let command;
+  const query = createGithubQuery({ run: async (file, args) => {
+    command = { file, args };
+    return { stdout: JSON.stringify(rawPr) };
+  } });
+  await query(githubTarget(agent));
+  assert.equal(command.file, "gh");
+  assert.equal(command.args[0], "pr");
+  assert.match(command.args.at(-1), /statusCheckRollup/);
+});
+
 test("branch discovery checks the actual default branch and accepts only an unambiguous exact match", async () => {
   const commands = [];
   let rows = [{ ...rawPr, headRefName: "fix/thing", isCrossRepository: false }];

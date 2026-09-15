@@ -1,5 +1,5 @@
 import {createInterior,isWalkable,renderInterior,renderResident} from './interiors.mjs';
-import {normalizePr,prStage,prCounts} from './pr.mjs';
+import {normalizePr,prCi,prStage,prCounts} from './pr.mjs';
 import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './world.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
@@ -62,6 +62,14 @@ export function activityCacheFor(cache,a={}){
   return {identity,events:[],source:'none',cursor:null,hasMore:false,stale:false,unavailable:false};
 }
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
+export function prSnapshotHtml(value){
+  const pr=normalizePr(value),stage=pr.stage,s=STAGES[stage],ci=prCi(pr);
+  const labels=pr.labels.length?'<ul class="pr-labels" aria-label="GitHub labels">'+pr.labels.map(label=>'<li>'+esc(label)+'</li>').join('')+'</ul>':'<span class="pr-muted">No GitHub labels supplied.</span>';
+  const ciText=ci.state==='unavailable'?'Unavailable':ci.state==='passing'?'Passing · '+ci.passed+' check'+(ci.passed===1?'':'s'):ci.state==='failing'?'Failing · '+ci.failed+' failed': 'Running · '+ci.pending+' pending';
+  const ciLink=ci.url?' · '+link(ci.url,'Open CI') : '';
+  const open=pr.url?'<a class="pr-open" href="'+esc(safeUrl(pr.url))+'" target="_blank" rel="noreferrer">View on GitHub ↗</a>':'<span class="pr-muted">GitHub link unavailable</span>';
+  return '<section class="pr-snapshot" style="--pr-color:'+s.color+'" aria-label="Pull request summary"><div class="pr-snapshot-head"><span class="pr-stage">'+esc(s.symbol+' '+s.label)+'</span>'+open+'</div>'+(pr.number?'<strong>PR #'+esc(pr.number)+'</strong>':'')+(pr.title?'<p class="pr-title">'+esc(pr.title)+'</p>':'')+'<dl><dt>Review</dt><dd>'+esc(pr.reviewState||'Unknown')+'</dd><dt>CI</dt><dd>'+esc(ciText)+ciLink+'</dd><dt>Evidence</dt><dd>'+esc(pr.source||'Unavailable')+' · '+esc(clock(pr.checkedAt))+(pr.stale?' · stale':'')+'</dd><dt>Head</dt><dd class="mono">'+esc(pr.headSha?.slice(0,12)||'Unavailable')+'</dd></dl><div class="pr-label-wrap"><span>Labels</span>'+labels+'</div>'+(pr.reason?'<p class="hint review-reason">'+esc(pr.reason)+'</p>':'')+'</section>';
+}
 function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w)),p.y-Math.max(r.y,Math.min(p.y,r.y+r.h)));}
 
 export function isPracticeDemo(agent, builtInDemo = false){
@@ -251,6 +259,8 @@ export function createObservatory(api){
     const key=e.key.length===1?e.key.toLowerCase():e.key;
     if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d'].includes(key)){
       if(mode==='board'||mode==='scrapbook')setMode('town');
+      // Leaving the bench is immediate even if a background tab delays its next frame.
+      followId=null;
       keys.add(key);e.preventDefault();
     }
     if((key==='e'||key==='Enter')&&!e.repeat){e.preventDefault();interact();}
@@ -421,7 +431,7 @@ export function createObservatory(api){
       const presentation=activityJournalPresentation(cache);
       content='<div class="section-head"><h3>At the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint activity-'+esc(presentation.state)+'">'+esc(presentation.text)+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+(cache.unavailable?'<p class="hint">This source has not made a task journal available.</p>':'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>');
     }else if(tab==='review'){
-      content='<h3>Review desk</h3><div class="pr-summary" style="--pr-color:'+s.color+'"><strong>'+s.symbol+' '+s.label+'</strong><p>'+esc(pr.title||'')+'</p>'+link(pr.url,pr.number?'Open PR #'+pr.number:'Open PR')+'</div><dl><dt>Evidence</dt><dd>'+esc(pr.source||'Unavailable')+'</dd><dt>Checked</dt><dd>'+esc(clock(pr.checkedAt))+(pr.stale?' · stale':'')+'</dd><dt>Head</dt><dd class="mono">'+esc(pr.headSha?.slice(0,12)||'Unavailable')+'</dd><dt>Review</dt><dd>'+esc(pr.labels?.filter(l=>String(l).startsWith('babysit:')).join(', ')||pr.reviewState||'Not supplied')+'</dd></dl>'+(pr.reason?'<p class="hint review-reason">'+esc(pr.reason)+'</p>':'')+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
+      content='<h3>Review desk</h3>'+prSnapshotHtml(pr)+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
     }else if(tab==='artifacts'){
       const arts=[...(Array.isArray(a.artifacts)?a.artifacts:[]),...cache.events.filter(e=>e.url).map(e=>({url:e.url,title:e.text}))];
       if(pr.url)arts.unshift({url:pr.url,title:'PR #'+pr.number+' · '+(pr.title||s.label)});
@@ -429,7 +439,7 @@ export function createObservatory(api){
       content='<h3>On the shelves</h3>'+(a.result?'<div class="request-paper">'+esc(a.result)+'</div>':'')+(rows.length?'<ul class="artifact-list">'+rows.map(e=>'<li>'+link(e.url,e.title||'Artifact')+'</li>').join('')+'</ul>':'<p class="hint">Artifacts appear here when the feed supplies them.</p>');
       if(stage==='merged')content='<h3>A keepsake from this work</h3><p class="hint">Merged · '+esc(clock(pr.mergedAt))+'</p>'+content;
     }else{
-      content='<h3>Today’s work</h3><p>'+esc(a.task&&a.task!=='-'?a.task:'Task description unavailable')+'</p><div class="current-activity">'+esc(latestLine(a)||'No current activity supplied.')+'</div><dl><dt>Task started</dt><dd>'+esc(clock(a.taskStartedAt))+'</dd><dt>Elapsed</dt><dd>'+esc(elapsed(a))+'</dd><dt>Session started</dt><dd>'+esc(clock(a.sessionStartedAt))+'</dd><dt>Last signal</dt><dd>'+esc(clock(a.updatedAt))+'</dd><dt>Model</dt><dd>'+esc(a.model||'Unavailable')+'</dd><dt>Branch</dt><dd>'+esc(a.branch||'Unavailable')+'</dd></dl><h3>Pinned request</h3><p class="request-preview">'+esc(a.originalAsk?a.originalAsk.slice(0,230)+(a.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
+      content='<h3>Today’s work</h3><p>'+esc(a.task&&a.task!=='-'?a.task:'Task description unavailable')+'</p><div class="current-activity">'+esc(latestLine(a)||'No current activity supplied.')+'</div><h3>Pull request</h3>'+prSnapshotHtml(pr)+'<dl><dt>Task started</dt><dd>'+esc(clock(a.taskStartedAt))+'</dd><dt>Elapsed</dt><dd>'+esc(elapsed(a))+'</dd><dt>Session started</dt><dd>'+esc(clock(a.sessionStartedAt))+'</dd><dt>Last signal</dt><dd>'+esc(clock(a.updatedAt))+'</dd><dt>Model</dt><dd>'+esc(a.model||'Unavailable')+'</dd><dt>Branch</dt><dd>'+esc(a.branch||'Unavailable')+'</dd></dl><h3>Pinned request</h3><p class="request-preview">'+esc(a.originalAsk?a.originalAsk.slice(0,230)+(a.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
     }
     const nav=[['overview','Clock'],['request','Request'],['journal','Journal'],['todos','To-do'],['review','PR desk'],['artifacts','Shelves']].map(([key,label])=>button('tab:'+key,label,'aria-pressed="'+(tab===key)+'"')).join('');
     const header='<div class="inspector-heading"><span class="eyebrow">'+esc(a.town)+' · '+(mode==='room'?'INSIDE':'COTTAGE')+'</span><h2>'+esc(a.name)+'</h2></div><div class="inspector-chips"><span class="status-chip">'+esc(a.status)+'</span><span class="pr-chip" style="--pr-color:'+s.color+'">'+s.symbol+' '+s.label+'</span></div>';

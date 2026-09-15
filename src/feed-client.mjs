@@ -1,4 +1,5 @@
 import {normalizePr,hasOutstandingPr} from './pr.mjs';
+import {taskText} from './task-text.mjs';
 const statuses=new Set(['working','idle','blocked','done','offline']);
 export function feedEnvelope(data){
   if(Array.isArray(data))return {agents:data,source:'',relationships:[],handoffs:[]};
@@ -13,8 +14,8 @@ export function normalizeCottage(a,i,{town,model,occupancy,now=Date.now()}){
   const status=statuses.has(a.status)?a.status:'idle';
   const pr=normalizePr(a.pr,now);
   const result={...a,id:String(a.id??'n'+i),name:String(a.name??a.id??'agent-'+i),town:town(a.town||a.role),
-    role:town(a.town||a.role),status,parent:a.parent??null,task:String(a.task??'-'),
-    originalAsk:typeof a.originalAsk==='string'?a.originalAsk:'',
+    role:town(a.town||a.role),status,parent:a.parent??null,task:taskText(a.task)||'-',
+    originalAsk:taskText(a.originalAsk),
     taskId:a.taskId?String(a.taskId):null,
     taskStartedAt:validTime(a.taskStartedAt),sessionStartedAt:validTime(a.sessionStartedAt),
     startedAt:validTime(a.startedAt),endedAt:validTime(a.endedAt),updatedAt:validTime(a.updatedAt),terminal:!!a.terminal,

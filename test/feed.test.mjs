@@ -330,6 +330,18 @@ test("Hub logical tasks expose genuine original requests and durable PR receipts
   assert.equal(context.finalization, undefined, "mapping must not mutate the supplied context");
 });
 
+test("Hub task notifications expose their summary instead of raw transport markup", () => {
+  const notification = '<task-notification><task-id>buU0py927</task-id><summary>Monitor event: “ci:preflight progress for lane-liveness docs PR”</summary><event>STEP: [ci:preflight] npm run test:agent-kernel:ci</event></task-notification>';
+  const agent = toCottage({
+    id: "notification", record_kind: "logical_task", status: "running", task: notification,
+    context: { customerRequest: notification },
+  }, now);
+  assert.equal(agent.task, 'Monitor event: “ci:preflight progress for lane-liveness docs PR”');
+  assert.equal(agent.originalAsk, 'Monitor event: “ci:preflight progress for lane-liveness docs PR”');
+  assert.ok(!agent.task.includes("<task-notification>"));
+  assert.ok(!agent.originalAsk.includes("<task-id>"));
+});
+
 test("a dated context todo snapshot stays ahead of an undated checkpoint", () => {
   const agent = toCottage({
     id: "hub-run", record_kind: "logical_task", status: "running", task: "Current task",

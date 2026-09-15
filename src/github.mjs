@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { normalizePr, parsePrUrl, prKey } from "./pr.mjs";
 
 const execFileAsync = promisify(execFile);
-const FIELDS = "number,url,title,state,labels,headRefOid,headRefName,isCrossRepository,isDraft,mergedAt,closedAt";
+const FIELDS = "number,url,title,state,labels,headRefOid,headRefName,isCrossRepository,isDraft,mergedAt,closedAt,statusCheckRollup";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 const DEFAULT_NAMES = new Set(["main", "master", "trunk"]);
 
