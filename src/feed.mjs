@@ -466,7 +466,10 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
           }
           // A single byte range supports native media seeking and loop overlap.
           // HEAD describes the full resource and ignores Range per HTTP semantics.
-          if (req.method === "GET" && req.headers.range) {
+          // A stale If-Range validator tells a media client to discard its
+          // partial cache and fetch the complete replacement instead.
+          const rangeAccepted = !req.headers["if-range"] || req.headers["if-range"].trim() === etag;
+          if (req.method === "GET" && req.headers.range && rangeAccepted) {
             const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
             const start = range?.[1] ? Number(range[1]) : Math.max(0, body.length - Number(range?.[2]));
             const end = range?.[1] && range[2] ? Math.min(body.length - 1, Number(range[2])) : body.length - 1;
