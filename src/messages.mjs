@@ -39,12 +39,18 @@ export function createHubMessenger({
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
     const target=agent.conversationTarget;
     if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
+    const shownInput=normalizeInputRequest(agent.inputRequest);
     let mode='';
     if(['awaiting_input','needs_input'].includes(target.taskStatus))mode='respond';
-    else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection!==false)mode='redirect';
+    // A transitional Hub row can expose an explicit question before its raw
+    // status flips from running. Do not turn that answer into a free-form
+    // redirect: wait until Hub offers the matching response route.
+    else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
+    else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection===true)mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
     const resolution=agent.inputRequestResolution;
-    if(mode==='respond'&&resolution&&(!agent.inputRequest||!resolution.id||agent.inputRequest.id===resolution.id))return unavailable('This input request was already resolved. Refresh before replying.');
+    const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
+    if(mode==='respond'&&resolution&&(!shownInput||(resolution.id?shownInput.id===resolution.id:!newerThanUnidentifiedResolution)))return unavailable('This input request was already resolved. Refresh before replying.');
     return {available:true,mode,source:'autohub',checkedAt,messageUrl:'/agents/'+encodeURIComponent(agent.id)+'/messages'};
   }
   async function load(){
@@ -82,14 +88,18 @@ export function createHubMessenger({
     const message=typeof payload?.message==='string'?payload.message.trim():'';
     if(!message||message.length>MAX_MESSAGE_LENGTH)return rejected(400,'Write a message of 1–'+MAX_MESSAGE_LENGTH+' characters.');
     if(typeof payload.requestId!=='string'||!/^[a-zA-Z0-9_-]{8,100}$/.test(payload.requestId))return rejected(400,'A unique message request ID is required.');
-    if(!agent||payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');
-    const hash=createHash('sha256').update(JSON.stringify([agent.id,agent.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
+    if(!agent)return rejected(409,'The task changed. Reopen its cottage before sending.');
+    // A retry can arrive after this cottage advances to a new task. Its receipt
+    // belongs to the task identity in the original payload, so inspect it before
+    // treating the current cottage as changed.
+    const hash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
     if(previous){
       if(previous.hash!==hash)return rejected(409,'That message request ID belongs to a different message.');
       return previous.response||unknown();
     }
+    if(payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');
     const supported=capability(agent,meta);if(!supported.available)return rejected(409,supported.reason);
     const shownInput=normalizeInputRequest(agent.inputRequest);
     if(supported.mode==='respond'&&(shownInput?.id||null)!==(payload.inputRequestId||null))return rejected(409,'The input request changed. Reopen the current question before replying.');

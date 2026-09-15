@@ -7,6 +7,7 @@ import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoi
 import { lettersOf } from "./occupancy.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
+import { residentTargets } from "./interaction.mjs";
 
 
 /* =======================================================================
@@ -1915,10 +1916,13 @@ const refresh=createLatestRefresh(async ()=>{
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
-  getResidents:()=>[...actors].filter(([id,a])=>!a.indoors&&agents.some(agent=>agent.id===id)).map(([id,a])=>({id,x:a.x+5,y:a.y+14})).concat([...bedtimeFrames.values()].flatMap(r=>r.kids.filter(k=>!k.hidden).map(k=>{
+  getResidents:()=>residentTargets(actors,plots).concat([...bedtimeFrames].flatMap(([parentId,r])=>{
+    if(!plots.some(plot=>plot.agent.id===parentId))return [];
+    return r.kids.filter(k=>!k.hidden).map(k=>{
     const arrival=observatory?.apprenticeArrival(k.id,t);
     return arrival||(observatory?.isApprenticeArriving(k.id,t)?null:{id:k.id,x:k.x,y:k.y});
-  }).filter(Boolean))),
+    }).filter(Boolean);
+  })),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh
