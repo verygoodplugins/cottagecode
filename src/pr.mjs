@@ -59,9 +59,10 @@ export function prCi(pr) {
   if (!checks.length) return { state: "unavailable", total: 0, passed: 0, failed: 0, pending: 0, url: "" };
   const failed = checks.filter(check => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(check.conclusion));
   const pending = checks.filter(check => check.status !== "COMPLETED" || !check.conclusion).filter(check => !failed.includes(check));
-  const passed = checks.filter(check => !failed.includes(check) && !pending.includes(check));
-  const state = failed.length ? "failing" : pending.length ? "pending" : "passing";
-  const preferred = (state === "failing" ? failed : state === "pending" ? pending : passed).find(check => check.url) || checks.find(check => check.url);
+  const stale = checks.filter(check => check.conclusion === "STALE");
+  const passed = checks.filter(check => !failed.includes(check) && !pending.includes(check) && !stale.includes(check));
+  const state = failed.length ? "failing" : pending.length ? "pending" : stale.length ? "unavailable" : "passing";
+  const preferred = (state === "failing" ? failed : state === "pending" ? pending : state === "unavailable" ? stale : passed).find(check => check.url) || checks.find(check => check.url);
   return { state, total: checks.length, passed: passed.length, failed: failed.length, pending: pending.length, url: preferred?.url || "" };
 }
 

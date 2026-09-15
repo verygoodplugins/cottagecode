@@ -56,6 +56,13 @@ test("CI rollups include a failing check beyond the first fifty", () => {
   assert.deepEqual(ci, { state: "failing", total: 51, passed: 50, failed: 1, pending: 0, url: "" });
 });
 
+test("a stale GitHub check never reads as a passing CI result", () => {
+  const ci = prCi(normalizePr({ ...base, statusCheckRollup: [
+    { name: "expired", status: "COMPLETED", conclusion: "STALE", detailsUrl: "https://github.com/example/cottage/actions/runs/expired" },
+  ] }, now));
+  assert.deepEqual(ci, { state: "unavailable", total: 1, passed: 0, failed: 0, pending: 0, url: "https://github.com/example/cottage/actions/runs/expired" });
+});
+
 test("readiness fails closed for stale, future, missing, conflicting and draft evidence", () => {
   const ready = { ...base, labels: ["babysit:ready"] };
   for (const patch of [

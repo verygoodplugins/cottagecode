@@ -259,6 +259,8 @@ export function createObservatory(api){
     const key=e.key.length===1?e.key.toLowerCase():e.key;
     if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d'].includes(key)){
       if(mode==='board'||mode==='scrapbook')setMode('town');
+      // Leaving the bench is immediate even if a background tab delays its next frame.
+      followId=null;
       keys.add(key);e.preventDefault();
     }
     if((key==='e'||key==='Enter')&&!e.repeat){e.preventDefault();interact();}
