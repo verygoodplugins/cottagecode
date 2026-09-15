@@ -93,10 +93,14 @@ export function createHubMessenger({
     // belongs to the task identity in the original payload, so inspect it before
     // treating the current cottage as changed.
     const hash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,payload.inputRequestId||null,payload.inputRequestVersion||null,message])).digest('hex');
+    // Receipts written before input rounds were part of the request identity
+    // contain only the cottage, task, and message. Keep those reservations
+    // durable when a current browser retry includes its displayed question.
+    const legacyHash=createHash('sha256').update(JSON.stringify([agent.id,payload.taskId,message])).digest('hex');
     try{await load();}catch{return rejected(503,'The message receipt ledger is unavailable. Nothing was sent.');}
     const previous=entries.get(payload.requestId);
     if(previous){
-      if(previous.hash!==hash)return rejected(409,'That message request ID belongs to a different message.');
+      if(previous.hash!==hash&&previous.hash!==legacyHash)return rejected(409,'That message request ID belongs to a different message.');
       return previous.response||unknown();
     }
     if(payload.taskId!==agent.taskId)return rejected(409,'The task changed. Reopen its cottage before sending.');

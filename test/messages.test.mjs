@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appendFile,mkdtemp,readFile,rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {once} from 'node:events';
@@ -143,6 +144,18 @@ test('a prior receipt is returned when the cottage has advanced to another task'
     const retry=fixture({ledgerPath});
     assert.equal((await retry.messenger.send(advanced,message)).body.delivery,'submitted');
     assert.equal(retry.calls.length,0,'a durable receipt is checked using the original payload task before current task validation');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+test('a receipt written before input request fields remains a durable retry match',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'cottage-messages-')),ledgerPath=join(directory,'receipts.jsonl');
+  try{
+    const prior={status:200,body:{ok:true,delivery:'accepted',requestId:message.requestId,source:'autohub',timestamp:now}};
+    const legacyHash=createHash('sha256').update(JSON.stringify([agent.id,message.taskId,message.message])).digest('hex');
+    await appendFile(ledgerPath,JSON.stringify({id:message.requestId,hash:legacyHash,at:now,response:prior})+'\n');
+    const retry=fixture({ledgerPath});
+    const currentPayload={...message,inputRequestId:'question-a',inputRequestVersion:'question-a-v1'};
+    assert.deepEqual(await retry.messenger.send(agent,currentPayload),prior);
+    assert.equal(retry.calls.length,0,'the old durable receipt must prevent a second delivery');
   }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('an interrupted final receipt record preserves prior message reservations',async()=>{

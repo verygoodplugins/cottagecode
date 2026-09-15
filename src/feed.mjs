@@ -287,7 +287,16 @@ export function createFeed({
         // logical task. Its timing is session-scoped; its request, activity,
         // and journal are not safe to attribute to the Hub task.
         nextActivity.set(agent.id, []);
-        return { ...agent, inputRequestResolution, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
+        const hubInputAfterResolution = !inputRequestResolution || (hubInput &&
+          hubInput.id !== inputRequestResolution.id && inputRequestResolution.resolvedAt &&
+          hubInput.updatedAt && hubInput.updatedAt > inputRequestResolution.resolvedAt);
+        const inputRequest = terminal ? null : hubInput && hubInputAfterResolution ? hubInput : null;
+        return {
+          ...agent, inputRequest, inputRequestResolution,
+          sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt,
+          ...(inputRequest ? { status: "blocked", attention: inputRequest.prompt } :
+            inputRequestResolution ? { status: agent.status === "blocked" ? "idle" : agent.status, attention: "" } : {}),
+        };
       }
       // An external-session row intentionally represents the transcript as a
       // whole. A logical Hub task can take a local cottage's place only when
