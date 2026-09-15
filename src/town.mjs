@@ -14,6 +14,7 @@ import { lettersOf } from "./occupancy.mjs";
    ======================================================================= */
 const POLL_MS = 1500;
 let ENDPOINT = null;
+let builtInDemo = true;
 let LIVE = false, feedStale = false, lastSnapshot = null, lastEndpoint = null;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
 let observatory;
@@ -45,6 +46,10 @@ function isAllowedFeedUrl(raw){
   }catch{
     return false;
   }
+}
+
+export function feedNamespace(endpoint, isBuiltInDemo = false){
+  return isBuiltInDemo || !endpoint ? "demo" : "feed:" + String(endpoint);
 }
 
 function shortModel(m){
@@ -86,7 +91,7 @@ function classifyOccupancy(c, now = Date.now()){
 
 async function fetchAgents(){
   if(!ENDPOINT){
-    LIVE=false;feedStale=false;FEED_META=DEMO_META;
+    builtInDemo=true;LIVE=false;feedStale=false;FEED_META=DEMO_META;
     return SIM.snapshot();
   }
   const endpoint=ENDPOINT;
@@ -97,8 +102,8 @@ async function fetchAgents(){
     if(endpoint!==ENDPOINT)return agents;
     let bundledEmpty=false;
     try{const u=new URL(endpoint,location.href);bundledEmpty=!data.stale&&!data.agents.length&&u.origin===location.origin&&u.pathname==="/agents"&&(!data.source||data.source==="none");}catch{}
-    if(bundledEmpty){LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
-    LIVE=true;feedStale=!!data.stale;FEED_META=data;
+    if(bundledEmpty){builtInDemo=true;LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
+    builtInDemo=false;LIVE=true;feedStale=!!data.stale;FEED_META=data;
     const list=data.agents.filter(a=>a&&typeof a==="object").map((a,i)=>normalizeCottage(data.stale?{...a,pr:{...a.pr,stale:true,reason:"The feed is stale; PR readiness is unverified."}}:a,i,{town:normalizeTown,model:shortModel,occupancy:classifyOccupancy}));
     lastSnapshot=list;lastEndpoint=endpoint;
     feedNote((feedStale?"Stale snapshot · ":"live. ")+list.length+" cottages ("+(data.source||"custom feed")+")",feedStale?"#e7b778":"#94c99e");
@@ -1761,7 +1766,7 @@ document.getElementById("connect").onclick = ()=>{
     feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
     return;
   }
-  ENDPOINT=new URL(v,location.href).href;lastSnapshot=null;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh();
+  ENDPOINT=new URL(v,location.href).href;builtInDemo=false;lastSnapshot=null;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh();
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
   if(e.key==="Enter") document.getElementById("connect").click();
@@ -1783,14 +1788,14 @@ async function refresh(){
   refreshing=true;
   try{
     agents=await fetchAgents();
-    const nextSource=FEED_META.source==="demo"?"demo":ENDPOINT||"demo";
+    const nextSource=feedNamespace(ENDPOINT,builtInDemo);
     if(nextSource!==layoutSource){layoutSource=nextSource;stableLayout.reset();layoutSignature="";fauna.length=0;}
     layout();observatory?.update(agents,{...FEED_META,stale:feedStale});renderTally();renderPanel();
   }finally{refreshing=false;}
 }
 
 observatory=createObservatory({
-  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>FEED_META.source==="demo"?"demo":ENDPOINT||"demo",
+  canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack
 });
@@ -1819,6 +1824,7 @@ window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,
   box.value = same;
   if (location.protocol.startsWith("http")) {
     ENDPOINT = same;
+    builtInDemo = false;
     feedNote("connecting to local feed...");
   }
 })();

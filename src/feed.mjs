@@ -230,6 +230,13 @@ export function createFeed({
       const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
       const local = [...keys].map(key => localById.get(key)).find(Boolean);
       if (!local) return agent;
+      const taskMismatch = agent.taskId && local.taskId && String(agent.taskId) !== String(local.taskId);
+      if (taskMismatch) {
+        // A transcript can be the same session but a later logical task. Its
+        // timing is session-scoped; its request, activity, and journal are not.
+        nextActivity.set(agent.id, []);
+        return { ...agent, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
+      }
       const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
         !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
       nextActivity.set(agent.id, mergeActivityEvents([], events));
