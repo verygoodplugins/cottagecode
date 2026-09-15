@@ -31,9 +31,9 @@ function pass(label){process.stdout.write('PASS '+label+'\n');}
 const samples=()=>evaluate(`(()=>{
   const c=document.getElementById('town'),ctx=c.getContext('2d'),s=window.cottageState();let total=[0,0,0],n=0;
   for(let y=16;y<c.height;y+=24)for(let x=16;x<c.width;x+=24){const d=ctx.getImageData(x,y,1,1).data;for(let i=0;i<3;i++)total[i]+=d[i];n++;}
-  const p=s.plots.find(p=>p.id==='night-host'),q=s.plots.find(p=>p.id==='night-sleeper'),r=s.plots.find(p=>p.id==='night-done');
+  const p=s.plots.find(p=>p.id==='night-host'),q=s.plots.find(p=>p.id==='night-sleeper'),r=s.plots.find(p=>p.id==='night-done'),kid=p.kids.find(k=>k.agent.id==='night-kid');
   const pixel=(x,y)=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3);
-  return {mean:total.map(v=>v/n),working:pixel(p.x+13,p.y+43),sleeping:pixel(q.x+13,q.y+43),done:pixel(r.x+47,r.y+22),pr:pixel(p.x-9,p.y+54)};
+  return {mean:total.map(v=>v/n),working:pixel(p.x+13,p.y+43),sleeping:pixel(q.x+13,q.y+43),shed:pixel(kid.x+4,kid.y+11),done:pixel(r.x+47,r.y+22),pr:pixel(p.x-9,p.y+54)};
 })()`);
 try{
   await browser('open',['--url','http://127.0.0.1:'+server.address().port]);
@@ -53,11 +53,16 @@ try{
   await until('window.cottageState().bedtime.every(r=>r.settled)','Families did not settle');
   const after=await state(),dark=await samples();
   assert.deepEqual(after.agents.map(a=>[a.id,a.status]),original);
-  assert.ok(after.bedtime.every(r=>r.kids.every(k=>k.hidden)&&r.hens.every(h=>h.hidden)));
+  assert.ok(after.bedtime.every(r=>r.hens.every(h=>h.hidden)));
+  const host=after.bedtime.find(r=>r.id==='night-host'),apprentice=host.kids.find(k=>k.id==='night-kid'),shed=after.plots.find(p=>p.id==='night-host').kids.find(k=>k.agent.id==='night-kid');
+  assert.equal(apprentice.hidden,false,'a working apprentice remains available at their shed');
+  assert.equal(apprentice.walking,false);
+  assert.deepEqual({x:apprentice.x,y:apprentice.y},{x:shed.x+8,y:shed.y+20});
   const luminance=rgb=>rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;
   assert.ok(luminance(dark.mean)<luminance(daylight.mean)*.7,JSON.stringify({daylight,dark}));
   assert.ok(dark.mean[2]>dark.mean[1]&&dark.mean[1]>dark.mean[0]);
   assert.ok(dark.working[0]>dark.working[2]*1.5&&luminance(dark.working)>luminance(dark.sleeping)*2);
+  assert.ok(dark.shed[0]>dark.shed[2]*1.5,'the awake apprentice keeps a warm shed light');
   assert.deepEqual(dark.done,[121,194,95],'completed residents retain a green status marker after settling');
   assert.deepEqual(dark.pr,daylight.pr,'PR readiness color must survive the palette');
   pass('actual night pixels are darker and blue, working windows warm, PR colors unchanged, families tucked in');

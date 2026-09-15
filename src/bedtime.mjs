@@ -65,9 +65,10 @@ export function createBedtimeRoutine() {
         });
         const kids = (plot.kids || []).map((kid, i) => {
           const start = { x: kid.x + 8, y: kid.y + 20 };
-          const point = !evening ? { x: start.x + (reduce ? 0 : Math.sin(time * .5 + hash(kid.agent.id)) * 3), y: start.y } :
+          const workingLate = kid.agent?.status === 'working';
+          const point = workingLate ? start : !evening ? { x: start.x + (reduce ? 0 : Math.sin(time * .5 + hash(kid.agent.id)) * 3), y: start.y } :
             along([start, { x: yard.x - 7, y: start.y }, { x: lane.x - 3, y: lane.y + 8 }, door], (elapsed - 3 - i * .6) / 7);
-          return { ...point, id: kid.agent.id, hidden: evening && elapsed >= 10.5 + i * .6, walking: evening && elapsed > 3 && !settled };
+          return { ...point, id: kid.agent.id, hidden: !workingLate && evening && elapsed >= 10.5 + i * .6, walking: !workingLate && evening && elapsed > 3 && !settled };
         });
         frames.set(agent.id, { key, mode, evening, settled, parent, kids, hens, coop, door, progress: evening ? clamp(elapsed / 12) : 0 });
       }
