@@ -1,232 +1,47 @@
 #!/usr/bin/env node
-/**
- * cottagecode feed. Reads Claude Code session transcripts and serves them
- * in the shape the townmap eats. No dependencies, nothing installed.
- *
- *   node src/feed.mjs        →  http://localhost:8787
- *
- * Flags:
- *   --port 8787       what to listen on
- *   --host 127.0.0.1  bind address (use 0.0.0.0 for LAN)
- *   --window 12h      how far back to look for sessions (12h, 2d, 90m)
- *   --once            print one snapshot as JSON and exit
- *   --debug           log what each session resolved to, and why
- *
- * Serves the townmap and GET /agents. Optional local adapters: Claude Code
- * session jsonl, and a readonly sqlite snapshot if AGENT_DB_PATH is set.
- * The browser talks only to this process.
- */
-
+/** Zero-dependency CottageCode feed: local transcripts, optional Hub DB, read-only PRs. */
 import { createServer } from "node:http";
-import { readdir, stat, open, readFile } from "node:fs/promises";
+import { readdir, stat, readFile, realpath } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
 import { readHubAgents, shortModel } from "./hub.mjs";
-import {
-  classifyOccupancy,
-  lettersOf,
-  liveCostOf,
-  stampOccupancy,
-} from "./occupancy.mjs";
+import { classifyOccupancy, inferPr, lettersOf, liveCostOf, stampOccupancy } from "./occupancy.mjs";
+import { createTranscriptReader } from "./transcripts.mjs";
+import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./activity.mjs";
+import { enrichAgents } from "./github.mjs";
+import { hasOutstandingPr } from "./pr.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = process.env.CLAUDE_PROJECTS_DIR || join(homedir(), ".claude", "projects");
-
-/* USD per million tokens. THESE ARE PLACEHOLDERS — set them from current
-   pricing or every cost in the town is fiction. Cache reads are the cheap
-   ones and they dominate long sessions, so getting that number right
-   matters more than the others. */
-const PRICE = {
-  opus:   { in: 15,   out: 75,   cacheRead: 1.50, cacheWrite: 18.75 },
-  sonnet: { in: 3,    out: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
-  haiku:  { in: 0.80, out: 4,    cacheRead: 0.08, cacheWrite: 1.00  }
-};
-
-const NEEDS_YOU_MS = 2 * 60 * 1000;   // turn ended this recently → it wants you
+const NEEDS_YOU_MS = 2 * 60 * 1000;
 const POLL_MS = 2000;
+const execFileAsync = promisify(execFile);
 
-/* ── args ───────────────────────────────────────────────────────────── */
-const argv = process.argv.slice(2);
-const flag = (n, d) => { const i = argv.indexOf(n); return i === -1 ? d : argv[i + 1]; };
-const PORT = Number(flag("--port", 8787));
-const HOST = flag("--host", "127.0.0.1");
-const ONCE = argv.includes("--once");
-const DEBUG = argv.includes("--debug");
-const WINDOW = (() => {
-  const s = String(flag("--window", "12h"));
-  const m = s.match(/^(\d+)\s*([hmd])$/);
-  if (!m) return 12 * 3600e3;
-  return Number(m[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[m[2]];
-})();
-
-/* ── per-file parse state, kept between polls ───────────────────────── */
-const files = new Map();   // path -> { offset, tail, session }
-
-function priceOf(model, u) {
-  const p = PRICE[shortModel(model)] || PRICE.sonnet;
-  return (
-    ((u.input || 0)      * p.in +
-     (u.output || 0)     * p.out +
-     (u.cacheRead || 0)  * p.cacheRead +
-     (u.cacheWrite || 0) * p.cacheWrite) / 1e6
-  );
-}
-
-/* ── reading one transcript ─────────────────────────────────────────── */
-function blankSession(path) {
-  return {
-    path,
-    id: "", slug: "", cwd: "", branch: "", model: "", version: "",
-    entrypoint: "", firstTs: 0, lastTs: 0,
-    tokens: 0, cost: 0,
-    lastText: "", lastTool: "", lastSkill: "",
-    turnOpen: false,          // mid-turn: a tool call is out, or no stop yet
-    endedAt: 0,               // when the last turn closed
-    sidechains: new Map(),    // rootUuid -> subagent record
-    uuidRoot: new Map()       // uuid -> sidechain root, for chain walking
-  };
-}
-
-function textOf(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const t = content.filter(b => b?.type === "text").map(b => b.text).join(" ");
-  return t.trim();
-}
-function toolsOf(content) {
-  if (!Array.isArray(content)) return [];
-  return content.filter(b => b?.type === "tool_use");
-}
-function toolLabel(block) {
-  const i = block.input || {};
-  const hint = i.file_path || i.path || i.command || i.pattern || i.description || i.prompt || "";
-  const short = String(hint).replace(/\s+/g, " ").trim().slice(0, 70);
-  return short ? `${block.name}: ${short}` : block.name;
-}
-
-function applyLine(S, ln) {
-  const ts = Date.parse(ln.timestamp || 0) || 0;
-  if (ts) { S.lastTs = Math.max(S.lastTs, ts); if (!S.firstTs) S.firstTs = ts; }
-
-  if (ln.sessionId) S.id = ln.sessionId;
-  if (ln.slug) S.slug = ln.slug;
-  if (ln.cwd) S.cwd = ln.cwd;
-  if (ln.gitBranch) S.branch = ln.gitBranch;
-  if (ln.version) S.version = ln.version;
-  if (ln.entrypoint) S.entrypoint = ln.entrypoint;
-  if (ln.attributionSkill) S.lastSkill = ln.attributionSkill;
-
-  // sub-agents live in the same file, flagged and chained by parentUuid
-  let sc = null;
-  if (ln.isSidechain && ln.uuid) {
-    const root = S.uuidRoot.get(ln.parentUuid) || ln.uuid;
-    S.uuidRoot.set(ln.uuid, root);
-    sc = S.sidechains.get(root);
-    if (!sc) {
-      sc = { root, startTs: ts, lastTs: ts, tokens: 0, cost: 0, model: "",
-             lastText: "", lastTool: "", open: true };
-      S.sidechains.set(root, sc);
-    }
-    sc.lastTs = Math.max(sc.lastTs, ts);
-  }
-
-  if (ln.type === "assistant" && ln.message) {
-    const m = ln.message;
-    const u = m.usage || {};
-    const usage = {
-      input: u.input_tokens || 0,
-      output: u.output_tokens || 0,
-      cacheRead: u.cache_read_input_tokens || 0,
-      cacheWrite: u.cache_creation_input_tokens || 0
-    };
-    const n = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-    const c = priceOf(m.model || ln.advisorModel, usage);
-
-    const target = sc || S;
-    target.tokens += n;
-    target.cost += c;
-    if (m.model) target.model = m.model;
-
-    const txt = textOf(m.content);
-    if (txt) target.lastText = txt.replace(/\s+/g, " ").slice(0, 240);
-    const tools = toolsOf(m.content);
-    if (tools.length) target.lastTool = toolLabel(tools[tools.length - 1]);
-
-    // stop_reason tells us whether the turn is still open
-    const stop = m.stop_reason;
-    if (sc) sc.open = !(stop === "end_turn" || stop === "stop_sequence");
-    else {
-      S.turnOpen = !(stop === "end_turn" || stop === "stop_sequence");
-      if (!S.turnOpen) S.endedAt = ts || Date.now();
-    }
-  }
-
-  if (ln.type === "user") {
-    // a tool result coming back means the turn is still running
-    if (sc) sc.open = true;
-    else { S.turnOpen = true; S.endedAt = 0; }
-  }
-
-  if (ln.type === "attachment" && ln.attachment) {
-    // the Stop hook firing is an explicit "this turn is over" signal
-    if (ln.attachment.hookEvent === "Stop") {
-      S.turnOpen = false;
-      S.endedAt = ts || Date.now();
-    }
-  }
-}
-
-async function readIncrement(path) {
-  const st = await stat(path);
-  let f = files.get(path);
-  if (!f) { f = { offset: 0, tail: "", session: blankSession(path) }; files.set(path, f); }
-  if (st.size < f.offset) { f.offset = 0; f.tail = ""; f.session = blankSession(path); }
-  if (st.size === f.offset) return f.session;
-
-  const fh = await open(path, "r");
-  try {
-    const len = st.size - f.offset;
-    const buf = Buffer.alloc(len);
-    await fh.read(buf, 0, len, f.offset);
-    f.offset = st.size;
-    const chunk = f.tail + buf.toString("utf8");
-    const lines = chunk.split("\n");
-    f.tail = lines.pop() ?? "";          // hold back a partial trailing line
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try { applyLine(f.session, JSON.parse(line)); } catch { /* skip junk */ }
-    }
-  } finally {
-    await fh.close();
-  }
-  f.session.mtime = st.mtimeMs;
-  return f.session;
-}
-
-/* ── snapshot ───────────────────────────────────────────────────────── */
-function statusOf(S, now) {
-  if (now - S.lastTs > WINDOW) return "offline";
-  if (S.turnOpen) return "working";
-  if (S.endedAt && now - S.endedAt < NEEDS_YOU_MS) return "blocked";  // just handed back
+function statusOf(session, now, windowMs) {
+  if (!session.lastTs || now - session.lastTs > windowMs) return "offline";
+  if (session.turnOpen) return "working";
+  if (session.endedAt && now - session.endedAt < NEEDS_YOU_MS) return "blocked";
   return "idle";
 }
 
-function toAgents(sessions) {
-  const now = Date.now();
-  const out = [];
-  const nameCount = new Map();
+function transcriptPr(session) {
+  const text = [session.originalAsk, session.lastText, ...session.events.map(event => event.text)].join("\n");
+  return inferPr(text, { pr: session.pr, finalization: session.finalization });
+}
 
-  for (const S of sessions) {
-    if (!S.id) continue;
-    const repo = repoOf(S.cwd);
-    const wt = worktreeOf(S.cwd);
-    const town = townName(S.cwd);
-    // Slugs read like "can-you-look-at-replicated-perlis" — the front is
-    // filler, the tail is the distinctive bit. Take words off the end while
-    // they still fit on a nameplate.
-    let name = S.slug || S.id.slice(0, 8);
+export function toAgents(sessions, { now = Date.now(), windowMs = 12 * 3600e3 } = {}) {
+  const agents = [];
+  const nameCount = new Map();
+  for (const session of sessions) {
+    if (!session.id) continue;
+    const repo = repoOf(session.cwd);
+    const worktree = worktreeOf(session.cwd);
+    const town = townName(session.cwd);
+    let name = session.slug || session.id.slice(0, 8);
     const words = name.split("-").filter(Boolean);
     let picked = [];
     for (let i = words.length - 1; i >= 0; i--) {
@@ -235,81 +50,143 @@ function toAgents(sessions) {
       picked = next;
     }
     name = picked.join("-") || name.slice(0, 14);
-    const n = (nameCount.get(name) || 0) + 1;
-    nameCount.set(name, n);
-    if (n > 1) name = `${name}-${n}`;
-
-    const startedAt = S.firstTs && S.firstTs > Date.parse("2020-01-01") ? S.firstTs : 0;
-    const claude = {
-      id: S.id,
-      name: wt ? (wt.length <= 14 ? wt : name) : name,
-      town,
-      role: town,
-      status: statusOf(S, now),
-      task: S.lastText && S.lastText.length > 12 ? S.lastText.slice(0, 150) : (wt ? `in ${wt}` : repo),
-      worktree: wt,
-      worktreePath: S.cwd || "",
-      result: "",
-      pr: { number: null, url: "", title: "", state: "none" },
-      attention: "",
-      handoffUrl: "",
-      activity: S.lastTool || (S.turnOpen ? "thinking" : "idle"),
-      model: shortModel(S.model),
-      branch: S.branch,
-      parent: null,
-      dispatchedBy: S.entrypoint === "claude-desktop" ? "you (desktop)" : "you",
-      startedAt,
-      endedAt: S.endedAt || S.lastTs || 0,
-      updatedAt: S.lastTs || 0,
-      tokens: S.tokens,
-      cost: S.cost,
-      lastLine: S.lastTool || S.lastText || "",
-      source: "claude",
+    const count = (nameCount.get(name) || 0) + 1;
+    nameCount.set(name, count);
+    if (count > 1) name = `${name}-${count}`;
+    const agent = {
+      id: session.id,
+      name: worktree ? (worktree.length <= 14 ? worktree : name) : name,
+      town, role: town,
+      status: statusOf(session, now, windowMs),
+      task: session.originalAsk.replace(/\s+/g, " ").slice(0, 150) || (worktree ? `in ${worktree}` : repo),
+      taskId: session.taskId,
+      originalAsk: session.originalAsk,
+      originalAskSource: session.originalAskSource,
+      originalAskTruncated: session.originalAskTruncated,
+      taskStartedAt: session.taskStartedAt,
+      sessionStartedAt: session.firstTs,
+      activityUrl: `/agents/${encodeURIComponent(session.id)}/activity`,
+      worktree, worktreePath: session.cwd || "",
+      result: !session.turnOpen ? session.lastText : "",
+      pr: transcriptPr(session),
+      attention: "", handoffUrl: "",
+      activity: session.lastTool || session.lastText || (session.turnOpen ? "Working" : "Idle"),
+      model: shortModel(session.model), branch: session.branch, parent: null,
+      dispatchedBy: session.entrypoint === "claude-desktop" ? "you (desktop)" : "you",
+      startedAt: session.taskStartedAt || session.firstTs || 0,
+      endedAt: session.endedAt || 0,
+      updatedAt: session.lastTs || 0,
+      tokens: session.tokens, cost: session.cost,
+      lastLine: session.events.filter(event => event.kind !== "request").at(-1)?.text || session.lastTool || session.lastText || "",
+      sessionId: session.id, source: "claude",
     };
-    claude.occupancy = classifyOccupancy(claude, now);
-    out.push(claude);
-
-    let i = 0;
-    for (const sc of S.sidechains.values()) {
-      i++;
-      const stale = now - sc.lastTs > 5 * 60e3;
-      const kid = {
-        id: `${S.id}:${sc.root.slice(0, 8)}`,
-        name: `${name}-${i}`,
-        town,
-        role: town,
-        status: sc.open && !stale ? "working" : (stale ? "done" : "idle"),
-        task: `shed of ${name}`,
-        worktree: wt,
-        worktreePath: S.cwd || "",
-        result: "",
-        pr: { number: null, url: "", title: "", state: "none" },
-        attention: "",
-        handoffUrl: "",
-        activity: sc.lastTool || "thinking",
-        model: shortModel(sc.model || S.model),
-        branch: S.branch,
-        parent: S.id,
-        dispatchedBy: name,
-        startedAt: sc.startTs,
-        endedAt: sc.lastTs || 0,
-        updatedAt: sc.lastTs || 0,
-        tokens: sc.tokens,
-        cost: sc.cost,
-        lastLine: sc.lastTool || sc.lastText || "",
-        source: "claude",
+    agent.occupancy = classifyOccupancy(agent, now);
+    agents.push(agent);
+    let index = 0;
+    for (const child of session.sidechains.values()) {
+      index++;
+      const stale = !child.lastTs || now - child.lastTs > 5 * 60e3;
+      const id = `${session.id}:${child.root.slice(0, 8)}`;
+      const cottage = {
+        ...agent,
+        id, name: `${name}-${index}`, parent: session.id, dispatchedBy: name,
+        status: child.open && !stale ? "working" : stale ? "done" : "idle",
+        task: child.originalAsk.replace(/\s+/g, " ").slice(0, 150) || `shed of ${name}`,
+        taskId: child.taskId,
+        originalAsk: child.originalAsk, originalAskSource: child.originalAskSource,
+        originalAskTruncated: child.originalAskTruncated,
+        taskStartedAt: child.taskStartedAt, sessionStartedAt: child.startTs,
+        activityUrl: `/agents/${encodeURIComponent(id)}/activity`,
+        activity: child.lastTool || child.lastText || "Working",
+        model: shortModel(child.model || session.model),
+        result: !child.open ? child.lastText : "",
+        pr: transcriptPr(child),
+        startedAt: child.taskStartedAt || child.startTs || 0,
+        endedAt: child.endedAt || 0, updatedAt: child.lastTs || 0,
+        tokens: child.tokens, cost: child.cost,
+        lastLine: child.events.filter(event => event.kind !== "request").at(-1)?.text || child.lastText || "",
       };
-      kid.occupancy = classifyOccupancy(kid, now);
-      out.push(kid);
+      cottage.occupancy = classifyOccupancy(cottage, now);
+      agents.push(cottage);
     }
   }
-  return out;
+  return agents;
 }
 
-/* ── the scan ───────────────────────────────────────────────────────── */
-let cache = [];
-let source = "none";
-let hubLabel = "none";
+export function createClaudeScanner({ projectsDir = PROJECTS, windowMs = 12 * 3600e3, now = Date.now } = {}) {
+  const reader = createTranscriptReader();
+  let everRead = false;
+  return async function scanClaude() {
+    let dirs;
+    try { dirs = await readdir(projectsDir, { withFileTypes: true }); everRead = true; }
+    catch (error) {
+      if (error.code === "ENOENT" && !everRead) return { ok: true, missing: true, agents: [], sessions: [] };
+      throw error;
+    }
+    const sessions = [];
+    const errors = [];
+    for (const directory of dirs) {
+      if (!directory.isDirectory()) continue;
+      const path = join(projectsDir, directory.name);
+      let entries;
+      try { entries = await readdir(path); }
+      catch (error) {
+        if (error.code !== "ENOENT") {
+          errors.push("A transcript directory could not be read");
+          for (const [filePath, state] of reader.files) if (dirname(filePath) === path) sessions.push(state.session);
+        }
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.endsWith(".jsonl")) continue;
+        const filePath = join(path, name);
+        try {
+          const info = await stat(filePath);
+          if (now() - info.mtimeMs > windowMs && !reader.files.has(filePath)) continue;
+          sessions.push(await reader.read(filePath));
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            errors.push("A transcript could not be read");
+            const old = reader.files.get(filePath)?.session;
+            if (old) sessions.push(old);
+          }
+        }
+      }
+    }
+    return { ok: true, agents: toAgents(sessions, { now: now(), windowMs }), sessions, ...(errors.length ? { stale: true, error: errors[0] } : {}) };
+  };
+}
+
+export function repoFromRemote(value) {
+  const remote = String(value || "").trim();
+  const match = remote.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
+  return match?.[1] || "";
+}
+
+export function createRepoResolver({ run = execFileAsync, now = Date.now } = {}) {
+  const cache = new Map();
+  return async function resolveRepos(agents) {
+    const result = agents.map(agent => ({ ...agent }));
+    const paths = [...new Set(result.filter(agent => !agent.repo && agent.worktreePath).map(agent => agent.worktreePath))];
+    let index = 0;
+    await Promise.all(Array.from({ length: Math.min(4, paths.length) }, async () => {
+      while (index < paths.length) {
+        const path = paths[index++];
+        const previous = cache.get(path);
+        if (previous && now() - previous.checkedAt < 300000) continue;
+        let repo = "", resolved = false;
+        try {
+          const { stdout } = await run("git", ["-C", path, "remote", "get-url", "origin"], { timeout: 2000, maxBuffer: 16384 });
+          repo = repoFromRemote(stdout);
+          resolved = true;
+        } catch { /* Not a repository, no origin, or unavailable checkout. */ }
+        cache.set(path, { repo: resolved ? repo : previous?.repo || "", checkedAt: now() });
+      }
+    }));
+    for (const agent of result) if (!agent.repo) agent.repo = cache.get(agent.worktreePath)?.repo || "";
+    return result;
+  };
+}
 
 function sortCottages(list) {
   return list.sort((a, b) => {
@@ -319,100 +196,189 @@ function sortCottages(list) {
   });
 }
 
-async function scanClaude() {
-  const now = Date.now();
-  let dirs = [];
-  try { dirs = await readdir(PROJECTS, { withFileTypes: true }); }
-  catch (e) {
-    console.error(`can't read ${PROJECTS}: ${e.message}`);
-    return [];
-  }
+export function createFeed({
+  scanClaude = createClaudeScanner(), readHub = readHubAgents, enrich = enrichAgents,
+  resolveRepos = createRepoResolver(), timeline = createHubTimelineReader(), now = Date.now,
+} = {}) {
+  let cache = [];
+  let claude = { agents: [], sessions: [] };
+  let hub = { agents: [], keys: new Set(), links: new Map() };
+  let activity = new Map();
+  let lastSuccessAt = null;
+  let source = "none";
+  let stale = false;
+  let errors = [];
+  let scanning = null;
 
-  const sessions = [];
-  for (const d of dirs) {
-    if (!d.isDirectory()) continue;
-    const dir = join(PROJECTS, d.name);
-    let entries = [];
-    try { entries = await readdir(dir); } catch { continue; }
-    for (const name of entries) {
-      if (!name.endsWith(".jsonl")) continue;
-      const path = join(dir, name);
-      try {
-        const st = await stat(path);
-        if (now - st.mtimeMs > WINDOW && !files.has(path)) continue;
-        sessions.push(await readIncrement(path));
-      } catch { /* file vanished mid-scan */ }
+  async function doScan() {
+    const nextErrors = [];
+    const results = await Promise.allSettled([Promise.resolve().then(scanClaude), Promise.resolve().then(readHub)]);
+    if (results[0].status === "fulfilled" && results[0].value.ok !== false) {
+      claude = results[0].value;
+      if (claude.stale) nextErrors.push(claude.error || "Some transcripts are temporarily unavailable");
+    } else nextErrors.push("Local transcripts are temporarily unavailable");
+    if (results[1].status === "fulfilled" && results[1].value.ok !== false) hub = results[1].value;
+    else nextErrors.push("Hub database is temporarily unavailable");
+
+    const localById = new Map(claude.agents.map(agent => [agent.id, agent]));
+    const nextActivity = new Map();
+    for (const session of claude.sessions || []) {
+      nextActivity.set(session.id, session.events);
+      for (const child of session.sidechains.values()) nextActivity.set(`${session.id}:${child.root.slice(0, 8)}`, child.events);
     }
+    const suppressedLocalIds = new Set();
+    const combined = hub.agents.map(agent => {
+      const keys = hub.links?.get(agent.id) || new Set([agent.id, agent.sessionId].filter(Boolean));
+      const local = [...keys].map(key => localById.get(key)).find(Boolean);
+      if (!local) return agent;
+      const hubHasExplicitTask = Boolean(agent.taskId);
+      const sameExplicitTask = hubHasExplicitTask && Boolean(local.taskId) &&
+        String(agent.taskId) === String(local.taskId);
+      if (hubHasExplicitTask && !sameExplicitTask) {
+        // A transcript can be the same session but a different or unscoped
+        // logical task. Its timing is session-scoped; its request, activity,
+        // and journal are not safe to attribute to the Hub task.
+        nextActivity.set(agent.id, []);
+        return { ...agent, sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt };
+      }
+      // An external-session row intentionally represents the transcript as a
+      // whole. A logical Hub task can take a local cottage's place only when
+      // the task identity itself agrees.
+      if (sameExplicitTask || agent.originalAskSource === "session") suppressedLocalIds.add(local.id);
+      const events = [...keys].flatMap(key => nextActivity.get(key) || []).filter(event =>
+        !agent.taskId || !agent.taskStartedAt || event.timestamp === null || event.timestamp >= agent.taskStartedAt);
+      nextActivity.set(agent.id, mergeActivityEvents([], events));
+      return {
+        ...agent,
+        originalAsk: agent.originalAsk || local.originalAsk,
+        originalAskSource: agent.originalAsk ? agent.originalAskSource : local.originalAskSource,
+        originalAskTruncated: agent.originalAsk ? agent.originalAskTruncated : local.originalAskTruncated,
+        sessionStartedAt: local.sessionStartedAt || agent.sessionStartedAt,
+        activity: local.activity || agent.activity,
+        lastLine: local.lastLine || agent.lastLine,
+      };
+    });
+    for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push(agent);
+    const seen = new Set(combined.map(agent => agent.id));
+    // A live PR outlives a transcript window or DB scan window.
+    for (const old of cache) if (!seen.has(old.id) && hasOutstandingPr(old, now())) combined.push({ ...old, status: "offline" });
+    let enriched = combined;
+    try { enriched = await enrich(await resolveRepos(combined)); }
+    catch { nextErrors.push("PR metadata is temporarily unavailable"); }
+    cache = stampOccupancy(sortCottages(enriched), now());
+    // Retain activity for retained PR cottages; discard unrelated old sessions.
+    activity = new Map(cache.map(agent => [agent.id, nextActivity.get(agent.id) || activity.get(agent.id) || []]));
+    const hasHub = cache.some(agent => agent.source === "hub");
+    const hasClaude = cache.some(agent => agent.source === "claude");
+    source = hasHub && hasClaude ? "hub+claude" : hasHub ? "hub" : hasClaude ? "claude" : "none";
+    errors = nextErrors;
+    stale = errors.length > 0;
+    if (!stale) lastSuccessAt = now();
+    return snapshot();
   }
-  return toAgents(sessions);
+
+  function snapshot() {
+    return {
+      agents: cache, source, stale, checkedAt: lastSuccessAt,
+      ...(errors.length ? { errors } : {}),
+      live: cache.filter(agent => agent.occupancy !== "settled").length,
+      settled: cache.filter(agent => agent.occupancy === "settled").length,
+      letters: lettersOf(cache).length, liveCost: liveCostOf(cache),
+    };
+  }
+  return {
+    snapshot,
+    scan() {
+      if (!scanning) scanning = doScan().finally(() => { scanning = null; });
+      return scanning;
+    },
+    async flushEnrichment() {
+      if (typeof enrich.flush !== "function") return snapshot();
+      await enrich.flush();
+      return doScan();
+    },
+    async getActivity(id, options = {}) {
+      const agent = cache.find(cottage => cottage.id === id);
+      if (!agent) return null;
+      const local = activity.get(id) || [];
+      if (local.length) return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), ...(stale ? { stale: true } : {}) };
+      if (agent.source === "hub" && timeline.configured) return timeline.read(agent.id, options);
+      return { ...pageActivity([], options), unavailable: true };
+    },
+  };
 }
 
-async function scan() {
-  const claude = await scanClaude();
-  const hub = readHubAgents();
-  if (hub.error) console.error(`hub db: ${hub.error}`);
-  hubLabel = hub.ok ? hub.dbPath : (hub.missing ? "none" : (hub.error || "error"));
-
-  if (hub.ok && hub.agents.length) {
-    const extra = claude.filter((a) => !hub.keys.has(a.id));
-    cache = stampOccupancy(sortCottages([...hub.agents, ...extra]));
-    source = extra.length ? "hub+claude" : "hub";
-  } else {
-    cache = stampOccupancy(sortCottages(claude));
-    source = claude.length ? "claude" : "none";
-  }
-
-  if (DEBUG) {
-    console.log(`\n[${new Date().toLocaleTimeString()}] ${cache.length} cottages  source=${source}`);
-    for (const a of cache) {
-      console.log(`  ${a.name.padEnd(22)} ${a.status.padEnd(8)} ${String(a.town).padEnd(14)} ` +
-                  `${a.model.padEnd(7)} ${String(a.branch).slice(0,24).padEnd(26)} ` +
-                  `$${a.cost.toFixed(3).padStart(8)}  ${a.lastLine.slice(0, 40)}`);
-    }
-  }
+function isSameOriginRequest(req) {
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return true; // CLI and health probes have no browser origin.
+  const host = String(req.headers.host || "").trim();
+  if (!host) return false;
+  try {
+    const url = new URL(origin);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.host === host;
+  } catch { return false; }
 }
 
-/* ── go ─────────────────────────────────────────────────────────────── */
-await scan();
-
-if (ONCE) {
-  console.log(JSON.stringify(cache, null, 2));
-  process.exit(0);
-}
-
-setInterval(scan, POLL_MS);
-
-createServer(async (req, res) => {
-  const cors = { "access-control-allow-origin": "*" };
-  const url = new URL(req.url, "http://localhost");
-  if (url.pathname === "/agents") {
-    res.writeHead(200, { ...cors, "content-type": "application/json" });
-    const settled = cache.filter((a) => a.occupancy === "settled").length;
-    const live = cache.filter((a) => a.occupancy !== "settled").length;
-    const letters = lettersOf(cache);
-    return res.end(JSON.stringify({
-      agents: cache,
-      source,
-      live,
-      settled,
-      letters: letters.length,
-      liveCost: liveCostOf(cache),
-    }));
-  }
-  if (url.pathname === "/" || url.pathname === "/index.html") {
+export function createFeedServer(feed, { directory = HERE } = {}) {
+  return createServer(async (req, res) => {
+    const headers = { "cache-control": "no-store" };
+    const json = (status, body) => { res.writeHead(status, { ...headers, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
-      res.writeHead(200, { "content-type": "text/html" });
-      return res.end(await readFile(join(HERE, "town.html")));
-    } catch {
-      res.writeHead(404, { "content-type": "text/plain" });
-      return res.end("Put town.html next to this script.");
+      const url = new URL(req.url, "http://localhost");
+      const isAgentRoute = url.pathname === "/agents" || /^\/agents\/[^/]+\/activity$/.test(url.pathname);
+      if (isAgentRoute && !isSameOriginRequest(req)) return json(403, { error: "Cross-origin agent access is not allowed" });
+      if (req.method === "OPTIONS") { res.writeHead(204, { ...headers, "access-control-allow-methods": "GET, OPTIONS" }); return res.end(); }
+      if (req.method !== "GET" && req.method !== "HEAD") return json(405, { error: "Read-only endpoint" });
+      if (url.pathname === "/agents") return json(200, feed.snapshot());
+      const match = url.pathname.match(/^\/agents\/([^/]+)\/activity$/);
+      if (match) {
+        const after = url.searchParams.get("after") || "";
+        const before = url.searchParams.get("before") || "";
+        if (after && before) return json(400, { error: "Use after or before, not both" });
+        const result = await feed.getActivity(decodeURIComponent(match[1]), { after, before, limit: url.searchParams.get("limit") });
+        return json(result ? 200 : 404, result || { error: "Cottage not found" });
+      }
+      let filename = "";
+      let contentType = "";
+      if (["/", "/index.html"].includes(url.pathname)) { filename = "town.html"; contentType = "text/html; charset=utf-8"; }
+      else if (/^\/modules\/[a-z][a-z0-9-]*\.mjs$/.test(url.pathname)) { filename = url.pathname.slice("/modules/".length); contentType = "text/javascript; charset=utf-8"; }
+      if (filename) {
+        const root = await realpath(directory);
+        const path = await realpath(join(root, filename));
+        if (!path.startsWith(root + sep)) return json(404, { error: "Not found" });
+        const body = await readFile(path);
+        res.writeHead(200, { ...headers, "content-type": contentType });
+        return res.end(req.method === "HEAD" ? undefined : body);
+      }
+      return json(404, { error: "Not found" });
+    } catch (error) {
+      if (!res.headersSent) json(error.code === "ENOENT" ? 404 : error instanceof URIError ? 400 : 500, { error: error.code === "ENOENT" ? "Not found" : "Request unavailable" });
+      else res.end();
     }
-  }
-  res.writeHead(404, cors).end("not found");
-}).listen(PORT, HOST, () => {
-  console.log(`\n  CottageCode  →  http://${HOST}:${PORT}`);
-  console.log(`  source       →  ${source}  (${cache.length} cottages)`);
-  if (hubLabel !== "none") console.log(`  sqlite       →  ${hubLabel}`);
-  console.log(`  claude       →  ${PROJECTS}`);
-  console.log(`  window       →  last ${Math.round(WINDOW / 3600e3)}h\n`);
-});
+  });
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const flag = (name, fallback) => { const index = argv.indexOf(name); return index < 0 ? fallback : argv[index + 1]; };
+  const port = Number(flag("--port", 8787));
+  const host = flag("--host", "127.0.0.1");
+  const match = String(flag("--window", "12h")).match(/^(\d+)\s*([hmd])$/);
+  const windowMs = match ? Number(match[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[match[2]] : 12 * 3600e3;
+  const feed = createFeed({ scanClaude: createClaudeScanner({ windowMs }) });
+  await feed.scan();
+  if (argv.includes("--once")) { await feed.flushEnrichment(); console.log(JSON.stringify(feed.snapshot().agents, null, 2)); return; }
+  const timer = setInterval(() => feed.scan().catch(() => console.error("Snapshot refresh failed; retaining the previous snapshot")), POLL_MS);
+  const server = createFeedServer(feed);
+  server.on("close", () => clearInterval(timer));
+  server.on("error", error => { clearInterval(timer); console.error(error.message); process.exitCode = 1; });
+  server.listen(port, host, () => {
+    console.log(`CottageCode → http://${host}:${port}`);
+    console.log(`Feed: ${feed.snapshot().source} (${feed.snapshot().agents.length} cottages); window ${Math.round(windowMs / 3600e3)}h`);
+    if (argv.includes("--debug")) console.log(JSON.stringify(feed.snapshot(), null, 2));
+  });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+}

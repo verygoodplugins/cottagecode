@@ -7,11 +7,11 @@ CottageCode is a viewer. Point the connect box at any URL that returns cottages 
 Either of these works:
 
 ```json
-{ "agents": [ /* cottages */ ], "source": "my-runner" }
+{ "agents": [], "source": "my-runner" }
 ```
 
 ```json
-[ /* cottages */ ]
+[]
 ```
 
 Optional envelope fields:
@@ -20,9 +20,18 @@ Optional envelope fields:
 |---|---|---|
 | `agents` | array | Preferred. Bare array is also fine. Empty `[]` is a valid live snapshot. |
 | `source` | string | Shown in the feed note (`live. 12 cottages (my-runner)`). |
+| `stale` | boolean | The producer is retaining old data after an adapter failure. The browser marks the snapshot stale and withholds PR readiness. |
+| `checkedAt` | number \| null | Producer's last successful snapshot time, in epoch milliseconds. Optional metadata. |
+| `errors` | string[] | Short source errors. Keep credentials and raw connection strings out of them. |
+| `relationships` | array | Explicit town-to-town connections. See [Relationships and handoffs](#relationships-and-handoffs). |
+| `handoffs` | array | Recorded cross-town handoffs, with stable IDs and timestamps. |
 | `live` / `settled` / `letters` / `liveCost` | number | Optional producer hints. The townmap recomputes these from `agents` and does not read the envelope copies. |
 
-CORS: the browser fetches the URL you type. Serve `Access-Control-Allow-Origin: *` (or your CottageCode origin) if the feed is on another host.
+An empty custom feed stays empty. The bundled same-origin `/agents` endpoint has an onboarding exception: an empty snapshot with `source: "none"` opens the demo until local agents appear. Demo history uses its own namespace.
+
+The browser polls every 1.5 seconds. HTTP failures keep the last snapshot from the same endpoint, marked stale; they never substitute another feed. The Node adapters refresh every 2 seconds. GitHub enrichment runs on its own slower cache.
+
+CORS: the browser fetches the URL entered in the connect box. Serve `Access-Control-Allow-Origin: *` (or the CottageCode origin) for feeds and activity endpoints on another host. The bundled server accepts read-only requests and defaults to `127.0.0.1:8787`.
 
 ## Cottage object
 
@@ -49,23 +58,204 @@ Full shape (everything else is optional):
 | `status` | string | One of `working` `idle` `blocked` `done` `offline`. |
 | `occupancy` | string | `live` `recent` `settled`. Optional. If omitted, the townmap classifies from `status` + timestamps (done ages out after ~2h). |
 | `parent` | string \| null | Id of the parent cottage. Kids render as sheds in the yard. |
-| `task` | string | What it's doing. |
+| `task` | string | Short description of the current work. Separate from the original request. |
+| `taskId` | string \| null | Explicit task/run identity. Changes reset the room and activity cache for that cottage. |
+| `sessionId` | string \| null | Session identity when available. A session can contain multiple tasks. |
+| `originalAsk` | string | Genuine user request, preserved separately from assistant updates. |
+| `originalAskSource` | string | `task` for an identified task, or `session` for the first request in a session whose task boundaries are unavailable. |
+| `originalAskTruncated` | boolean | The bundled adapters set this when the original request exceeds their 32,768-character limit. |
 | `activity` | string | Short live line under the status chip. |
+| `activityUrl` | string | Absolute or relative HTTP(S) activity endpoint, resolved against the feed URL. |
+| `events` | array | Optional inline activity events. When supplied, including `[]`, this takes precedence over `activityUrl`. |
+| `activitySource` | string | Source label for inline events. Falls back to the cottage's `source`, then the feed/demo label. |
+| `source` | string | Cottage adapter label, such as `claude` or `hub`. |
 | `worktree` | string | Short worktree / checkout label. |
 | `worktreePath` | string | Absolute path. Enables "open worktree" / copy path. |
 | `branch` | string | Shown on the branch post under the house. |
+| `repo` | string | Exact GitHub `owner/repo` identity for branch-based PR discovery. Never inferred from a town name. |
+| `defaultBranch` | string | Known repository default branch. That branch is excluded from PR discovery. |
 | `result` | string | Final summary when done. |
+| `artifacts` | array | `{ "url", "title" }` objects for the shelves and scrapbook. URLs must be absolute HTTP(S). |
 | `lastLine` | string | Latest log line / thought bubble fodder. |
 | `attention` | string | Why it's blocked. Shows up in Jack's letter pile. |
 | `handoffUrl` | string | Optional https handoff link. |
 | `model` | string | `opus` `sonnet` `haiku` `gpt` `local` `mlx` (or a string containing those). Roof flag color. |
 | `dispatchedBy` | string | Who sent it. |
-| `startedAt` | number | Epoch ms. |
-| `endedAt` | number | Epoch ms. |
-| `updatedAt` | number | Epoch ms. |
+| `taskStartedAt` | number \| null | Start of the identified task, in epoch milliseconds. |
+| `sessionStartedAt` | number \| null | Start of the enclosing session, in epoch milliseconds. |
+| `startedAt` | number \| null | Legacy start value, still accepted for occupancy. It does not replace the explicit task/session clocks. |
+| `endedAt` | number \| null | Known completion time. The task clock uses it to stop elapsed time for terminal tasks. |
+| `terminal` | boolean | Optional. Set when a terminal source record is presented as `blocked` for attention; the task clock stops at `endedAt`. |
+| `updatedAt` | number \| null | Time of the last signal. |
 | `tokens` | number | |
 | `cost` | number | USD for this run. |
-| `pr` | object | `{ "number", "url", "title", "state" }` where `state` is `none` \| `open` \| `merged`. |
+| `pr` | object | PR identity, state, and review evidence. See [Pull requests](#pull-requests). |
+| `interiorTheme` | string | Optional `hub`, `app`, `memory`, `vault`, or `neutral` furniture theme. `theme` is an accepted alias. |
+
+### Task and session boundaries
+
+Supply `taskId` and `taskStartedAt` only when the source identifies a task. A recent assistant response or file modification is not a new task start. Missing or invalid clocks show **Unavailable**; they are never filled with the current time.
+
+The local transcript adapter preserves the first genuine user request, excluding tool replies, runtime metadata, and compaction summaries. Explicit `taskId`/`runId` records establish task boundaries. Without them, `taskId` and `taskStartedAt` remain null, and `originalAskSource: "session"` labels the pinned note as the first request in that session. Assistant updates populate activity instead of replacing the request.
+
+### Activity
+
+The bundled service exposes:
+
+```text
+GET /agents/:id/activity
+GET /agents/:id/activity?after=EVENT_ID&limit=100
+GET /agents/:id/activity?before=EVENT_ID&limit=100
+```
+
+URL-encode the cottage ID and cursor values. A request with both `after` and `before` returns HTTP 400; an unknown cottage returns 404. `limit` defaults to 100 and is capped between 1 and 500.
+
+```json
+{
+  "events": [
+    {
+      "id": "run-42:tool:3",
+      "timestamp": 1789387200000,
+      "kind": "tool",
+      "text": "Read: src/feed.mjs"
+    },
+    {
+      "id": "run-42:result:4",
+      "timestamp": 1789387202000,
+      "kind": "result",
+      "text": "The activity tests passed.",
+      "url": "https://github.com/example/project/pull/42"
+    }
+  ],
+  "source": "claude-transcript",
+  "hasMore": false,
+  "cursor": "run-42:result:4"
+}
+```
+
+Events use stable string `id`, `timestamp` in epoch milliseconds or null, `kind`, and `text`. Optional `url` links to an artifact. Public kinds are `request`, `progress`, `summary`, `tool`, `result`, `status`, and `handoff`. Missing timestamps retain their source-relative position and display as unavailable.
+
+| Request | Page behavior |
+|---|---|
+| No cursor | Latest events, in chronological/source order. `hasMore` means older entries exist. |
+| `after` | Events after that ID, oldest first. Use the returned `cursor` for the next forward poll. `hasMore` means more forward entries exist. |
+| `before` | Older entries ending before that ID. Use the first returned event's ID to request the next older page. |
+
+An expired cursor sets `cursorReset: true`. For `after`, the service returns its latest retained page so the client can replace its old stream. An unknown `before` cursor returns an empty page. Sources can also return `stale: true`, an `error` summary, `checkedAt`, or `unavailable: true`. Unavailable activity is distinct from an agent having done no work.
+
+The bundled activity cache retains up to 2,000 events per task, with text previews capped at 1,200 characters. The browser retains up to 1,500 fetched journal entries per task. Inline `events` use the same event shape and should stay bounded.
+
+Send progress or reasoning **summaries that the agent emitted**, tool actions, and results. The bundled adapters exclude raw `thinking` and `redacted_thinking` blocks. Tool labels use the tool name and a short description/path; they do not dump entire argument objects. Public text and result previews still contain source content.
+
+### Pull requests
+
+Old `{ "number", "url", "title", "state" }` objects continue to work. Omitting `pr` means **unknown**. Explicit `{ "state": "none" }` means a confirmed absence. A PR mentioned in prose provides a possible identity only; even the word "merged" does not establish its state.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `number` | number \| null | Positive PR number. |
+| `url` | string | Absolute HTTP(S) `/owner/repo/pull/number` link. |
+| `title` | string | PR title. |
+| `state` | string | `none`, `open`, `merged`, `closed`, or `unknown`. |
+| `reviewState` | string | `active`, `waiting-codex`, `waiting-ci`, `blocked`, `ready`, or `unknown`. |
+| `labels` | array | Real label strings or `{ "name": "babysit:active" }` objects. |
+| `headSha` | string | Currently observed PR head. |
+| `reviewedHeadSha` | string | Head covered by recorded review/finalization evidence. |
+| `source` | string | Evidence source, such as `github`, `finalization`, or the feed's own adapter name. |
+| `checkedAt` | number \| null | Time the evidence was actually checked. Refresh it only after a successful check. |
+| `stale` | boolean | Evidence is out of date or its source failed. |
+| `reason` | string | Short explanation of uncertainty or failure. |
+| `isDraft` | boolean | A draft cannot be ready to merge. |
+| `repo` | string | Optional `owner/repo` identity when a number is known but no URL is supplied. |
+| `finalization` | object | Optional structured receipt, described below. |
+
+The dispatch stand and filters use these stages:
+
+| Stage | Evidence |
+|---|---|
+| `none` | Explicit absence of a PR |
+| `open` | Open PR without a babysit stage |
+| `active` | `babysit:active` |
+| `waiting-codex` | `babysit:waiting-codex` |
+| `waiting-ci` | `babysit:waiting-ci` |
+| `blocked` | `babysit:blocked` |
+| `ready` | Fresh, consistent readiness evidence for the current head |
+| `merged` | Structured or live merged state |
+| `closed` | Closed without merging |
+| `unknown` | Missing, contradictory, or unverified state |
+
+Exactly one recognized `babysit:*` label may describe the review stage. Multiple or unrecognized babysit labels make that stage unknown. Ready requires a current head and a verification time no more than 2 minutes old. Stale/future evidence, a draft, conflicting fields, or a known head change prevent readiness. Other stale states remain visible with their freshness marked.
+
+A structured `finalization` receipt may provide `status`, `terminalLabel`, `pullRequestNumber`, `pullRequestUrl`, `branchHeadSha`, and `checkedAt`. `branchHeadSha` is review evidence; it must not be copied into the currently observed `headSha`. Receipt-only readiness requires a matching current head. `status: "not_needed"` with no PR identity establishes `none`.
+
+The bundled GitHub adapter reads actual labels and tracks the head across an observed ready-label period. A head change under an unchanged label stays unverified until new evidence resolves it. Cached `observedReadyHeadSha` records that observation, not a review it performed. Normalized output also includes derived `stage` and `reviewUncertain`; producers do not need to supply those fields.
+
+Counts deduplicate canonical repository/PR identity across cottages and sheds. The newest observation wins; equally fresh conflicting observations count once as unknown. A number alone cannot identify a shared PR across repositories. Once observed, open PRs and known PR identities with temporarily unknown state keep their cottages visible after execution ends. Blocked PRs also create letters. Opening a parcel opens its link; the viewer never changes labels or merges.
+
+### Relationships and handoffs
+
+Supply connections explicitly in the envelope:
+
+```json
+{
+  "relationships": [
+    { "id": "hub-app", "from": "HubTown", "to": "AppTown", "label": "Application API" }
+  ],
+  "handoffs": [
+    {
+      "id": "handoff-42",
+      "from": "HubTown",
+      "to": "AppTown",
+      "timestamp": 1789387200000,
+      "agentId": "bolt-1",
+      "text": "The updated API contract is ready for the app.",
+      "url": "https://github.com/example/project/pull/42"
+    }
+  ]
+}
+```
+
+Relationship `from` and `to` must match town names in the current feed. Self-links, missing towns, and repeated undirected pairs are ignored. `id` and `label` are optional; the pair supplies a stable default ID.
+
+Handoffs require stable `id`, `from`, `to`, and an actual numeric `timestamp`. Optional `agentId`, `name`, `text`, and `url` attach the event to its cottage and artifact. Handoffs first seen within a minute of their recorded time animate a courier when both towns are present. Older events remain scrapbook entries. Activity events with `kind: "handoff"`, `from`, and `to` can also deliver handoffs. Neither roads nor handoffs are guessed from task prose.
+
+### Interiors and browser history
+
+The room and resident seed uses cottage `id` plus explicit `taskId`. Changing activity, cost, or timestamps leaves the room intact. Without task identity, the cottage keeps its seed. Town slots stay stable as feed entries arrive; larger towns gain annexes.
+
+Known themes map HubTown to `hub`, AppTown to `app`, MemTown to `memory`, and VaultTown to `vault`. `interiorTheme` can select one explicitly; unrecognized values use `neutral`. Every layout keeps the request, clock, workbench, review desk, shelves, and exit available through direct controls as well as movement.
+
+Themes decorate the whole room: AppTown has device racks, computers and phones; MemTown fills available wall spans with bookshelves; VaultTown has a collection of clocks, locks and repair tools. These decorations keep the authored walking routes and operational object positions intact.
+
+The noticeboard and scrapbook use browser `localStorage`, separated by feed endpoint and demo mode. They retain the latest 1,600 milestones and bounded last-observed task/PR states. A return visit compares the new snapshot to saved observations and timestamps changes when they are observed. First observations do not invent past task completions or review transitions. If storage is unavailable, recording continues in memory for that page.
+
+Replay steps through recorded milestones and highlights their cottages. It does not reconstruct activity from before observation began, beyond retained history, or while the page was absent. Original source timestamps remain available in the activity journal when the source supplies them.
+
+## Bundled service configuration
+
+| Variable | Default | Behavior |
+|---|---|---|
+| `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Directory scanned for local session JSONL. |
+| `AGENT_DB_PATH` | Unset | Optional readonly SQLite database containing `agent_runs`. |
+| `AGENT_STALE_THRESHOLD_MS` | `900000` | Hub running-task inactivity threshold, in milliseconds. |
+| `COTTAGE_GITHUB` | Enabled | Set to `0` to disable GitHub enrichment. |
+| `COTTAGE_HUB_URL` | Unset | AutoHub API base URL, optionally ending in `/v1`. Used when a Hub cottage has no local activity. |
+| `COTTAGE_HUB_TOKEN` | Unset | Optional server-side bearer token for the Hub timeline. Never returned to the browser. |
+
+GitHub enrichment uses the authenticated local `gh` CLI with read-only `pr view`, `pr list`, and `repo view` calls. It accepts an explicit GitHub.com PR link or exact repository/number. Branch discovery requires an exact repository and a non-default branch with one unambiguous same-repository PR match. The local adapter can resolve `owner/repo` from a worktree's GitHub `origin`; town names never supply repository identity.
+
+GitHub requests run in the background, at most 3 at a time, with a 30-second refresh interval and failure backoff from 30 seconds to 5 minutes. Failed refreshes retain old observations marked stale. Cold snapshots can contain unknown PRs while those queries finish. Existing custom JSON feeds provide their own PR metadata; the browser does not run `gh` against them.
+
+The optional Hub reader fetches `GET /v1/tasks/:id/timeline`, converts public event kinds, and maintains a bounded cache for forward polling. Local transcript activity takes precedence. A missing or failed timeline remains explicitly unavailable/stale.
+
+```bash
+npm start
+node src/feed.mjs --host 127.0.0.1 --port 8787 --window 24h
+node src/feed.mjs --once > snapshot.json
+npm test
+```
+
+`--window` accepts `m`, `h`, or `d` and defaults to `12h`. `--once` prints the initial agents array. `--debug` logs the snapshot at server startup.
 
 ## Status → townmap
 
@@ -74,8 +264,8 @@ Full shape (everything else is optional):
 | `working` | Chimney smoke. Villager at the bench. |
 | `idle` | Quiet cottage. Villager pacing. |
 | `blocked` | Red `!`. Counts as a letter if still live. |
-| `done` | Green check. Ages toward settled. |
-| `offline` | Greyed out. Usually settled / hidden. |
+| `done` | Green check. Ages toward settled unless a PR is outstanding. |
+| `offline` | Greyed out. Usually settled / hidden; an outstanding PR retains its cottage. |
 
 ## Towns
 
@@ -127,4 +317,4 @@ npx --yes http-server . -p 9999 --cors
 }
 ```
 
-Pause / wake / shut down in the panel are simulator-only. They never write back to your feed.
+**Pause feed** stops browser refreshes and the demo simulator. It never writes back to the feed or pauses real agents. Walking and direct inspector controls remain available.

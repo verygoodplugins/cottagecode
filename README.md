@@ -4,11 +4,11 @@
 
 ![CottageCode demo townmap with several towns of cottages and Bolt selected as working](docs/img/townmap-overview.png)
 
-CottageCode is a local townmap for agent fleets. Point it at any URL that returns cottages as JSON. The page ships with a demo town so you can poke around before you wire a real feed.
+CottageCode is a local townmap for agent fleets. Walk up to a cottage, lift its roof, and inspect the work inside. A pinned note holds the original request, the clock separates task and session time, and the workbench shows the agent's activity journal.
 
-Townmap is the atlas view, not a second logo. Projects land as towns (`HubTown`, `MemTown`, or `{Stem}Town` from a folder name). We do not hash strangers into four fake role lanes.
+Point it at any URL that returns cottages as JSON, or explore the built-in demo. Projects become towns (`HubTown`, `MemTown`, or `{Stem}Town` from a folder name). Townmap is the atlas view.
 
-Zero npm dependencies. Pixel canvas stays. No React rewrite on day one.
+Zero npm dependencies. Pixel canvas, native browser modules, and a small Node server.
 
 <p align="center">
   <img src="docs/img/chimney-smoke.gif" alt="Bolt cottage with chimney smoke while working" width="220" />
@@ -26,7 +26,27 @@ npm start
 
 Open [http://localhost:8787](http://localhost:8787). For the built-in demo town only: [http://localhost:8787/?demo=1](http://localhost:8787/?demo=1).
 
-That's it.
+Run the checks with `npm test`. With the Browser Hand CLI and Chrome extension available, `npm run test:browser` exercises the playable journey against a temporary local fixture feed.
+
+## 🚪 Visit a cottage
+
+Click the map to give it keyboard focus.
+
+| Control | Action |
+|---|---|
+| Arrow keys or WASD | Walk around town or inside a cottage |
+| E or Enter | Interact with a nearby door, bench, noticeboard, or room object |
+| Escape | Leave the cottage or bench while the map has focus |
+| Click a cottage or its roster button | Open its inspector without walking there |
+| Enter cottage / Leave cottage | Visit or exit using buttons |
+| Click a room object or inspector tab | Read the request, clock, journal, PR desk, or shelves |
+| Click a parcel | Open its PR when a URL is available |
+
+Rooms and residents are generated from cottage and task identity. Return visits keep the furniture in place. A new explicit task gets a new home. HubTown sets the cozy base with switchboards and pigeonholes. AppTown fills its desks with computers, phones and charging leads. MemTown lines its walls with bookshelves. VaultTown is a clock-and-lock repair shop, with pendulums, key racks and scattered repair tools. Unknown projects get neutral homes.
+
+Walk near a duck and it'll head for the pond. Cats and a goose roam too. **Sound starts off.** Enable it for footsteps, doors, nearby agent bleeps, and status alerts, with separate ambience and alert switches. Reduced-motion preferences are respected.
+
+Use **Follow from bench** to keep one cottage selected as its work updates. The noticeboard lists changes observed since the previous visit. The scrapbook stores up to 1,600 milestones per feed in this browser, including result snippets and artifact links. Replay steps through that recorded history; it cannot reconstruct unobserved work or expired source logs.
 
 ## 🔌 Cottage feed
 
@@ -51,32 +71,40 @@ Statuses the map understands: `working` · `idle` · `blocked` · `done` · `off
 | working | chimney smoke |
 | idle | quiet house |
 | blocked | red `!` (and a letter for you) |
-| done | green check, then ages out |
-| offline | grey / settled |
+| done | green check, then ages out unless a PR is outstanding |
+| offline | grey / settled unless a PR is outstanding |
 
 Roof flags: opus · sonnet · haiku · gpt · local · mlx.
 
-Optional fields cover worktrees, branches, PRs, cost, tokens, spawned sheds, and Jack's letter pile. Full schema: [`docs/COTTAGE_FEED.md`](docs/COTTAGE_FEED.md).
+Optional fields add task identity, the original request, timestamps, activity, worktrees, PR evidence, cost, tokens, and artifacts. Explicit project relationships draw signed paths. Recorded handoffs send couriers between towns. Full schema and examples: [`docs/COTTAGE_FEED.md`](docs/COTTAGE_FEED.md).
 
 ![Jack's letter pile listing blocked cottages](docs/img/letters-queue.png)
 
-Pause, wake, and shut down are **simulator-only**. They do not touch a live feed.
+**Pause feed** freezes browser refreshes and the demo simulator. It does not pause real agents. CottageCode never starts tasks, edits PRs, or merges them.
 
 ## 🧰 Bundled adapters
 
 The local process can also populate `/agents` without you writing a server:
 
-1. Readonly sqlite at `AGENT_DB_PATH` (an `agent_runs` table), if set
-2. Claude Code session jsonl under `~/.claude/projects` (or `CLAUDE_PROJECTS_DIR`)
-3. Demo town when both are empty, or when you open `/?demo=1`
+1. Readonly SQLite at `AGENT_DB_PATH` (an `agent_runs` table), if set
+2. Claude Code session JSONL under `~/.claude/projects` (or `CLAUDE_PROJECTS_DIR`)
+3. Cached, read-only GitHub metadata through an authenticated `gh` CLI
 
-Those are convenience adapters. The contract is the JSON feed.
+The bundled empty feed opens the demo until local cottages appear. `/?demo=1` selects the demo directly. Custom feeds can return an empty array as a valid live snapshot.
+
+Activity comes from local transcripts first. Set `COTTAGE_HUB_URL` to read AutoHub's task timeline when local activity is unavailable, and `COTTAGE_HUB_TOKEN` if that server requires a bearer token. The token stays in the Node process. Journals expose emitted progress summaries, tool labels, and result previews. Raw private thinking blocks are excluded.
+
+GitHub observations refresh in the background every 30 seconds, with bounded concurrency and backoff on failure. PR identity comes from an explicit link or an unambiguous repository and non-default branch. Missing access stays unknown. Set `COTTAGE_GITHUB=0` to disable GitHub queries.
 
 ```bash
 # bind / port / snapshot
 node src/feed.mjs --host 0.0.0.0 --port 8787
+node src/feed.mjs --window 24h
 node src/feed.mjs --once > snapshot.json
+COTTAGE_GITHUB=0 npm start
 ```
+
+Feed failures retain the last snapshot and mark it stale. Reconnecting restores live observations.
 
 ## 🗺️ Legend
 
@@ -85,11 +113,24 @@ node src/feed.mjs --once > snapshot.json
 | smoke | working |
 | `!` | blocked, needs you |
 | shed | spawned child agent |
-| yellow parcel | open PR |
-| green parcel | merged PR |
+| dispatch stand | PR state, separate from whether the agent is working |
 | mail | letters waiting on Jack's stoop |
 
-Settled cottages (old offline / finished ghosts) stay hidden until you flip **settled (N)**.
+| PR state | Meaning |
+|---|---|
+| No PR | Explicitly confirmed absence |
+| Opened | Open PR without a babysit stage |
+| Babysitting | `babysit:active` |
+| Codex review | `babysit:waiting-codex` |
+| Waiting CI | `babysit:waiting-ci` |
+| Blocked | `babysit:blocked`, with a letter for Jack |
+| Ready to merge | Fresh `babysit:ready` evidence for the current head |
+| Merged / Closed | Completed merge or closed without merging |
+| Unknown | Missing, conflicting, or unverified state |
+
+PR filters count shared pull requests once. The review desk shows the source, verification time, head, labels, and any uncertainty. Stale data or a known head change cannot declare a PR ready.
+
+Settled cottages stay hidden until **settled (N)** is enabled. Once observed, cottages with outstanding PRs stay on the map after execution finishes.
 
 ## License
 

@@ -7,6 +7,8 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { townName, worktreeOf } from "./towns.mjs";
+import { timestampMs } from "./activity.mjs";
+import { hasOutstandingPr } from "./pr.mjs";
 import {
   classifyOccupancy,
   inferPr,
@@ -22,9 +24,6 @@ import {
 const STALE_MS = Number(process.env.AGENT_STALE_THRESHOLD_MS || 15 * 60 * 1000);
 const DONE_AGE_MS = 30 * 60 * 1000;
 
-const SQLITE_TIMESTAMP_RE =
-  /^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
-
 export function hubDbPath() {
   const raw = process.env.AGENT_DB_PATH;
   if (!raw) return null;
@@ -32,21 +31,15 @@ export function hubDbPath() {
 }
 
 function parseDbTimestampMs(value) {
-  if (value === null || value === undefined || value === "") return NaN;
-  if (typeof value === "number") return value;
-  const str = String(value).trim();
-  const sqliteMatch = str.match(SQLITE_TIMESTAMP_RE);
-  if (sqliteMatch) {
-    return new Date(`${sqliteMatch[1]}T${sqliteMatch[2]}Z`).getTime();
-  }
-  return new Date(str).getTime();
+  return timestampMs(value) ?? NaN;
 }
 
 function parseContext(raw) {
   if (!raw) return {};
-  if (typeof raw === "object") return raw;
+  if (typeof raw === "object") return !Array.isArray(raw) ? raw : {};
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -135,7 +128,6 @@ function pickTask(row, ctx, worktree) {
   if (cr?.text && !isEmptyResult(cr.text)) {
     return String(cr.text).replace(/\s+/g, " ").trim().slice(0, 150);
   }
-  const presented = ctx.lifecycle?.execution?.presentedResult?.summary;
   const raw = row.task ? String(row.task).replace(/\s+/g, " ").trim() : "";
   if (
     raw &&
@@ -144,9 +136,6 @@ function pickTask(row, ctx, worktree) {
     !/^AutoJack was explicitly requested/i.test(raw)
   ) {
     return raw.slice(0, 150);
-  }
-  if (presented && !isEmptyResult(presented)) {
-    return String(presented).replace(/\s+/g, " ").trim().slice(0, 150);
   }
   if (worktree) return `in ${worktree}`;
   return raw.slice(0, 150) || "-";
@@ -196,8 +185,18 @@ function saneTime(ms, fallback = 0) {
   return ms;
 }
 
-function toCottage(row, now) {
-  const ctx = parseContext(row.context);
+export function toCottage(row, now = Date.now()) {
+  const ctx = { ...parseContext(row.context) };
+  const durableResult = parseContext(row.result);
+  const receipt = durableResult.finalization || ctx.finalization;
+  // Only carry PR evidence; never serialize the execution context or credentials.
+  if (receipt && typeof receipt === "object") {
+    ctx.finalization = Object.fromEntries([
+      "status", "pullRequestNumber", "pullRequestUrl", "branchHeadSha", "terminalLabel",
+    ].filter(key => typeof receipt[key] === "string" || typeof receipt[key] === "number").map(key => [key, receipt[key]]));
+    ctx.finalization.checkedAt = timestampMs(receipt.checkedAt) || timestampMs(row.completed_at);
+  }
+  if (durableResult.pullRequest && typeof durableResult.pullRequest === "object") ctx.pullRequest = durableResult.pullRequest;
   const project = projectFrom(row, ctx);
   const town = townName(project);
   const worktreePath = pickWorktreePath(ctx);
@@ -205,6 +204,12 @@ function toCottage(row, now) {
   const result = pickResult(row, ctx);
   const pr = inferPr(`${result} ${row.task || ""}`, ctx);
   const task = pickTask(row, ctx, worktree);
+  const externalSession = row.record_kind === "external_session" ||
+    (!row.record_kind && /external_agent_status|claude_hook|claude_code_status|codex_status/.test(ctx.source || ""));
+  const requestSpec = parseContext(row.request_spec);
+  const explicitRequest = ctx.originalAsk || requestSpec.request || ctx.customerRequest?.text || ctx.customerRequest || ctx.originalTask;
+  const original = typeof explicitRequest === "string" ? explicitRequest.trim() : !externalSession ? String(row.task || "").trim() : "";
+  const originalAsk = original && !isEmptyResult(original) && !isWorktreeSlug(original) ? original.slice(0, 32768) : "";
   const attention = row.attention_message
     ? String(row.attention_message).replace(/\s+/g, " ").trim().slice(0, 240)
     : "";
@@ -228,7 +233,17 @@ function toCottage(row, now) {
     town,
     role: town,
     status: mapHubStatus(row, now),
+    terminal: terminalHubRun(row),
     task,
+    taskId: externalSession ? null : row.id,
+    originalAsk,
+    originalAskSource: externalSession ? "session" : "task",
+    originalAskTruncated: original.length > 32768,
+    taskStartedAt: externalSession ? null : timestampMs(row.started_at),
+    sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) || (externalSession ? started || null : null),
+    activityUrl: `/agents/${encodeURIComponent(row.id)}/activity`,
+    repo: [ctx.githubAutoJackRequest?.repo, ctx.repo, ctx.repository].find(value => typeof value === "string" && /^[\w.-]+\/[\w.-]+$/.test(value)) || "",
+    defaultBranch: typeof ctx.defaultBranch === "string" ? ctx.defaultBranch : "",
     worktree,
     worktreePath,
     result,
@@ -255,42 +270,131 @@ function toCottage(row, now) {
   return cottage;
 }
 
-export function readHubAgents({ limit = 80 } = {}) {
-  const dbPath = hubDbPath();
-  if (!dbPath) return { ok: false, missing: true, agents: [], keys: new Set() };
+function activeRow(row) {
+  return ["running", "awaiting_input", "awaiting_review", "needs_input", "pending", "queued"].includes(String(row.status || "").toLowerCase());
+}
+
+function terminalHubRun(row) {
+  if (row.archived) return true;
+  return ["completed", "failed", "cancelled", "interrupted", "stale"].includes(String(row.status || "").toLowerCase());
+}
+
+function terminalPrPlaceholder(ctx, durableResult) {
+  const prValues = [ctx.pr, ctx.pullRequest, durableResult.pr, durableResult.pullRequest];
+  const receipts = [ctx.finalization, ctx.pr?.finalization, ctx.pullRequest?.finalization,
+    durableResult.finalization, durableResult.pr?.finalization, durableResult.pullRequest?.finalization];
+  return prValues.some(value => ["none", "merged", "closed"].includes(String(value?.state || "").toLowerCase())) ||
+    receipts.some(value => ["not_needed", "none", "merged", "closed"].includes(String(value?.status || "").toLowerCase()));
+}
+
+/**
+ * A retention row must survive the same parsing used by the public feed. SQL
+ * only finds plausible structured candidates; this second pass rejects null,
+ * malformed, and terminal placeholders before they receive cap priority.
+ */
+function hasRetainedPrEvidence(row, cottage, now) {
+  const ctx = parseContext(row.context);
+  const durableResult = parseContext(row.result);
+  const pr = cottage.pr || {};
+  return !terminalPrPlaceholder(ctx, durableResult) &&
+    ["context", "finalization"].includes(pr.source) &&
+    Boolean(pr.number || pr.url) && hasOutstandingPr(cottage, now);
+}
+
+export function readHubAgents({ limit = 80, dbPath = process.env.AGENT_DB_PATH || null } = {}) {
+  if (!dbPath) return { ok: true, missing: true, agents: [], keys: new Set() };
 
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const columns = new Set(db.prepare("PRAGMA table_info(agent_runs)").all().map(column => column.name));
+    const optional = ["record_kind", "request_spec", "result"].map(name => columns.has(name) ? name : `NULL AS ${name}`).join(", ");
     const cap = Math.min(Math.max(limit, 1), 500);
-    const rows = db
-      .prepare(
-        `SELECT
-           id, agent, status, task, user, platform, model, parent_id, session_id,
-           context, queued_at, started_at, completed_at, updated_at, archived,
-           input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
-           total_cost, error, result_summary, attention_type, attention_message
-         FROM agent_runs
-         WHERE updated_at > datetime('now', '-24 hours')
-            OR status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')
-         ORDER BY
-           CASE
-             WHEN status IN ('running', 'awaiting_input', 'needs_input', 'pending', 'queued', 'awaiting_review') THEN 0
-             ELSE 1
-           END,
-           updated_at DESC
-         LIMIT ?`
-      )
-      .all(cap);
+    const numberAt = (column, path) => `CAST(json_extract(${column}, '${path}') AS INTEGER) > 0`;
+    const urlAt = (column, path) => `json_extract(${column}, '${path}') LIKE '%/pull/%'`;
+    const structuredIdentity = column => [
+      numberAt(column, "$.finalization.pullRequestNumber"), urlAt(column, "$.finalization.pullRequestUrl"),
+      numberAt(column, "$.pr.number"), urlAt(column, "$.pr.url"),
+      numberAt(column, "$.pr.finalization.pullRequestNumber"), urlAt(column, "$.pr.finalization.pullRequestUrl"),
+      numberAt(column, "$.pullRequest.number"), urlAt(column, "$.pullRequest.url"),
+      numberAt(column, "$.pullRequest.finalization.pullRequestNumber"), urlAt(column, "$.pullRequest.finalization.pullRequestUrl"),
+      `(${numberAt(column, "$.githubAutoJackRequest.targetNumber")} AND lower(json_extract(${column}, '$.githubAutoJackRequest.targetType')) IN ('pull_request', 'pr', 'pull-request'))`,
+      urlAt(column, "$.githubAutoJackRequest.targetUrl"),
+    ].join(" OR ");
+    // Do not use broad string matching here: a JSON key with null data is not
+    // PR evidence. Final parsing below establishes the actual state.
+    const possibleRetainedPr = `(
+      json_valid(context) AND (${structuredIdentity("context")})
+      ${columns.has("result") ? `OR (json_valid(result) AND (${structuredIdentity("result")}))` : ""}
+    )`;
+    const activeStates = "status IN ('running', 'awaiting_input', 'awaiting_review', 'needs_input', 'pending', 'queued')";
+    const select = `SELECT
+       id, agent, status, task, user, platform, model, parent_id, session_id,
+       context, queued_at, started_at, completed_at, updated_at, archived,
+       input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
+       total_cost, error, result_summary, attention_type, attention_message,
+       ${optional}
+     FROM agent_runs`;
+    // The normal slice stays bounded. Potential retention rows are read
+    // separately so a null or terminal placeholder cannot evict a real PR
+    // before Node has parsed it.
+    const regularRows = db.prepare(
+      `${select}
+       WHERE updated_at > datetime('now', '-24 hours')
+          OR ${activeStates}
+          OR context LIKE '%"babysitHandoff"%'
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    ).all(cap);
+    const candidatePageSize = Math.min(Math.max(cap, 32), 200);
+    const candidates = db.prepare(
+      `${select}
+       WHERE ${possibleRetainedPr}
+       ORDER BY updated_at DESC
+       LIMIT ? OFFSET ?`
+    );
+    const selected = new Map();
+    for (const row of regularRows) selected.set(row.id, { row, regular: true, candidate: false });
 
     const now = Date.now();
+    // There can be arbitrarily many terminal or malformed structured records.
+    // Parse bounded pages until the resulting view has enough real outstanding
+    // PRs to fill every non-active slot, without materializing that history.
+    const retainedSlots = Math.max(0, cap - regularRows.filter(activeRow).length);
+    let retainedCandidates = 0;
+    let offset = 0;
+    while (retainedCandidates < retainedSlots) {
+      const page = candidates.all(candidatePageSize, offset);
+      if (!page.length) break;
+      offset += page.length;
+      for (const row of page) {
+        const cottage = toCottage(row, now);
+        if (!hasRetainedPrEvidence(row, cottage, now)) continue;
+        const prior = selected.get(row.id);
+        selected.set(row.id, { row, cottage, regular: prior?.regular || false, candidate: true });
+        retainedCandidates += 1;
+      }
+      if (page.length < candidatePageSize) break;
+    }
+
+    const retained = [...selected.values()].map(item => {
+      const cottage = item.cottage || toCottage(item.row, now);
+      return { ...item, cottage, retained: item.candidate && hasRetainedPrEvidence(item.row, cottage, now) };
+    }).filter(item => item.regular || item.retained).sort((left, right) => {
+      const rank = item => activeRow(item.row) ? 0 : item.retained ? 1 : 2;
+      return rank(left) - rank(right) || parseDbTimestampMs(right.row.updated_at) - parseDbTimestampMs(left.row.updated_at);
+    }).slice(0, cap);
+
     const keys = new Set();
-    const agents = rows.map((row) => {
+    const links = new Map();
+    const agents = retained.map(({ row, cottage }) => {
       const ctx = parseContext(row.context);
-      for (const k of hubDedupKeys(row, ctx)) keys.add(k);
-      return toCottage(row, now);
+      const related = hubDedupKeys(row, ctx);
+      links.set(row.id, related);
+      for (const key of related) keys.add(key);
+      return cottage;
     });
-    return { ok: true, dbPath, agents, keys };
+    return { ok: true, dbPath, agents, keys, links };
   } catch (err) {
     return { ok: false, error: err.message, agents: [], keys: new Set() };
   } finally {
