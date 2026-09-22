@@ -259,3 +259,11 @@ test('canonical inventory rejects nested stale controls before a write',async()=
   assert.equal(stale.calls.length,1,'fresh detail is inspected but no POST occurs');
   assert.equal(stale.messenger.capability({...inventory,freshness:{isStale:true}}).available,false);
 });
+
+test('freshly pending canonical input cannot receive a redirect from an older running snapshot',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true}}};
+  const pending=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true},attentionType:'question',attentionMessage:'Which scope should I use?'}});
+  const sent=await pending.messenger.send(inventory,message);
+  assert.equal(sent.status,409);assert.equal(sent.body.delivery,'not_sent');
+  assert.equal(pending.calls.length,1,'only verifies detail; never redirects through a new question');
+});

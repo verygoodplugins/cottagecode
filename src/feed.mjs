@@ -426,26 +426,31 @@ export function createFeed({
     async getActivity(id, options = {}) {
       let agent = cache.find(cottage => cottage.id === id);
       if (!agent) return null;
-      let refreshedDetail = false;
+      let refreshedDetail = false, detailFailed = false;
+      const activityResponse = page => detailFailed ? {
+        ...page, stale: true, error: "Hub task detail temporarily unavailable",
+        inputRequest: page.inputRequest ? {...page.inputRequest,stale:true} : null,
+        ...(page.cursorReset && !page.events?.length ? {cursorReset:false,cursor:options.after || options.before || null} : {}),
+      } : page;
       const inputForActivity = () => refreshedDetail ? normalizeInputRequest(agent.inputRequest) : currentInputRequest(agent);
       if (hubInventory.configured && typeof hubInventory.detail === "function") {
         // Detail serves this activity request; only scans replace enriched inventory.
         try { agent = { ...agent, ...await hubInventory.detail(id) }; refreshedDetail = true; }
-        catch { return {...pageActivity([], options),todos:normalizeTodos(agent.todos),inputRequest:inputForActivity(),stale:true,error:"Hub task detail temporarily unavailable"}; }
+        catch { detailFailed = true; }
       }
       const local = activity.get(id) || [];
       if (local.length) {
         const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"
           ? rememberActivityTodos(agent, await timeline.readTodos(agent.id))
           : normalizeTodos(agent.todos);
-        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: inputForActivity(), ...(stale ? { stale: true } : {}) };
+        return activityResponse({ ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: inputForActivity(), ...(stale ? { stale: true } : {}) });
       }
       if (agent.source === "hub" && timeline.configured) {
         const result = await timeline.read(agent.id, options);
         const todos = rememberActivityTodos(agent, result.todos);
-        return { ...result, todos, inputRequest: inputForActivity() };
+        return activityResponse({ ...result, todos, inputRequest: inputForActivity() });
       }
-      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: inputForActivity(), unavailable: true };
+      return activityResponse({ ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: inputForActivity(), unavailable: true });
     },
   };
 }

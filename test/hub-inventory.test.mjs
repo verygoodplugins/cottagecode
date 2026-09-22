@@ -75,3 +75,21 @@ test('activity detail refresh preserves the enriched feed and returns the curren
   assert.deepEqual(feed.snapshot(),before,'activity polling does not replace enriched inventory state');
   assert.equal(activity.inputRequest.id,'new-question');
 });
+
+test('detail failure keeps cached journal pages and marks the input evidence stale',async()=>{
+  const {pageActivity}=await import('../src/activity.mjs');
+  const {applyActivityPage}=await import('../src/observatory.mjs');
+  let failed=false,reads=0;
+  const raw={...toInventoryCottage(task('canonical'),now),inputRequest:{id:'q',kind:'question',prompt:'Proceed?',questions:[]}};
+  const events=[{id:'event-1',kind:'progress',text:'Retained progress',timestamp:now}];
+  const inventory={configured:true,read:async()=>({ok:true,agents:[raw],keys:new Set(),links:new Map()}),detail:async()=>{if(failed)throw new Error('detail unavailable');return raw;}};
+  const feed=createFeed({hubInventory:inventory,resolveRepos:async a=>a,enrich:async a=>a,timeline:{configured:true,read:async(id,options)=>{reads++;return pageActivity(events,options);}},now:()=>now});
+  await feed.scan();
+  const cache={events:[],cursor:null};applyActivityPage(cache,await feed.getActivity('canonical'));
+  failed=true;
+  const next=await feed.getActivity('canonical',{after:'event-1'});
+  assert.equal(next.stale,true);assert.equal(next.inputRequest.stale,true);
+  assert.equal(next.cursor,'event-1');assert.notEqual(next.cursorReset,true);
+  applyActivityPage(cache,next);
+  assert.deepEqual(cache.events,events);assert.equal(reads,2);
+});

@@ -127,7 +127,7 @@ export function createHubMessenger({
       if(!response.ok)return rejected(502,'AutoHub could not verify the current task. Nothing was sent.');
       const task=await response.json(),context=parse(task.context),execution=context.lifecycle?.execution||{};
       const canonical=Object.hasOwn(agent.conversationTarget,'controlTargetId');
-      const current={...agent,conversationTarget:{taskId:task.id,taskStatus:task.normalizedStatus || task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection, ...(canonical ? {controlTargetId:task.controlTargetId ?? null,capabilities:task.capabilities || {}} : {})}};
+      const current={...agent,inputRequest:inputRequestFromHub(task),freshness:task.freshness,isStale:task.isStale,conversationTarget:{taskId:task.id,taskStatus:task.normalizedStatus || task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection, ...(canonical ? {controlTargetId:task.controlTargetId ?? null,capabilities:task.capabilities || {}} : {})}};
       if(task.id!==agent.taskId||task.isStale||task.freshness?.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
       const verified=capability(current);
       if(!verified.available||verified.mode!==supported.mode|| (supported.mode==='respond'&&task.canRespond===false))return rejected(409,'The task’s input state changed. Refresh before sending.');
