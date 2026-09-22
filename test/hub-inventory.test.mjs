@@ -63,3 +63,15 @@ test('canonical result links populate the existing artifact shelves contract',()
     {url:'https://github.com/acme/repo/pull/1',title:'Pull request'},
   ]);
 });
+
+test('activity detail refresh preserves the enriched feed and returns the current question',async()=>{
+  const raw=toInventoryCottage(task('canonical'),now);
+  const question={id:'new-question',kind:'question',prompt:'Choose scope',detail:'',questions:[]};
+  const inventory={configured:true,read:async()=>({ok:true,agents:[raw],keys:new Set(),links:new Map()}),detail:async()=>({...raw,activity:'Waiting for input',inputRequest:question,repo:'',pr:{state:'unknown'}})};
+  const feed=createFeed({hubInventory:inventory,resolveRepos:async agents=>agents.map(agent=>({...agent,repo:'acme/repo'})),enrich:async agents=>agents.map(agent=>({...agent,pr:{state:'ready',url:'https://github.com/acme/repo/pull/1',checkedAt:now}})),timeline:{configured:true,read:async()=>({events:[],source:'hub:claude-transcript'})},now:()=>now});
+  await feed.scan();
+  const before=structuredClone(feed.snapshot());
+  const activity=await feed.getActivity('canonical');
+  assert.deepEqual(feed.snapshot(),before,'activity polling does not replace enriched inventory state');
+  assert.equal(activity.inputRequest.id,'new-question');
+});
