@@ -38,7 +38,7 @@ export function plotAgentsForLayout(agents = []) {
     groups.get(key).push(agent);
   }
 
-  for (const members of groups.values()) {
+  for (const [key, members] of groups.entries()) {
     if (members.length === 1) {
       result.push({ ...members[0], roommates: [], plotKey: members[0].id });
       continue;
