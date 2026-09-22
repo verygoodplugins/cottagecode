@@ -1,6 +1,8 @@
 /** Stable plots: a growing town gets an annex instead of moving existing homes. */
-export function createTownLayout({columns=4, rows=2, houseWidth=54, houseHeight=66, gapX=26, gapY=70, margin=30, road=48, pad=18, signHeight=32}={}) {
-  const slots = new Map(), blocks = [], byTown = new Map(), childSlots=new Map(), parentCounts=new Map();
+export function createTownLayout(options={},seed=null) {
+  const {columns=4, rows=2, houseWidth=54, houseHeight=66, gapX=26, gapY=70, margin=30, road=48, pad=18, signHeight=32}=options;
+  const slots = new Map(seed?.slots), blocks = (seed?.blocks||[]).map(b=>({...b})), byTown = new Map(), childSlots=new Map(seed?.childSlots), parentCounts=new Map(seed?.parentCounts);
+  for(const block of blocks){const pages=byTown.get(block.key)||[];pages.push(block);byTown.set(block.key,pages);}
   const width = columns * (houseWidth + gapX) - gapX + pad*2;
   const height = signHeight + rows * (houseHeight+gapY) + pad*2;
   const capacity=columns*rows;
@@ -24,7 +26,7 @@ export function createTownLayout({columns=4, rows=2, houseWidth=54, houseHeight=
     return slot;
   }
   return {
-    update(agents) {
+    update(agents,{trimEmptyBlocks=false}={}) {
       const ids=new Set(agents.map(a=>a.id));
       const slotKeys=new Set([...slots.keys()]);
       for(const a of agents){
@@ -32,13 +34,18 @@ export function createTownLayout({columns=4, rows=2, houseWidth=54, houseHeight=
       }
       const roots=agents.filter(a=>!a.parent||!ids.has(a.parent)||childSlots.get(a.id)>=3||slotKeys.has(a.plotKey||a.id)||slots.has(a.id));
       const plots=roots.map(a=>({...allocate(a),agent:a}));
-      const n=Math.max(1,blocks.length);
-      return {plots,shedSlots:Object.fromEntries(childSlots),blocks:blocks.map(b=>({...b})),width:margin*2+2*width+road,
+      const occupied=new Set(plots.map(p=>p.blockId));
+      const shownBlocks=trimEmptyBlocks?blocks.filter(b=>occupied.has(b.id)):blocks;
+      const n=Math.max(1,...shownBlocks.map(b=>b.row*2+b.col+1));
+      return {plots,shedSlots:Object.fromEntries(childSlots),blocks:shownBlocks.map(b=>({...b})),width:margin*2+2*width+road,
         height:margin*2+Math.ceil(n/2)*height+(Math.ceil(n/2)-1)*road,
         districtWidth:width,roadX:margin+width,
         roadYs:Array.from({length:Math.ceil(n/2)},(_,i)=>margin+height+i*(height+road)),
         columns};
     },
+    // History can grow a separate map from these exact live positions without
+    // reserving hundreds of empty slots for the next live arrival.
+    fork(){return createTownLayout(options,{slots,blocks,childSlots,parentCounts});},
     reset(){ slots.clear();blocks.length=0;byTown.clear();childSlots.clear();parentCounts.clear(); }
   };
 }

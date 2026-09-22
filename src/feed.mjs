@@ -354,8 +354,9 @@ export function createFeed({
     });
     for (const agent of claude.agents) if (!suppressedLocalIds.has(agent.id)) combined.push({ ...agent });
     const seen = new Set(combined.map(agent => agent.id));
-    // A live PR outlives a transcript window or DB scan window.
-    for (const old of cache) if (!seen.has(old.id) && hasOutstandingPr(old, now())) combined.push({ ...old, status: "offline" });
+    // A live PR outlives standalone scan windows. Shared Hub membership is
+    // authoritative, including removals when a task is archived upstream.
+    for (const old of cache) if (!hubInventory.configured && !seen.has(old.id) && hasOutstandingPr(old, now())) combined.push({ ...old, status: "offline" });
     for (const agent of combined) {
       const stored = remoteTodos.get(`${agent.id}\n${agent.taskId || ""}\n${agent.sessionId || ""}`);
       const supplied = normalizeTodos(agent.todos);
@@ -365,7 +366,13 @@ export function createFeed({
       if (agent.inputRequest && nextErrors.length) agent.inputRequest = { ...agent.inputRequest, stale: true };
     }
     let enriched = combined;
-    try { enriched = await enrich(await resolveRepos(combined)); }
+    try {
+      // Historical inventories can contain hundreds of old PRs. Keep their
+      // supplied evidence without spending live GitHub polling on hidden work.
+      const current = hubInventory.configured ? combined.filter(agent => agent.inventoryScope !== "history") : combined;
+      const observations = new Map((await enrich(await resolveRepos(current))).map(agent => [agent.id, agent]));
+      enriched = combined.map(agent => observations.get(agent.id) || agent);
+    }
     catch { nextErrors.push("PR metadata is temporarily unavailable"); }
     cache = stampOccupancy(sortCottages(enriched), now());
     // Retain activity for retained PR cottages; discard unrelated old sessions.

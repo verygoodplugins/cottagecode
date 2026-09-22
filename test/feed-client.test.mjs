@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {feedEnvelope,normalizeCottage,mergeActivity,activityAddress,elapsedMs} from '../src/feed-client.mjs';
+import {feedEnvelope,normalizeCottage,isCottageVisible,feedStatusNote,mergeActivity,activityAddress,elapsedMs} from '../src/feed-client.mjs';
 test('bare and wrapped feeds are compatible but missing agents is invalid',()=>{
   assert.deepEqual(feedEnvelope([]).agents,[]);assert.equal(feedEnvelope({agents:[],source:'custom'}).source,'custom');
   assert.throws(()=>feedEnvelope({source:'oops'}));
@@ -40,4 +40,39 @@ test('terminal attention keeps its known elapsed duration after normalizing',()=
   const cottage=normalizeCottage({taskStartedAt:start,status:'blocked',terminal:true,endedAt:start+1000},0,{town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'});
   assert.equal(cottage.terminal,true);
   assert.equal(elapsedMs(cottage,start+9000),1000);
+});
+test('Hub history stays settled even when it retains an unresolved PR link',()=>{
+  const now=1700000000000;
+  const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live',now};
+  const pr={url:'https://github.com/example/repo/pull/42',state:'unknown'};
+  const history=normalizeCottage({id:'history',inventoryScope:'history',occupancy:'live',pr},0,options);
+  assert.equal(history.occupancy,'settled');
+  assert.equal(history.pr.url,pr.url);
+  assert.equal(isCottageVisible(history,{now}),false);
+  assert.equal(isCottageVisible(history,{showSettled:true,now}),true);
+  assert.equal(isCottageVisible(history,{interiorId:'history',now}),true);
+  assert.equal(isCottageVisible(history,{interiorId:'another-cottage',now}),false);
+});
+test('Hub dashboard occupancy remains authoritative while standalone PRs stay visible',()=>{
+  const now=1700000000000;
+  const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'settled',now};
+  const pr={url:'https://github.com/example/repo/pull/42',state:'open',checkedAt:now};
+  const dashboard=normalizeCottage({id:'recent',inventoryScope:'dashboard',occupancy:'recent',pr},0,options);
+  const standalone=normalizeCottage({id:'standalone',occupancy:'settled',pr},1,options);
+  assert.equal(dashboard.occupancy,'recent');
+  assert.equal(isCottageVisible(dashboard,{now}),true);
+  const undated=normalizeCottage({id:'undated',inventoryScope:'dashboard',status:'offline'},2,options);
+  assert.equal(undated.occupancy,'recent');assert.equal(isCottageVisible(undated,{now}),true);
+  assert.equal(standalone.occupancy,'live');
+  assert.equal(isCottageVisible(standalone,{now}),true);
+});
+test('feed note separates live and recent cottages from historical inventory',()=>{
+  const agents=[
+    ...Array.from({length:19},(_,i)=>({id:`dashboard-${i}`,inventoryScope:'dashboard',occupancy:i%2?'live':'recent'})),
+    ...Array.from({length:521},(_,i)=>({id:`history-${i}`,inventoryScope:'history',occupancy:'settled',pr:{url:'https://github.com/example/repo/pull/42'}})),
+  ];
+  assert.equal(feedStatusNote(agents,{source:'hub'}),'AutoHub · 19 live + recent · 521 settled');
+  assert.equal(feedStatusNote(agents,{source:'hub+claude',stale:true}),'Stale snapshot · AutoHub + Claude sessions · 19 live + recent · 521 settled');
+  assert.equal(feedStatusNote([],{source:'claude'}),'Claude sessions · 0 live + recent · 0 settled');
+  assert.equal(feedStatusNote([]),'Custom feed · 0 live + recent · 0 settled');
 });

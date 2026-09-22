@@ -57,6 +57,7 @@ Full shape (everything else is optional):
 | `role` | string | Fallback for `town` if `town` is missing. |
 | `status` | string | One of `working` `idle` `blocked` `done` `offline`. |
 | `occupancy` | string | `live` `recent` `settled`. Optional. If omitted, the townmap classifies from `status` + timestamps (done ages out after ~2h). |
+| `inventoryScope` | string | Optional canonical Hub membership: `dashboard` keeps Live + recent tasks visible; `history` keeps older tasks settled, including those with historical PR links. Omit for standalone/custom classification. |
 | `parent` | string \| null | Id of the parent cottage. Kids render as sheds in the yard. |
 | `task` | string | Short description of the current work. Separate from the original request. |
 | `taskId` | string \| null | Explicit task/run identity. Changes reset the room and activity cache for that cottage. |
@@ -447,8 +448,18 @@ npx --yes http-server . -p 9999 --cors
 
 ### Shared Hub inventory mode
 
-The Node process caches successful inventory reads for five seconds; it follows
-all cursor pages before replacing a snapshot. Failed pages keep the previous
+The Node process caches dashboard reads for five seconds and history for one
+minute, using up to 500 tasks per page. It allows 45 seconds for a Hub request
+to finish during database contention instead of abandoning and requeuing it.
+It follows
+all cursor pages for both `history` and `dashboard` before replacing a snapshot.
+Dashboard membership controls the default map, matching the voice TUI's
+Live + recent inventory across all towns. Remaining history is available through
+the settled toggle. External children excluded by the Hub dashboard retain their
+parent identities in history; historical PR links do not override this membership.
+Background GitHub enrichment is reserved for dashboard tasks; history retains
+the PR evidence supplied by the Hub without polling hundreds of old links.
+Failed pages in either scope keep the previous
 complete snapshot and mark the feed stale. `id`, `parent`, and `taskId` retain
 Hub canonical task identities, including observed external sessions. Their
 `sessionId` stays separate. Town labels still derive from recorded project
