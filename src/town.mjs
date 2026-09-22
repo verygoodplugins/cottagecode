@@ -1640,12 +1640,16 @@ function layout(){
     });
     return {residents,hostById,forLayout};
   };
-  const current=prepare(layoutCottages(agents,{interiorId:showSettled?null:observatory?.state.interiorId}));
+  const current=prepare(layoutCottages(agents));
   const options={trimEmptyBlocks:agents.some(a=>a.inventoryScope)};
   const liveWorld=stableLayout.update(current.forLayout,options);
   if(showSettled)historyLayout??=stableLayout.fork();else historyLayout=null;
-  const {residents,hostById,forLayout}=showSettled?prepare(agents):current;
-  const world=showSettled?historyLayout.update(forLayout,options):liveWorld;
+  const {residents,hostById,forLayout}=showSettled?prepare(agents):
+    prepare(layoutCottages(agents,{interiorId:observatory?.state.interiorId}));
+  // An occupied historical room needs an exit plot while hidden, but visiting
+  // it must never reserve capacity in the live village's permanent registry.
+  const world=showSettled?historyLayout.update(forLayout,options):
+    residents.length>current.residents.length?stableLayout.fork().update(forLayout,options):liveWorld;
   const styles=districtsFrom(residents);
   TOWNS=world.blocks.map(b=>({...styles.find(d=>d.key===b.key)||FALLBACK_TOWN,key:b.key,label:b.key.toUpperCase()+(b.page?" ANNEX":"")}));
   DR=world.blocks;sceneDistricts=DR;

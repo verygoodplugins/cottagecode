@@ -10,8 +10,11 @@ export function roommateKey(agent) {
   return isAbsolutePath(path) ? path : "";
 }
 
-/** Stable plot anchor: earliest id. Status and children must not move the cottage. */
+/** Dashboard members host shared cottages; earliest id breaks ties deterministically. */
 function preferHost(a, b) {
+  const leftDashboard = a?.inventoryScope === "dashboard";
+  const rightDashboard = b?.inventoryScope === "dashboard";
+  if (leftDashboard !== rightDashboard) return leftDashboard ? a : b;
   const left = String(a?.id || "");
   const right = String(b?.id || "");
   return left <= right ? a : b;

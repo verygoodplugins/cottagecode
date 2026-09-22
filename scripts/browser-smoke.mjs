@@ -246,6 +246,7 @@ try{
   assert.ok(compact.height<1000);assert.deepEqual(compact.plot.roommates,[]);
   await click('#settled');
   await until('document.querySelectorAll(\'#cottage-list button\').length===502','Settled toggle did not expose canonical history');
+  assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'current\').roommates'),['archived-0'],'The current task remains the shared-worktree host while history is visible');
   assert.equal(await evaluate('document.querySelector(\'[data-pr="blocked"] span\').textContent'),'500');
   await click('[data-pr="blocked"]');
   await click('#settled');
@@ -264,6 +265,9 @@ try{
   await click('#settled');
   await key('Escape');
   assert.equal(await evaluate('window.cottageObservatory.state.player.y<window.cottageState().height'),true,'Leaving a hidden historical cottage must return Jack inside the compact village');
+  agents.push(...Array.from({length:6},(_,i)=>({...agents.find(a=>a.id==='current'),id:'later-'+i,worktreePath:'/fixture/later/'+i})));
+  await until('window.cottageState().plots.length===9','Later dashboard arrivals did not get plots after the historical visit');
+  assert.equal(await evaluate('window.cottageState().height'),compact.height,'Visiting history must not consume the eight live HubTown slots');
   pass('canonical live inventory keeps history out of plots, selection and PR counts; settled toggle restores stable homes');
   await browser('screenshot');
   process.stdout.write('Browser journey passed. Fixture: '+url+'\n');
