@@ -31,7 +31,7 @@ export function plotAgentsForLayout(agents = []) {
   for (const agent of candidates) {
     const key = roommateKey(agent);
     if (!key) {
-      result.push({ ...agent, roommates: [] });
+      result.push({ ...agent, roommates: [], plotKey: agent.id });
       continue;
     }
     if (!groups.has(key)) groups.set(key, []);
@@ -40,14 +40,15 @@ export function plotAgentsForLayout(agents = []) {
 
   for (const members of groups.values()) {
     if (members.length === 1) {
-      result.push({ ...members[0], roommates: [] });
+      result.push({ ...members[0], roommates: [], plotKey: members[0].id });
       continue;
     }
     const host = members.reduce(preferHost);
     const roommates = members
       .filter((m) => m.id !== host.id)
       .sort((a, b) => String(a.id).localeCompare(String(b.id)));
-    result.push({ ...host, roommates });
+    // Stable slot identity survives host membership churn.
+    result.push({ ...host, roommates, plotKey: "wt:" + key });
   }
 
   return result;
@@ -85,4 +86,20 @@ export function householdWorking(agent) {
   if (!agent) return false;
   if (agent.status === "working") return true;
   return (agent.roommates || []).some((mate) => mate.status === "working");
+}
+
+/**
+ * Prefer a household member whose PR matches `matchPr`, else any outstanding PR.
+ * `matchPr` receives an agent and returns true when it should win.
+ */
+export function householdDispatchAgent(host, matchPr = null) {
+  const members = [host, ...(host?.roommates || [])].filter(Boolean);
+  if (typeof matchPr === "function") {
+    const match = members.find((mate) => matchPr(mate));
+    if (match) return match;
+  }
+  const open = members.find(
+    (mate) => mate.pr && mate.pr.state && mate.pr.state !== "none" && mate.pr.state !== "unknown",
+  );
+  return open || host;
 }

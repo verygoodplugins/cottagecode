@@ -5,7 +5,8 @@ export function createTownLayout({columns=4, rows=2, houseWidth=54, houseHeight=
   const height = signHeight + rows * (houseHeight+gapY) + pad*2;
   const capacity=columns*rows;
   function allocate(agent) {
-    if(slots.has(agent.id)) return slots.get(agent.id);
+    const key = agent.plotKey || agent.id;
+    if(slots.has(key)) return slots.get(key);
     const town=agent.town || agent.role || 'WildTown';
     const pages=byTown.get(town)||[];
     let block=pages.find(b=>b.used<capacity);
@@ -19,16 +20,17 @@ export function createTownLayout({columns=4, rows=2, houseWidth=54, houseHeight=
     const n=block.used++;
     const slot={x:block.x+pad+(n%columns)*(houseWidth+gapX),
       y:block.y+pad+signHeight+Math.floor(n/columns)*(houseHeight+gapY),blockId:block.id};
-    slots.set(agent.id,slot);
+    slots.set(key,slot);
     return slot;
   }
   return {
     update(agents) {
       const ids=new Set(agents.map(a=>a.id));
+      const slotKeys=new Set([...slots.keys()]);
       for(const a of agents){
         if(a.parent&&!childSlots.has(a.id)){const n=parentCounts.get(a.parent)||0;childSlots.set(a.id,n);parentCounts.set(a.parent,n+1);}
       }
-      const roots=agents.filter(a=>!a.parent||!ids.has(a.parent)||childSlots.get(a.id)>=3||slots.has(a.id));
+      const roots=agents.filter(a=>!a.parent||!ids.has(a.parent)||childSlots.get(a.id)>=3||slotKeys.has(a.plotKey||a.id)||slots.has(a.id));
       const plots=roots.map(a=>({...allocate(a),agent:a}));
       const n=Math.max(1,blocks.length);
       return {plots,shedSlots:Object.fromEntries(childSlots),blocks:blocks.map(b=>({...b})),width:margin*2+2*width+road,

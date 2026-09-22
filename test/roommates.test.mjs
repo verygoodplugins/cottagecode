@@ -34,6 +34,7 @@ test("shared worktreePath collapses to a stable host regardless of status or chi
   const plots = plotAgentsForLayout(agents);
   assert.equal(plots.length, 1);
   assert.equal(plots[0].id, "aaa");
+  assert.equal(plots[0].plotKey, "wt:/tmp/shared");
   assert.deepEqual(plots[0].roommates.map((r) => r.id), ["zzz"]);
   assert.ok(householdWorking(plots[0]));
 
@@ -44,7 +45,19 @@ test("shared worktreePath collapses to a stable host regardless of status or chi
     { ...agents[2], parent: "aaa" },
   ]);
   assert.equal(flipped[0].id, "aaa");
+  assert.equal(flipped[0].plotKey, "wt:/tmp/shared");
   assert.equal(plotHostId(agents, "zzz"), "aaa");
+});
+
+test("plotKey stays on the worktree after the earliest host leaves", () => {
+  const before = plotAgentsForLayout([
+    { id: "aaa", worktreePath: "/tmp/shared", status: "idle" },
+    { id: "zzz", worktreePath: "/tmp/shared", status: "working" },
+  ]);
+  const after = plotAgentsForLayout([
+    { id: "zzz", worktreePath: "/tmp/shared", status: "working" },
+  ]);
+  assert.equal(before[0].plotKey, after[0].plotKey);
 });
 
 test("missing paths never roommate together", () => {

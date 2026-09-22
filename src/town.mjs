@@ -15,7 +15,7 @@ import {
   paintLetterCrows,
   paintCheckStorm,
 } from "./folklore.mjs";
-import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds, householdWorking } from "./roommates.mjs";
+import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds, householdWorking, householdDispatchAgent } from "./roommates.mjs";
 import {
   isMapFullscreen,
   fullscreenButtonCopy,
@@ -1757,14 +1757,17 @@ function draw(){
         const bob  = (atBench && !reduce) ? (Math.floor(t*7) % 2) : 0;
         if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1,talking:observatory.isTalking(ag.id),reduce});
         else drawPerson(Math.round(a.x),Math.round(a.y)+bob,townStyle(ag).roof,step);
-        // Shared checkout roommates crowd the stoop — decorative only.
-        (ag.roommates||[]).forEach((mate,i)=>{
-          const ox = 7 + i * 6, oy = bob + (i % 2);
-          if(observatory)renderResident(ctx,Math.round(a.x)+5+ox,Math.round(a.y)+oy+14,observatory.resident(mate),{time:t*1000,walking:false,scale:.78,talking:observatory.isTalking(mate.id),reduce});
-          else drawPerson(Math.round(a.x)+ox,Math.round(a.y)+oy,townStyle(mate).roof,0);
-        });
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
       }
+      // Roommates keep their own outdoor presence even when the host is indoors.
+      const stoopX = a.indoors ? door.x : a.x;
+      const stoopY = a.indoors ? door.y : a.y;
+      (ag.roommates||[]).forEach((mate,i)=>{
+        if(mate.status === "offline") return;
+        const ox = 7 + i * 6, oy = i % 2;
+        if(observatory)renderResident(ctx,Math.round(stoopX)+5+ox,Math.round(stoopY)+oy+14,observatory.resident(mate),{time:t*1000,walking:false,scale:.78,talking:observatory.isTalking(mate.id),reduce});
+        else drawPerson(Math.round(stoopX)+ox,Math.round(stoopY)+oy,townStyle(mate).roof,0);
+      });
     }
     (p.kids||[]).forEach(k=>{
       drawShed(k.x, k.y, k.agent);
@@ -1826,7 +1829,7 @@ function draw(){
   // Operational colors are drawn after the blue palette, without daylight holes.
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
-    observatory?.drawDispatch(ctx,p,t);
+    observatory?.drawDispatch(ctx,{...p,agent:householdDispatchAgent(p.agent, a=>prStage(a.pr)===observatory.state.prFilter)},t);
     const bubbleAgent=(p.agent.status==="blocked")?p.agent:((p.agent.roommates||[]).find(m=>m.status==="blocked")?{...p.agent,status:"blocked"}:p.agent);
     const bubble=statusBubbleAnchor({agent:bubbleAgent,plot:p,routine:bedtimeFrames.get(p.agent.id),actor:actors.get(p.agent.id),time:t,reduce});
     if(bubble)drawBubble(bubble.x,bubble.y,bubble.status);
