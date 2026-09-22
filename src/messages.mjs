@@ -27,7 +27,7 @@ export function acceptsMessageOrigin(req){
 }
 
 export function createHubMessenger({
-  baseUrl=process.env.COTTAGE_HUB_URL||'',token=process.env.COTTAGE_HUB_TOKEN||'',
+  baseUrl=process.env.AUTOHUB_HUB_BASE||process.env.COTTAGE_HUB_URL||'',token=process.env.AUTOHUB_HUB_TOKEN||process.env.COTTAGE_HUB_TOKEN||'',
   fetchImpl=globalThis.fetch,now=Date.now,timeoutMs=8000,
   ledgerPath=process.env.COTTAGE_MESSAGE_LEDGER||join(homedir(),'.cottagecode','message-receipts.jsonl'),
 }={}){
@@ -47,18 +47,20 @@ export function createHubMessenger({
   function capability(agent,{stale=false,checkedAt=now()}={}){
     const unavailable=reason=>({available:false,reason,source:'autohub',checkedAt});
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
-    if(stale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
+    if(stale||agent.isStale||agent.freshness?.isStale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
     const target=agent.conversationTarget;
-    if(agent.source!=='hub'||target?.recordKind!=='logical_task'||!agent.taskId||target.taskId!==agent.taskId)return unavailable('This observed session has no supported task messaging route.');
+    const canonical=target && Object.hasOwn(target,'controlTargetId');
+    if(agent.source!=='hub'||!agent.taskId||target?.taskId!==agent.taskId ||
+      (canonical ? target.controlTargetId!==agent.taskId : target.recordKind!=='logical_task'))return unavailable('This observed session has no supported task messaging route.');
     const shownInput=normalizeInputRequest(agent.inputRequest);
     let mode='';
-    if(['awaiting_input','needs_input'].includes(target.taskStatus))mode='respond';
+    if(['awaiting_input','needs_input'].includes(target.taskStatus) && (!canonical || target.capabilities?.canRespond===true))mode='respond';
     // A transitional Hub row can expose an explicit question before its raw
     // status flips from running. Do not turn that answer into a free-form
     // redirect: wait until Hub offers the matching response route.
     else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
-    else if(target.taskStatus==='running'&&target.transport==='tmux'&&target.supportsRedirection===true)mode='redirect';
+    else if(target.taskStatus==='running'&&(canonical ? target.capabilities?.canSteer===true : target.transport==='tmux'&&target.supportsRedirection===true))mode='redirect';
     else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
     const resolution=agent.inputRequestResolution;
     const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
@@ -117,30 +119,33 @@ export function createHubMessenger({
     if(supported.mode==='respond'&&(shownInput?.id||null)!==(payload.inputRequestId||null))return rejected(409,'The input request changed. Reopen the current question before replying.');
     if(supported.mode==='respond'&&inputRequestVersion(shownInput)!==(payload.inputRequestVersion||null))return rejected(409,'The question or its choices changed. Refresh before replying.');
     const path='tasks/'+encodeURIComponent(agent.taskId);
+    let expectedAttentionVersion;
     try{
       // Native Hub question rounds live in orchestrator context. Request it
       // only server-side so identical wording in a new round stays distinct.
       const response=await request(path+'?context=raw');
       if(!response.ok)return rejected(502,'AutoHub could not verify the current task. Nothing was sent.');
       const task=await response.json(),context=parse(task.context),execution=context.lifecycle?.execution||{};
-      const current={...agent,conversationTarget:{taskId:task.id,taskStatus:task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection}};
-      if(task.id!==agent.taskId||task.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
+      const canonical=Object.hasOwn(agent.conversationTarget,'controlTargetId');
+      const current={...agent,inputRequest:inputRequestFromHub(task),freshness:task.freshness,isStale:task.isStale,conversationTarget:{taskId:task.id,taskStatus:task.normalizedStatus || task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection, ...(canonical ? {controlTargetId:task.controlTargetId ?? null,capabilities:task.capabilities || {}} : {})}};
+      if(task.id!==agent.taskId||task.isStale||task.freshness?.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
       const verified=capability(current);
       if(!verified.available||verified.mode!==supported.mode|| (supported.mode==='respond'&&task.canRespond===false))return rejected(409,'The task’s input state changed. Refresh before sending.');
       if(supported.mode==='respond'&&inputIdentity(inputRequestFromHub(task))!==inputIdentity(shownInput))return rejected(409,'The agent is now asking a different question. Refresh before replying.');
+      if(typeof task.attentionVersion==='string')expectedAttentionVersion=task.attentionVersion;
     }catch{return rejected(502,'AutoHub could not verify the current task. Nothing was sent.');}
     const entry={id:payload.requestId,hash,at:now(),response:null};
     try{await remember(entry);}catch{return rejected(503,'The message receipt could not be saved. Nothing was sent.');}
     let receipt;
     try{
-      const response=await request(path+'/'+supported.mode,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(supported.mode==='redirect'?{instruction:message}:{response:message})});
+      const response=await request(path+'/'+supported.mode,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(supported.mode==='redirect'?{instruction:message}:{response:message,...(expectedAttentionVersion?{expected_attention_version:expectedAttentionVersion}:{})})});
       const body=await response.json();
       if(response.ok&&((supported.mode==='redirect'&&body.ok===true&&body.taskId===agent.taskId)||(supported.mode==='respond'&&body.id===agent.taskId))){
         receipt=result(200,{ok:true,delivery:supported.mode==='redirect'?'submitted':'accepted',requestId:payload.requestId,source:'autohub',timestamp:now()});
       }else if(response.status===401 ||
         (response.status===403&&body.error==='owner_approval_required') ||
         (response.status===404&&['task_not_found','Task not found'].includes(body.error)) ||
-        (response.status===409&&['no_running_session','not_awaiting_input'].includes(body.error)) ||
+        (response.status===409&&['no_running_session','not_awaiting_input','attention_changed'].includes(body.error)) ||
         (response.status===400&&body.error==='instruction_required')){
         // Only known pre-delivery errors are safe to retry. AutoHub can return
         // already_answered/cancellation_in_progress after affecting the task.

@@ -10,6 +10,7 @@ import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
 import { readHubAgents, shortModel } from "./hub.mjs";
+import { createHubInventoryReader } from "./hub-inventory.mjs";
 import { classifyOccupancy, inferPr, lettersOf, liveCostOf, stampOccupancy } from "./occupancy.mjs";
 import { createTranscriptReader } from "./transcripts.mjs";
 import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./activity.mjs";
@@ -219,8 +220,13 @@ function newestTodos(current, incoming) {
 
 export function createFeed({
   scanClaude = createClaudeScanner(), readHub = readHubAgents, enrich = enrichAgents,
+  hubInventory = createHubInventoryReader(),
   resolveRepos = createRepoResolver(), timeline = createHubTimelineReader(), now = Date.now,
 } = {}) {
+  if (hubInventory.configured) {
+    scanClaude = async () => ({ok:true,agents:[],sessions:[]});
+    readHub = () => hubInventory.read();
+  }
   let cache = [];
   let claude = { agents: [], sessions: [] };
   let hub = { agents: [], keys: new Set(), links: new Map() };
@@ -240,7 +246,7 @@ export function createFeed({
       if (claude.stale) nextErrors.push(claude.error || "Some transcripts are temporarily unavailable");
     } else nextErrors.push("Local transcripts are temporarily unavailable");
     if (results[1].status === "fulfilled" && results[1].value.ok !== false) hub = results[1].value;
-    else nextErrors.push("Hub database is temporarily unavailable");
+    else nextErrors.push(hubInventory.configured ? "Hub inventory is temporarily unavailable" : "Hub database is temporarily unavailable");
 
     const localById = new Map(claude.agents.map(agent => [agent.id, agent]));
     const previousById = new Map(cache.map(agent => [agent.id, agent]));
@@ -418,21 +424,33 @@ export function createFeed({
       return doScan();
     },
     async getActivity(id, options = {}) {
-      const agent = cache.find(cottage => cottage.id === id);
+      let agent = cache.find(cottage => cottage.id === id);
       if (!agent) return null;
+      let refreshedDetail = false, detailFailed = false;
+      const activityResponse = page => detailFailed ? {
+        ...page, stale: true, error: "Hub task detail temporarily unavailable",
+        inputRequest: page.inputRequest ? {...page.inputRequest,stale:true} : null,
+        ...(page.cursorReset && !page.events?.length ? {cursorReset:false,cursor:options.after || options.before || null} : {}),
+      } : page;
+      const inputForActivity = () => refreshedDetail ? normalizeInputRequest(agent.inputRequest) : currentInputRequest(agent);
+      if (hubInventory.configured && typeof hubInventory.detail === "function") {
+        // Detail serves this activity request; only scans replace enriched inventory.
+        try { agent = { ...agent, ...await hubInventory.detail(id) }; refreshedDetail = true; }
+        catch { detailFailed = true; }
+      }
       const local = activity.get(id) || [];
       if (local.length) {
         const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"
           ? rememberActivityTodos(agent, await timeline.readTodos(agent.id))
           : normalizeTodos(agent.todos);
-        return { ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: currentInputRequest(agent), ...(stale ? { stale: true } : {}) };
+        return activityResponse({ ...pageActivity(mergeActivityEvents([], local), { ...options, source: "claude-transcript" }), todos, inputRequest: inputForActivity(), ...(stale ? { stale: true } : {}) });
       }
       if (agent.source === "hub" && timeline.configured) {
         const result = await timeline.read(agent.id, options);
         const todos = rememberActivityTodos(agent, result.todos);
-        return { ...result, todos, inputRequest: currentInputRequest(agent) };
+        return activityResponse({ ...result, todos, inputRequest: inputForActivity() });
       }
-      return { ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: currentInputRequest(agent), unavailable: true };
+      return activityResponse({ ...pageActivity([], options), todos: normalizeTodos(agent.todos), inputRequest: inputForActivity(), unavailable: true });
     },
   };
 }

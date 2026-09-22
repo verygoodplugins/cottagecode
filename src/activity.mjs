@@ -107,8 +107,8 @@ export function pageActivity(events, { after, before, limit = 100, source = "non
 
 /** AutoHub only supports backwards cursors, so retain safe events for forward polls. */
 export function createHubTimelineReader({
-  baseUrl = process.env.COTTAGE_HUB_URL || "",
-  token = process.env.COTTAGE_HUB_TOKEN || "",
+  baseUrl = process.env.AUTOHUB_HUB_BASE || process.env.COTTAGE_HUB_URL || "",
+  token = process.env.AUTOHUB_HUB_TOKEN || process.env.COTTAGE_HUB_TOKEN || "",
   fetchFn = globalThis.fetch,
   now = Date.now,
   ttl = 1500,
@@ -162,6 +162,9 @@ export function createHubTimelineReader({
     const old = cache.get(taskId);
     if (old && !options.before && now() - old.checkedAt < ttl) return old;
     const entry = old ? { ...old } : { events: [], hasOlder: false, checkedAt: 0, source: "none" };
+    // Historical pages are request-local windows; they must neither compete
+    // with the recent-event cap nor evict the cursor used by forward polling.
+    if (options.before) entry.events = [];
     let before = options.before || "";
     try {
       for (let page = 0; page < 4; page++) {
@@ -191,8 +194,10 @@ export function createHubTimelineReader({
       // Never copy fetch errors: their messages may include deployment credentials.
       entry.checkedAt = now();
     }
-    cache.set(taskId, entry);
-    if (cache.size > 200) cache.delete(cache.keys().next().value);
+    if (!options.before) {
+      cache.set(taskId, entry);
+      if (cache.size > 200) cache.delete(cache.keys().next().value);
+    }
     return entry;
   }
 
@@ -204,9 +209,14 @@ export function createHubTimelineReader({
       const key = `${taskId}\n${options.before || ""}`;
       if (!inFlight.has(key)) inFlight.set(key, refresh(taskId, options).finally(() => inFlight.delete(key)));
       const [entry, checkpointTodos] = await Promise.all([inFlight.get(key), readTodos(taskId)]);
-      const result = pageActivity(entry.events, { ...options, source: entry.source });
+      // The upstream query already applied `before`, so its anchor is outside
+      // this window. Apply only the local display limit to that result.
+      const pageOptions = options.before ? { ...options, before: undefined, after: undefined } : options;
+      const result = pageActivity(entry.events, { ...pageOptions, source: entry.source });
+      if (options.before) result.cursor = result.events[0]?.id || options.before;
       if (!options.after && entry.hasOlder) result.hasMore = true;
-      let todos = latestTodos(entry.events, { source: entry.source });
+      const todoEntry = options.before ? cache.get(taskId) || entry : entry;
+      let todos = latestTodos(todoEntry.events, { source: todoEntry.source });
       if (todos && entry.stale) todos = { ...todos, stale: true };
       const checkpointWins = checkpointTodos && (!todos ||
         (checkpointTodos.updatedAt !== null

@@ -238,3 +238,32 @@ test('HTTP server exposes capability and accepts only explicit same-origin messa
     assert.equal((await fetch(base+'/agents',{method:'POST'})).status,405);
   }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
+
+test('canonical inventory controls use refreshed capabilities and reject revoked targets',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true,canRespond:false}}};
+  const supported=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true,canRespond:false}}});
+  assert.equal(supported.messenger.capability(inventory).available,true);
+  assert.equal((await supported.messenger.send(inventory,message)).body.delivery,'submitted');
+  const revoked=fixture({current:{...task,recordKind:'external_session',controlTargetId:null,capabilities:{canSteer:false,canRespond:false}}});
+  assert.equal((await revoked.messenger.send(inventory,message)).status,409);
+  assert.equal(revoked.calls.length,1);
+  assert.equal(supported.messenger.capability({...inventory,conversationTarget:{...inventory.conversationTarget,controlTargetId:null}}).available,false);
+});
+
+test('canonical inventory rejects nested stale controls before a write',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true}}};
+  const stale=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true},freshness:{isStale:true}}});
+  const sent=await stale.messenger.send(inventory,message);
+  assert.equal(sent.status,409);
+  assert.equal(sent.body.delivery,'not_sent');
+  assert.equal(stale.calls.length,1,'fresh detail is inspected but no POST occurs');
+  assert.equal(stale.messenger.capability({...inventory,freshness:{isStale:true}}).available,false);
+});
+
+test('freshly pending canonical input cannot receive a redirect from an older running snapshot',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true}}};
+  const pending=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true},attentionType:'question',attentionMessage:'Which scope should I use?'}});
+  const sent=await pending.messenger.send(inventory,message);
+  assert.equal(sent.status,409);assert.equal(sent.body.delivery,'not_sent');
+  assert.equal(pending.calls.length,1,'only verifies detail; never redirects through a new question');
+});

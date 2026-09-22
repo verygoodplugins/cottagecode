@@ -39,16 +39,38 @@ export function appendInlineHandoffs(events,append){
 }
 export function applyActivityPage(cache,data,{older=false}={}){
   if(!Array.isArray(data?.events))throw new Error('Activity response has no events');
-  if(data.cursorReset){
-    if(!older)cache.events=[];
-    cache.hasMore=!!data.hasMore;cache.warning='An activity cursor expired. Only retained source history is available.';
+  if(older&&!cache.browsingHistory){
+    cache.recentEvents=cache.events.slice(-1500);cache.recentHasMore=cache.hasMore;cache.browsingHistory=true;
   }
-  cache.events=(older?mergeActivity(data.events,cache.events):mergeActivity(cache.events,data.events)).slice(-1500);
+  let current=!older&&cache.browsingHistory?cache.recentEvents:cache.events;
+  if(data.cursorReset){
+    if(!older)current=[];
+    cache.warning='An activity cursor expired. Only retained source history is available.';
+  }
+  const merged=older?mergeActivity(data.events,current):mergeActivity(current,data.events);
+  const events=older?merged.slice(0,1500):merged.slice(-1500);
+  if(!older&&cache.browsingHistory)cache.recentEvents=events;
+  else cache.events=events;
   cache.source=String(data.source||'feed');
-  if(older||!cache.cursor)cache.hasMore=!!data.hasMore;
-  if(!older)cache.cursor=data.cursor||cache.events.at(-1)?.id||cache.cursor;
+  if(older)cache.hasMore=!!data.hasMore;
+  else if(!cache.cursor||data.cursorReset){
+    if(cache.browsingHistory)cache.recentHasMore=!!data.hasMore;
+    else cache.hasMore=!!data.hasMore;
+  }
+  if(!older)cache.cursor=data.cursor||events.at(-1)?.id||cache.cursor;
   cache.stale=!!data.stale;cache.error=data.error||'';cache.unavailable=!!data.unavailable;
   return cache;
+}
+export function returnToLatestActivity(cache){
+  if(!cache.browsingHistory)return cache;
+  cache.events=cache.recentEvents;cache.hasMore=cache.recentHasMore;
+  cache.browsingHistory=false;cache.activityViewVersion=(cache.activityViewVersion||0)+1;
+  delete cache.recentEvents;delete cache.recentHasMore;
+  return cache;
+}
+export function activityPagingButtons(cache){
+  return button('older','Earlier entries',cache.hasMore?'':'disabled')+
+    (cache.browsingHistory?button('latest','Latest entries'):'');
 }
 export function activityJournalPresentation(cache={}){
   const source=String(cache.source||'feed');
@@ -339,18 +361,18 @@ export function createObservatory(api){
     const url=activityAddress(a,api.getEndpoint());if(!url||inflight.has(a.id))return;
     if(older&&cache.events.length)url.searchParams.set('before',cache.events[0].id);
     else if(cache.events.length)url.searchParams.set('after',cache.cursor||cache.events.at(-1).id);
-    const controller=new AbortController();inflight.set(a.id,controller);const epoch=sourceKey;
+    const controller=new AbortController();inflight.set(a.id,controller);const epoch=sourceKey,viewVersion=cache.activityViewVersion||0;
     const timeout=setTimeout(()=>controller.abort(),7000);
     try{
       const res=await fetch(url,{signal:controller.signal,headers:{accept:'application/json'}});
       if(!res.ok)throw new Error('Activity HTTP '+res.status);
       const data=await res.json();
-      if(epoch!==sourceKey||activity.get(a.id)!==cache)return;
+      if(epoch!==sourceKey||activity.get(a.id)!==cache||(older&&viewVersion!==(cache.activityViewVersion||0)))return;
       applyActivityPage(cache,data,{older});
       if(Object.hasOwn(data,'todos'))cache.todos=normalizeTodos(data.todos);
       recordActivity(a,data.events);
       for(const e of data.events)if(e.kind==='handoff'&&e.from&&e.to)appendHandoff(e);
-    }catch(err){if(epoch===sourceKey&&activity.get(a.id)===cache){cache.stale=true;cache.error=err.name==='AbortError'?'Activity request timed out':err.message;}}
+    }catch(err){if(epoch===sourceKey&&activity.get(a.id)===cache&&(!older||viewVersion===(cache.activityViewVersion||0))){cache.stale=true;cache.error=err.name==='AbortError'?'Activity request timed out':err.message;}}
     finally{clearTimeout(timeout);if(inflight.get(a.id)===controller)inflight.delete(a.id);if((selected===a.id||interiorId===a.id)&&epoch===sourceKey)renderPanel(selected);}
   }
   function eventHtml(events){
@@ -358,7 +380,7 @@ export function createObservatory(api){
     return events.map(e=>'<li class="journal-event" data-event="'+esc(e.id)+'"><span class="event-head"><time>'+esc(clock(e.timestamp))+'</time><span>'+esc(e.kind||'progress')+'</span></span><p>'+esc(e.text)+'</p>'+link(e.url,'Open artifact')+'</li>').join('');
   }
   function latestLine(a){
-    const events=activity.get(a.id)?.events||a.events||[];
+    const cache=activity.get(a.id),events=cache?.recentEvents||cache?.events||a.events||[];
     return [...events].reverse().find(e=>['progress','summary','tool','result'].includes(e.kind))?.text||a.activity||a.lastLine||'';
   }
   function todosHtml(a,cache){
@@ -384,7 +406,7 @@ export function createObservatory(api){
     return '<h3>A word with '+esc(a.name)+'</h3><p class="hint">'+(sound.enabled?'Your host answers with a little murmur.':'Enable sound to hear your host’s little murmur.')+' Activity below comes from the task’s recorded updates.</p>'+input+composer+
       (receipts?'<ol class="sent-messages" aria-label="Your messages this visit">'+receipts+'</ol>':'')+
       '<details class="talk-todos"><summary>Agent’s to-do list</summary>'+todosHtml(a,cache)+'</details>'+
-      '<div class="section-head"><h3>From the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint">'+esc(cache.source)+(cache.stale?' · stale — '+esc(cache.error||'connection interrupted'):' · recorded activity')+'</p><ol class="journal" tabindex="0" aria-label="Agent conversation activity">'+eventHtml(cache.events)+'</ol>';
+      '<div class="section-head"><h3>From the workbench</h3>'+activityPagingButtons(cache)+'</div><p class="hint">'+esc(cache.source)+(cache.stale?' · stale — '+esc(cache.error||'connection interrupted'):' · recorded activity')+'</p><ol class="journal" tabindex="0" aria-label="Agent conversation activity">'+eventHtml(cache.events)+'</ol>';
   }
   async function sendMessage(){
     const a=byId(interiorId||selected);if(!a)return;
@@ -430,7 +452,7 @@ export function createObservatory(api){
       content='<h3>Pinned request</h3><p class="hint">'+(a.originalAskSource==='session'?'First request recorded in this session. Current task boundaries are unavailable.':'Original request supplied by the task source.')+'</p><div class="request-paper">'+esc(a.originalAsk||'The feed has not supplied the original request.')+'</div>';
     }else if(tab==='journal'){
       const presentation=activityJournalPresentation(cache);
-      content='<div class="section-head"><h3>At the workbench</h3>'+button('older','Earlier entries',cache.hasMore?'':'disabled')+'</div><p class="hint activity-'+esc(presentation.state)+'">'+esc(presentation.text)+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+(cache.unavailable?'<p class="hint">This source has not made a task journal available.</p>':'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>');
+      content='<div class="section-head"><h3>At the workbench</h3>'+activityPagingButtons(cache)+'</div><p class="hint activity-'+esc(presentation.state)+'">'+esc(presentation.text)+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+(cache.unavailable?'<p class="hint">This source has not made a task journal available.</p>':'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>');
     }else if(tab==='review'){
       content='<h3>Review desk</h3>'+prSnapshotHtml(pr)+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
     }else if(tab==='artifacts'){
@@ -491,6 +513,7 @@ export function createObservatory(api){
     }
     else if(action.startsWith('tab:')){tab=action.slice(4);selectedObject=({request:'request',journal:'workbench',review:'review',artifacts:'shelf',overview:'clock'})[tab];renderPanel(selected);if(['journal','todos'].includes(tab))ensureActivity(byId(interiorId||selected));}
     else if(action==='older')await ensureActivity(byId(interiorId||selected),{older:true});
+    else if(action==='latest'){const a=byId(interiorId||selected);if(a){returnToLatestActivity(cacheFor(a));renderPanel(selected);const log=panel.querySelector('.journal');if(log)log.scrollTop=log.scrollHeight;}}
     else if(action==='copy'){try{await navigator.clipboard.writeText(byId(interiorId||selected).worktreePath);e.target.textContent='Copied';}catch{e.target.textContent='Copy unavailable';}}
     else if(action==='handoff'){const url=safeHttpsUrl(byId(interiorId||selected)?.handoffUrl);if(url)window.open(url,'_blank','noopener,noreferrer');}
     else if(action.startsWith('jump:'))focusCottage(action.slice(5));

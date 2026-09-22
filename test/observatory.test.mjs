@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,returnToLatestActivity,activityPagingButtons,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -99,4 +99,44 @@ test('activity cache clears task artifacts when a session-only cottage advances 
   assert.deepEqual(next.events,[]);
   assert.equal(next.todos,undefined,'an omitted new-session todo snapshot cannot reuse the prior task checklist');
   assert.equal(next.cursor,null);
+});
+
+test('older journal pages remain visible within the bounded browser window',()=>{
+  const records=Array.from({length:2000},(_,index)=>({id:'history-'+(index+1),kind:'progress',text:'Event '+(index+1),timestamp:Date.parse('2026-09-22T00:00:00Z')+index}));
+  const cache={events:records.slice(-1500),cursor:'history-2000',hasMore:true};
+  applyActivityPage(cache,{events:records.slice(0,500),hasMore:false,source:'hub'}, {older:true});
+  assert.equal(cache.events.length,1500);
+  assert.equal(cache.events[0].id,'history-1');assert.equal(cache.events.at(-1).id,'history-1500');
+  assert.equal(cache.cursor,'history-2000','live polling keeps its own cursor');
+});
+
+test('historical browsing keeps a recent window and returns to live entries without gaps',()=>{
+  const records=Array.from({length:2500},(_,index)=>({id:'history-'+(index+1),kind:'progress',text:'Event '+(index+1),timestamp:Date.parse('2026-09-22T00:00:00Z')+index}));
+  const cache={events:records.slice(-1500),cursor:'history-2500',hasMore:true};
+  applyActivityPage(cache,{events:records.slice(500,1000),hasMore:true,source:'hub'},{older:true});
+  applyActivityPage(cache,{events:records.slice(0,500),hasMore:false,source:'hub'},{older:true});
+  const historical=cache.events.map(event=>event.id);
+  const live={id:'history-2501',kind:'progress',text:'New live event',timestamp:records.at(-1).timestamp+1};
+  applyActivityPage(cache,{events:[live],cursor:live.id,hasMore:false,source:'hub'});
+  assert.deepEqual(cache.events.map(event=>event.id),historical,'forward polling does not move the historical window');
+  returnToLatestActivity(cache);
+  assert.equal(cache.events.length,1500);
+  assert.deepEqual(cache.events.map(event=>event.id),[...records.slice(-1499),live].map(event=>event.id));
+  assert.equal(cache.cursor,live.id);
+  assert.equal(cache.hasMore,true,'the recent window can page into history again');
+  assert.equal(cache.browsingHistory,false);
+});
+
+test('latest journal action survives a live source cursor reset while browsing history',()=>{
+  const row=id=>({id,kind:'progress',text:id,timestamp:Date.parse('2026-09-22T00:00:00Z')});
+  const cache={events:[row('recent')],cursor:'recent',hasMore:true};
+  assert.doesNotMatch(activityPagingButtons(cache),/data-action="latest"/);
+  applyActivityPage(cache,{events:[row('old')],hasMore:false},{older:true});
+  assert.match(activityPagingButtons(cache),/data-action="latest"\s*>Latest entries/);
+  applyActivityPage(cache,{events:[row('new-source')],cursor:'new-source',hasMore:true,cursorReset:true});
+  assert.equal(cache.events[0].id,'old');
+  returnToLatestActivity(cache);
+  assert.deepEqual(cache.events.map(event=>event.id),['new-source']);
+  assert.equal(cache.cursor,'new-source');assert.equal(cache.hasMore,true);
+  assert.doesNotMatch(activityPagingButtons(cache),/data-action="latest"/);
 });
