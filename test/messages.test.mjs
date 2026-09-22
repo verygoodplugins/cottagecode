@@ -238,3 +238,14 @@ test('HTTP server exposes capability and accepts only explicit same-origin messa
     assert.equal((await fetch(base+'/agents',{method:'POST'})).status,405);
   }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
+
+test('canonical inventory controls use refreshed capabilities and reject revoked targets',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true,canRespond:false}}};
+  const supported=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true,canRespond:false}}});
+  assert.equal(supported.messenger.capability(inventory).available,true);
+  assert.equal((await supported.messenger.send(inventory,message)).body.delivery,'submitted');
+  const revoked=fixture({current:{...task,recordKind:'external_session',controlTargetId:null,capabilities:{canSteer:false,canRespond:false}}});
+  assert.equal((await revoked.messenger.send(inventory,message)).status,409);
+  assert.equal(revoked.calls.length,1);
+  assert.equal(supported.messenger.capability({...inventory,conversationTarget:{...inventory.conversationTarget,controlTargetId:null}}).available,false);
+});

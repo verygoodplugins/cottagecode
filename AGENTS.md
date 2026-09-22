@@ -37,7 +37,8 @@ duck. Check direct inspector controls, the connect box, and stale-feed recovery.
 | `src/interaction.mjs` / `src/conversation.mjs` | Door crossings and browser message capability checks |
 | `src/feed.mjs` | HTTP server, snapshot cache, adapter integration, activity routes |
 | `src/transcripts.mjs` / `src/activity.mjs` | Incremental transcript parsing and public activity; optional Hub timeline |
-| `src/hub.mjs` | Optional readonly sqlite `agent_runs` adapter |
+| `src/hub.mjs` | Optional standalone readonly sqlite `agent_runs` adapter |
+| `src/hub-inventory.mjs` | Shared `/v1/tasks` inventory when `AUTOHUB_HUB_BASE` is configured; replaces local discovery |
 | `src/todos.mjs` / `src/messages.mjs` | Explicit checklist snapshots and user-submitted AutoHub messages |
 | `src/pr.mjs` / `src/github.mjs` | Shared PR classifier/counts and cached read-only GitHub observations |
 | `src/occupancy.mjs` | live / recent / settled, letters, conservative PR identity inference |

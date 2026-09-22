@@ -354,6 +354,8 @@ Replay steps through recorded milestones and highlights their cottages. It does 
 | Variable | Default | Behavior |
 |---|---|---|
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Directory scanned for local session JSONL. |
+| `AUTOHUB_HUB_BASE` | Unset | Select shared Hub inventory mode, e.g. `http://127.0.0.1:8767` (optional `/v1`). Replaces local SQLite inventory and Claude scanning; follows all `/v1/tasks` pages and uses canonical ids for detail/activity/control. |
+| `AUTOHUB_HUB_TOKEN` | Unset | Optional server-side bearer token for shared inventory, timelines, and explicit user messages. Never published. Falls back to `COTTAGE_HUB_TOKEN` if absent. |
 | `AGENT_DB_PATH` | Unset | Optional readonly SQLite database containing `agent_runs`. |
 | `AGENT_STALE_THRESHOLD_MS` | `900000` | Hub running-task inactivity threshold, in milliseconds. |
 | `COTTAGE_GITHUB` | Enabled | Set to `0` to disable GitHub enrichment. |
@@ -437,3 +439,20 @@ npx --yes http-server . -p 9999 --cors
 ```
 
 **Pause feed** stops browser refreshes and the demo simulator. It never writes back to the feed or pauses real agents. Walking and direct inspector controls remain available.
+
+### Shared Hub inventory mode
+
+The Node process caches successful inventory reads for five seconds; it follows
+all cursor pages before replacing a snapshot. Failed pages keep the previous
+complete snapshot and mark the feed stale. `id`, `parent`, and `taskId` retain
+Hub canonical task identities, including observed external sessions. Their
+`sessionId` stays separate. Town labels still derive from recorded project
+paths; labels and worktree slugs never determine task identity or control.
+
+The existing local activity route refreshes `/v1/tasks/:id` and reads the Hub
+`/timeline` and `/todo` routes. Source `thinking` events remain excluded from
+public journals. Explicit Send rechecks detail and the live `controlTargetId`
+and capabilities; a null target is read-only. Replies also use Hub's optional
+`expected_attention_version` guard when supplied by detail. The existing
+receipt ledger and uncertain-delivery behavior remain in effect. No new cancel
+or autonomous messaging behavior is added.

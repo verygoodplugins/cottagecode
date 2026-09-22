@@ -10,6 +10,7 @@ import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoOf, worktreeOf, townName } from "./towns.mjs";
 import { readHubAgents, shortModel } from "./hub.mjs";
+import { createHubInventoryReader } from "./hub-inventory.mjs";
 import { classifyOccupancy, inferPr, lettersOf, liveCostOf, stampOccupancy } from "./occupancy.mjs";
 import { createTranscriptReader } from "./transcripts.mjs";
 import { createHubTimelineReader, pageActivity, mergeActivityEvents } from "./activity.mjs";
@@ -219,8 +220,13 @@ function newestTodos(current, incoming) {
 
 export function createFeed({
   scanClaude = createClaudeScanner(), readHub = readHubAgents, enrich = enrichAgents,
+  hubInventory = createHubInventoryReader(),
   resolveRepos = createRepoResolver(), timeline = createHubTimelineReader(), now = Date.now,
 } = {}) {
+  if (hubInventory.configured) {
+    scanClaude = async () => ({ok:true,agents:[],sessions:[]});
+    readHub = () => hubInventory.read();
+  }
   let cache = [];
   let claude = { agents: [], sessions: [] };
   let hub = { agents: [], keys: new Set(), links: new Map() };
@@ -240,7 +246,7 @@ export function createFeed({
       if (claude.stale) nextErrors.push(claude.error || "Some transcripts are temporarily unavailable");
     } else nextErrors.push("Local transcripts are temporarily unavailable");
     if (results[1].status === "fulfilled" && results[1].value.ok !== false) hub = results[1].value;
-    else nextErrors.push("Hub database is temporarily unavailable");
+    else nextErrors.push(hubInventory.configured ? "Hub inventory is temporarily unavailable" : "Hub database is temporarily unavailable");
 
     const localById = new Map(claude.agents.map(agent => [agent.id, agent]));
     const previousById = new Map(cache.map(agent => [agent.id, agent]));
@@ -420,6 +426,10 @@ export function createFeed({
     async getActivity(id, options = {}) {
       const agent = cache.find(cottage => cottage.id === id);
       if (!agent) return null;
+      if (hubInventory.configured && typeof hubInventory.detail === "function") {
+        try { Object.assign(agent, await hubInventory.detail(id)); }
+        catch { return {...pageActivity([], options),todos:normalizeTodos(agent.todos),inputRequest:currentInputRequest(agent),stale:true,error:"Hub task detail temporarily unavailable"}; }
+      }
       const local = activity.get(id) || [];
       if (local.length) {
         const todos = agent.source === "hub" && timeline.configured && typeof timeline.readTodos === "function"

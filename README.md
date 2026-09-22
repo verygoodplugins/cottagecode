@@ -130,6 +130,22 @@ Optional fields add task identity, the original request, timestamps, activity, w
 
 The local process can also populate `/agents` without you writing a server:
 
+For a shared AutoHub inventory, start the feed with:
+
+```sh
+AUTOHUB_HUB_BASE=http://127.0.0.1:8767 npm start
+```
+
+Set `AUTOHUB_HUB_TOKEN` in the server environment if that Hub requires a bearer
+token. In this mode CottageCode follows every `/v1/tasks` cursor page and reads
+canonical task detail, timelines, checklist data, and control capabilities.
+It does not open SQLite or scan Claude transcripts. The Hub owns discovery;
+CottageCode keeps its existing towns, cottages, inspectors, and message receipts.
+If the Hub is unavailable, the last complete feed stays visible as stale.
+Credentials and raw upstream errors are never returned to the browser.
+
+Without `AUTOHUB_HUB_BASE`, the standalone adapters remain:
+
 1. Readonly SQLite at `AGENT_DB_PATH` (an `agent_runs` table), if set
 2. Claude Code session JSONL under `~/.claude/projects` (or `CLAUDE_PROJECTS_DIR`)
 3. Cached, read-only GitHub metadata through an authenticated `gh` CLI

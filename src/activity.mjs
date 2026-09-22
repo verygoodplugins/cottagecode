@@ -107,8 +107,8 @@ export function pageActivity(events, { after, before, limit = 100, source = "non
 
 /** AutoHub only supports backwards cursors, so retain safe events for forward polls. */
 export function createHubTimelineReader({
-  baseUrl = process.env.COTTAGE_HUB_URL || "",
-  token = process.env.COTTAGE_HUB_TOKEN || "",
+  baseUrl = process.env.AUTOHUB_HUB_BASE || process.env.COTTAGE_HUB_URL || "",
+  token = process.env.AUTOHUB_HUB_TOKEN || process.env.COTTAGE_HUB_TOKEN || "",
   fetchFn = globalThis.fetch,
   now = Date.now,
   ttl = 1500,
