@@ -49,3 +49,17 @@ test('Hub mode retains last complete snapshot during failure and reads canonical
   assert.equal(feed.snapshot().agents[0].id,'canonical');
   assert.equal(JSON.stringify(feed.snapshot()).includes('private failure'),false);
 });
+
+test('canonical result links populate the existing artifact shelves contract',()=>{
+  const cottage=toInventoryCottage(task('outputs',{resultLinks:[
+    {kind:'result',url:'https://example.com/report',label:'Verification report'},
+    {kind:'result',url:'https://example.com/build'},
+    {kind:'pull_request',url:'https://github.com/acme/repo/pull/1'},
+    {kind:'result',url:'javascript:alert(1)'},
+  ]}),now);
+  assert.deepEqual(cottage.artifacts,[
+    {url:'https://example.com/report',title:'Verification report'},
+    {url:'https://example.com/build',title:'Result'},
+    {url:'https://github.com/acme/repo/pull/1',title:'Pull request'},
+  ]);
+});

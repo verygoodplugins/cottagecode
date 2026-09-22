@@ -47,7 +47,7 @@ export function createHubMessenger({
   function capability(agent,{stale=false,checkedAt=now()}={}){
     const unavailable=reason=>({available:false,reason,source:'autohub',checkedAt});
     if(!base)return unavailable('Messaging needs a configured AutoHub connection. This source currently provides activity only.');
-    if(stale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
+    if(stale||agent.isStale||agent.freshness?.isStale||!checkedAt||now()-checkedAt>120000)return unavailable('The task feed is stale. Reconnect before sending.');
     if(agent.inputRequest?.stale)return unavailable('The input request is stale. Refresh before replying.');
     const target=agent.conversationTarget;
     const canonical=target && Object.hasOwn(target,'controlTargetId');
@@ -128,7 +128,7 @@ export function createHubMessenger({
       const task=await response.json(),context=parse(task.context),execution=context.lifecycle?.execution||{};
       const canonical=Object.hasOwn(agent.conversationTarget,'controlTargetId');
       const current={...agent,conversationTarget:{taskId:task.id,taskStatus:task.normalizedStatus || task.status,recordKind:task.recordKind,transport:execution.sessionMode,supportsRedirection:execution.supportsRedirection, ...(canonical ? {controlTargetId:task.controlTargetId ?? null,capabilities:task.capabilities || {}} : {})}};
-      if(task.id!==agent.taskId||task.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
+      if(task.id!==agent.taskId||task.isStale||task.freshness?.isStale||task.archived)return rejected(409,'The task is no longer available for messages.');
       const verified=capability(current);
       if(!verified.available||verified.mode!==supported.mode|| (supported.mode==='respond'&&task.canRespond===false))return rejected(409,'The task’s input state changed. Refresh before sending.');
       if(supported.mode==='respond'&&inputIdentity(inputRequestFromHub(task))!==inputIdentity(shownInput))return rejected(409,'The agent is now asking a different question. Refresh before replying.');

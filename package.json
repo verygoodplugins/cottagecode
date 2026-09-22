@@ -27,8 +27,8 @@
     "cottagecode": "./src/feed.mjs"
   },
   "scripts": {
-    "start": "node src/feed.mjs",
-    "once": "node src/feed.mjs --once",
+    "start": "node --env-file-if-exists=.env src/feed.mjs",
+    "once": "node --env-file-if-exists=.env src/feed.mjs --once",
     "build:demo": "node scripts/build-demo.mjs",
     "deploy:demo": "node scripts/deploy-demo.mjs",
     "test": "node --test",

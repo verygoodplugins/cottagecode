@@ -363,6 +363,11 @@ Replay steps through recorded milestones and highlights their cottages. It does 
 | `COTTAGE_HUB_TOKEN` | Unset | Optional server-side bearer token for Hub requests. Never returned to the browser. |
 | `COTTAGE_MESSAGE_LEDGER` | `~/.cottagecode/message-receipts.jsonl` | Private local request hashes and delivery outcomes, used to prevent duplicate writes. |
 
+`npm start` and `npm run once` optionally load the checkout’s Git-ignored `.env`.
+A local `AUTOHUB_HUB_BASE=http://127.0.0.1:8767` setting persists Hub mode across
+launches without a global shell export. Existing process variables take precedence,
+and an absent `.env` preserves standalone defaults.
+
 GitHub enrichment uses the authenticated local `gh` CLI with read-only `pr view`, `pr list`, and `repo view` calls. It accepts an explicit GitHub.com PR link or exact repository/number. Branch discovery requires an exact repository and a non-default branch with one unambiguous same-repository PR match. The local adapter can resolve `owner/repo` from a worktree's GitHub `origin`; town names never supply repository identity.
 
 GitHub requests run in the background, at most 3 at a time, with a 30-second refresh interval and failure backoff from 30 seconds to 5 minutes. Failed refreshes retain old observations marked stale. Cold snapshots can contain unknown PRs while those queries finish. Existing custom JSON feeds provide their own PR metadata; the browser does not run `gh` against them.

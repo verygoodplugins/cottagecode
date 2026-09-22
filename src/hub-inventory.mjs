@@ -7,7 +7,8 @@ import {classifyOccupancy} from './occupancy.mjs';
 
 export function toInventoryCottage(task, now=Date.now()) {
   const context=typeof task.context==='object' && task.context ? task.context : {};
-  const prLink=(task.resultLinks || []).find(link=>link.kind==='pull_request');
+  const resultLinks=Array.isArray(task.resultLinks) ? task.resultLinks.filter(link=>typeof link?.url==='string' && /^https?:\/\//.test(link.url)) : [];
+  const prLink=resultLinks.find(link=>link.kind==='pull_request');
   const cottage=toCottage({...task,
     record_kind:task.recordKind,parent_id:task.parentId,session_id:task.sessionId,
     status:task.normalizedStatus==='completed_without_report'?'completed':task.normalizedStatus || task.status,
@@ -31,7 +32,8 @@ export function toInventoryCottage(task, now=Date.now()) {
   cottage.inventorySource=task.source || null;
   cottage.dispatchedBy=task.provenance?.caller || task.provenance?.platform || task.platform || task.provider || 'hub';
   cottage.freshness=task.freshness || {lastSeenAt:task.lastSeenAt || null,isStale:task.isStale===true};
-  cottage.resultLinks=Array.isArray(task.resultLinks) ? task.resultLinks.filter(link=>typeof link?.url==='string' && /^https?:\/\//.test(link.url)).map(({kind,url})=>({kind,url})) : [];
+  cottage.resultLinks=resultLinks.map(({kind,url})=>({kind,url}));
+  cottage.artifacts=resultLinks.map(link=>({url:link.url,title:taskText(link.label || link.title) || (link.kind==='pull_request'?'Pull request':'Result')}));
   cottage.conversationTarget={...cottage.conversationTarget,
     taskId:task.id,taskStatus:task.normalizedStatus || task.status,recordKind:task.recordKind,
     controlTargetId:typeof task.controlTargetId==='string'?task.controlTargetId:null,

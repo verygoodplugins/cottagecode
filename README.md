@@ -136,7 +136,20 @@ For a shared AutoHub inventory, start the feed with:
 AUTOHUB_HUB_BASE=http://127.0.0.1:8767 npm start
 ```
 
-Set `AUTOHUB_HUB_TOKEN` in the server environment if that Hub requires a bearer
+For a persistent setting in this checkout, add this line to its local `.env`:
+
+```dotenv
+AUTOHUB_HUB_BASE=http://127.0.0.1:8767
+```
+
+Then use plain `npm start`. Both `npm start` and `npm run once` load `.env`
+when present; existing shell variables take precedence. The file is ignored by
+Git, and no global shell export is needed. With no Hub setting, standalone
+behavior remains the default. Direct `node src/feed.mjs` launches use the
+process environment; add `--env-file-if-exists=.env` before the script path
+when launching that way.
+
+Set `AUTOHUB_HUB_TOKEN` in `.env` or the server environment if that Hub requires a bearer
 token. In this mode CottageCode follows every `/v1/tasks` cursor page and reads
 canonical task detail, timelines, checklist data, and control capabilities.
 It does not open SQLite or scan Claude transcripts. The Hub owns discovery;

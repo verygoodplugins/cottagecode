@@ -249,3 +249,13 @@ test('canonical inventory controls use refreshed capabilities and reject revoked
   assert.equal(revoked.calls.length,1);
   assert.equal(supported.messenger.capability({...inventory,conversationTarget:{...inventory.conversationTarget,controlTargetId:null}}).available,false);
 });
+
+test('canonical inventory rejects nested stale controls before a write',async()=>{
+  const inventory={...agent,conversationTarget:{taskId:'task-1',taskStatus:'running',recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true}}};
+  const stale=fixture({current:{...task,recordKind:'external_session',controlTargetId:'task-1',capabilities:{canSteer:true},freshness:{isStale:true}}});
+  const sent=await stale.messenger.send(inventory,message);
+  assert.equal(sent.status,409);
+  assert.equal(sent.body.delivery,'not_sent');
+  assert.equal(stale.calls.length,1,'fresh detail is inspected but no POST occurs');
+  assert.equal(stale.messenger.capability({...inventory,freshness:{isStale:true}}).available,false);
+});
