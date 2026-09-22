@@ -92,7 +92,8 @@ export function mapHubStatus(row, now = Date.now()) {
   const stale = Number.isFinite(updated) && now - updated > STALE_MS;
 
   if (status === "running") return stale ? "offline" : "working";
-  if (status === "pending" || status === "queued") return "idle";
+  if (status === "pending" || status === "queued" || status === "ready_for_merge") return "idle";
+  if (status === "blocked") return "blocked";
   if (
     status === "awaiting_input" ||
     status === "needs_input" ||
@@ -106,7 +107,7 @@ export function mapHubStatus(row, now = Date.now()) {
   }
   if (status === "failed" || status === "cancelled" || status === "interrupted") {
     if (!attentionResolved(row) && (row.attention_type || row.attention_message)) return "blocked";
-    return aged(updated) ? "offline" : "done";
+    return "offline";
   }
   if (status === "stale") return "offline";
   return "idle";

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,returnToLatestActivity,activityPagingButtons,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml,cottageSelection,inspectorPrCounts} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,returnToLatestActivity,activityPagingButtons,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml,lifecycleHtml,worktreeActionsHtml,cottageSelection,inspectorPrCounts} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
 
@@ -183,4 +183,20 @@ test('latest journal action survives a live source cursor reset while browsing h
   assert.deepEqual(cache.events.map(event=>event.id),['new-source']);
   assert.equal(cache.cursor,'new-source');assert.equal(cache.hasMore,true);
   assert.doesNotMatch(activityPagingButtons(cache),/data-action="latest"/);
+});
+
+
+test('delivery lifecycle shows readiness and cleanup without a success claim for failures',()=>{
+ assert.match(lifecycleHtml({executionStatus:'ready_for_merge'}),/Ready for merge/);
+ const html=lifecycleHtml({executionStatus:'blocked',finalization:{blocker:'Review <missing>'},cleanup:{status:'deferred',reason:'Live owner'}});
+ assert.match(html,/Review &lt;missing&gt;/);assert.match(html,/deferred · Live owner/);
+ assert.match(lifecycleHtml({executionStatus:'failed'}),/Failed/);
+ assert.doesNotMatch(lifecycleHtml({executionStatus:'failed'}),/Complete/);
+});
+
+test('removed worktrees retain historical copy but offer no invalid launch',()=>{
+ const cottage={worktreePath:'/tmp/worktree',cleanup:{status:'removed'}};
+ assert.doesNotMatch(worktreeActionsHtml(cottage),/Open worktree|cursor:/);
+ assert.match(worktreeActionsHtml(cottage),/Copy worktree path/);
+ assert.match(worktreeActionsHtml({...cottage,cleanup:{status:'deferred'}}),/Open worktree/);
 });
