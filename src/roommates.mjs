@@ -40,7 +40,7 @@ export function plotAgentsForLayout(agents = []) {
 
   for (const [key, members] of groups.entries()) {
     if (members.length === 1) {
-      result.push({ ...members[0], roommates: [], plotKey: members[0].id });
+      result.push({ ...members[0], roommates: [], plotKey: "wt:" + key });
       continue;
     }
     const host = members.reduce(preferHost);
