@@ -6,6 +6,15 @@ const now = Date.parse("2026-09-14T12:00:00Z");
 const pr = { number: 4, url: "https://github.com/example/repo/pull/4", state: "open",
   labels: ["babysit:blocked"], source: "github", checkedAt: now, headSha: "head" };
 
+test("canonical Hub membership controls visibility without changing task status", () => {
+  const historical = { inventoryScope: "history", status: "working", pr };
+  const recent = { inventoryScope: "dashboard", status: "offline", endedAt: now - 10 * RECENT_MS };
+  assert.equal(classifyOccupancy(historical, now), "settled");
+  assert.equal(classifyOccupancy(recent, now), "recent");
+  assert.equal(classifyOccupancy({ ...recent, status: "blocked" }, now), "live");
+  assert.equal(stampOccupancy([historical], now)[0].status, "working");
+});
+
 test("completed cottages remain live while their PR is outstanding", () => {
   const old = { status: "offline", endedAt: now - 10 * RECENT_MS, pr };
   assert.equal(classifyOccupancy(old, now), "live");

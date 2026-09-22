@@ -4,7 +4,7 @@ import {parcelReclaim,paintParcelReclaim} from './folklore.mjs';
 import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './world.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
-import {activityAddress,mergeActivity,elapsedMs,validTime} from './feed-client.mjs';
+import {activityAddress,mergeActivity,elapsedMs,validTime,isCottageVisible} from './feed-client.mjs';
 import {cottageDoors,crossedDoor} from './interaction.mjs';
 import {normalizeTodos} from './todos.mjs';
 import {conversationCapability,MAX_MESSAGE_LENGTH} from './conversation.mjs';
@@ -32,6 +32,7 @@ export const safeHttpsUrl=raw=>{try{const u=new URL(raw);return u.protocol==='ht
 const clock=value=>{const ms=validTime(value);return ms?new Date(ms).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';};
 const elapsed=agent=>{const duration=elapsedMs(agent);if(duration===null)return 'Unavailable';const sec=Math.floor(duration/1000);return Math.floor(sec/60)+'m '+(sec%60)+'s';};
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const cottageReturnPoint=plot=>({x:plot.x+(plot.parentPlot?8:27),y:plot.y+(plot.parentPlot?22:76)});
 export const button=(action,label,extra='')=>'<button type="button" data-action="'+esc(action)+'" '+extra+'>'+label+'</button>';
 export const handoffAction=url=>safeHttpsUrl(url)?button('handoff','Open handoff') : '';
 export function appendInlineHandoffs(events,append){
@@ -83,6 +84,19 @@ export function activityCacheFor(cache,a={}){
   const identity=JSON.stringify([a.taskId||null,sessionIdentity,a.activityUrl||null]);
   if(cache?.identity===identity)return cache;
   return {identity,events:[],source:'none',cursor:null,hasMore:false,stale:false,unavailable:false};
+}
+/** Keep an intentional inspection; automatic choices start in the visible village. */
+export function cottageSelection(agents,{selected=null,interiorId=null,showSettled=false}={}){
+  if(interiorId&&agents.some(agent=>agent.id===interiorId))return interiorId;
+  if(selected&&agents.some(agent=>agent.id===selected))return selected;
+  const visible=agents.filter(agent=>isCottageVisible(agent,{showSettled}));
+  const hosts=visible.filter(agent=>!agent.parent);
+  return (hosts.find(agent=>['working','blocked'].includes(agent.status))||hosts[0]||visible[0])?.id||null;
+}
+export function inspectorPrCounts(agents,{showSettled=false,now=Date.now()}={}){
+  // Standalone feeds keep their existing PR accounting. Canonical Hub history
+  // joins the tally only when the user opens settled cottages.
+  return prCounts(agents.filter(agent=>agent.inventoryScope!=='history'||isCottageVisible(agent,{showSettled,now})),now);
 }
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
 export function prSnapshotHtml(value){
@@ -185,9 +199,11 @@ export function createObservatory(api){
   };
   const hint=text=>{if(text!==lastHint){$('scene-status').textContent=text;lastHint=text;}};
   function placePlayer(){
-    if(player)return;
-    const home=api.getWorld().jack;
-    player=home?{x:home.x+27,y:home.y+44}:{x:api.getWorld().roadX+18,y:65};
+    const world=api.getWorld();
+    if(player&&Number.isFinite(player.x)&&Number.isFinite(player.y)&&player.x>=0&&player.y>=0&&player.x<world.width&&player.y<world.height)return;
+    const home=world.jack;
+    player=home?{x:home.x+27,y:home.y+44}:{x:world.roadX+18,y:65};
+    followId=null;setMode(mode);scrollToPlayer(true);
   }
   function setMode(value){
     mode=value;keys.clear();
@@ -200,7 +216,7 @@ export function createObservatory(api){
   function enter(id){
     const a=byId(id),p=plotFor(id);if(!a||!p)return;
     selected=id;api.select(id);interiorId=id;room=roomFor(a);
-    roomPlayer={...room.door};returnTo={x:p.x+(p.parentPlot?8:27),y:p.y+(p.parentPlot?22:76)};
+    roomPlayer={...room.door};returnTo=cottageReturnPoint(p);
     selectedObject=null;tab='overview';transition=reduce?1:0;
     followId=null;setMode('room');sound.play('door');renderPanel(id);roomCanvas.focus();
   }
@@ -547,14 +563,16 @@ export function createObservatory(api){
     const range=$('replay-range');if(range)range.value=replayIndex;
   }
   function updatePrTally(){
-    const counts=prCounts(latestAgents),signature=JSON.stringify(counts)+prFilter;
+    const counts=inspectorPrCounts(latestAgents,{showSettled:api.getWorld().showSettled});
+    if(prFilter&&!counts[prFilter])prFilter=null;
+    const signature=JSON.stringify(counts)+prFilter;
     if(signature===stageSignature)return;stageSignature=signature;
     $('pr-tally').innerHTML=Object.entries(STAGES).filter(([k])=>counts[k]>0).map(([key,s])=>'<button type="button" data-pr="'+key+'" aria-pressed="'+(prFilter===key)+'"><i style="background:'+s.color+'"></i>'+s.label+' <span>'+counts[key]+'</span></button>').join('');
     $('pr-tally').setAttribute('aria-label','Filter by PR stage; shared pull requests counted once');
   }
   $('pr-tally').addEventListener('click',e=>{const b=e.target.closest('[data-pr]');if(!b)return;prFilter=prFilter===b.dataset.pr?null:b.dataset.pr;stageSignature='';updatePrTally();updateRoster();});
   function updateRoster(){
-    const list=latestAgents.filter(a=>visible(a)&&(a.occupancy!=='settled'||api.getWorld().showSettled));
+    const list=latestAgents.filter(a=>visible(a)&&isCottageVisible(a,{showSettled:api.getWorld().showSettled,interiorId}));
     const signature=JSON.stringify(list.map(a=>[a.id,a.name,a.status,prStage(a.pr)]))+selected;
     if(signature===rosterSignature)return;rosterSignature=signature;
     $('cottage-list').innerHTML=list.map(a=>'<button type="button" data-cottage="'+esc(a.id)+'" aria-pressed="'+(selected===a.id)+'"><span>'+esc(a.name)+'</span><small>'+esc(STAGES[prStage(a.pr)].label)+'</small></button>').join('');
@@ -571,6 +589,7 @@ export function createObservatory(api){
     if(from&&to&&Date.now()-e.timestamp<60000)couriers.push({...e,start:performance.now()/1000,fromPoint:{x:from.x+from.w/2,y:from.y+from.h-10},toPoint:{x:to.x+to.w/2,y:to.y+to.h-10}});
   }
   function update(agents,meta={}){
+    const selectedWasCottage=latestAgents.some(agent=>agent.id===selected);
     latestAgents=agents;feedStale=!!meta.stale;
     const nextKey=api.getSourceKey?.()||api.getEndpoint()||'demo';
     const sourceChanged=nextKey!==sourceKey;
@@ -597,10 +616,18 @@ export function createObservatory(api){
       }
       activityLines.set(a.id,line);
     }
+    if(mode==='room'){
+      if(!byId(interiorId))leave();
+      else{const plot=plotFor(interiorId);if(plot)returnTo=cottageReturnPoint(plot);}
+    }
     historyInitialized=true;placePlayer();if(sourceChanged)scrollToPlayer(true);
-    if(mode==='room'&&!byId(interiorId))leave();
-    if(!selected&&agents.length){selected=agents.find(a=>!a.parent)?.id||agents[0].id;api.select(selected);}
-    const w=api.getWorld();relationships=normalizeRelationships(meta.relationships||[],[...new Set(agents.map(a=>a.town))]);
+    const w=api.getWorld();
+    // Non-cottage selections, such as Jack's letters, belong to the town UI.
+    if(!selected||selectedWasCottage||byId(selected)){
+      const nextSelected=cottageSelection(agents,{selected,interiorId,showSettled:w.showSettled});
+      if(nextSelected!==selected){selected=nextSelected;tab='overview';selectedObject=null;api.select(selected);}
+    }
+    relationships=normalizeRelationships(meta.relationships||[],[...new Set(agents.map(a=>a.town))]);
     handoffs=normalizedHandoffs(meta.handoffs||[]);handoffs.forEach(appendHandoff);
     board={x:w.roadX+26,y:(w.roadYs?.[0]||w.height-60)+16};
     gramophone={x:board.x+40,y:board.y};

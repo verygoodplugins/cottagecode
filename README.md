@@ -152,7 +152,10 @@ when launching that way.
 Set `AUTOHUB_HUB_TOKEN` in `.env` or the server environment if that Hub requires a bearer
 token. In this mode CottageCode follows every `/v1/tasks` cursor page and reads
 canonical task detail, timelines, checklist data, and control capabilities.
-It does not open SQLite or scan Claude transcripts. The Hub owns discovery;
+The default map follows the same **Live + recent** inventory as the voice TUI.
+Its count spans every project town, not just HubTown. Older tasks stay available
+with **settled** enabled; historical PR links do not bring them back onto the
+default map. It does not open SQLite or scan Claude transcripts. The Hub owns discovery;
 CottageCode keeps its existing towns, cottages, inspectors, and message receipts.
 If the Hub is unavailable, the last complete feed stays visible as stale.
 Credentials and raw upstream errors are never returned to the browser.

@@ -19,7 +19,8 @@ test('inventory adapter follows all cursor pages and preserves canonical parent/
     return {ok:true,json:async()=>new URL(url).searchParams.get('cursor') ? {tasks:[task('child',{recordKind:'external_session',parentId:'canonical-parent'})],has_more:false,next_cursor:null} : {tasks:[task('canonical-parent')],has_more:true,next_cursor:'page-2'}};
   }});
   const value=await reader.read();
-  assert.equal(calls.length,2);
+  assert.equal(calls.length,4);
+  assert.deepEqual(calls.map(call=>new URL(call.url).searchParams.get('scope')),['history','history','dashboard','dashboard']);
   assert.equal(calls[0].options.headers.authorization,'Bearer secret');
   assert.equal(new URL(calls[0].url).pathname,'/v1/tasks');
   assert.deepEqual(value.agents.map(a=>a.id),['canonical-parent','child']);
@@ -30,11 +31,78 @@ test('inventory adapter follows all cursor pages and preserves canonical parent/
   assert.equal(value.agents[0].branch,'fix/cursor');
   assert.equal(JSON.stringify(value.agents).includes('secret'),false);
 });
+
+test('dashboard membership survives history PRs, old clocks, child records, and detail refresh',async()=>{
+  const old=new Date(now-10*86400e3).toISOString();
+  const link={kind:'pull_request',url:'https://github.com/acme/repo/pull/1'};
+  const history=[task('recent',{status:'completed',completedAt:old,updatedAt:old}),
+    task('old-pr',{status:'completed',updatedAt:old,resultLinks:[link]}),
+    task('child',{recordKind:'external_session',parentId:'recent'}),
+    task('waiting',{status:'awaiting_review',updatedAt:old})];
+  let fail=false;
+  const reader=createHubInventoryReader({baseUrl:'http://hub.test',now:()=>now,ttl:0,fetchFn:async url=>{
+    const u=new URL(url);
+    if(u.pathname.endsWith('/recent'))return {ok:true,json:async()=>history[0]};
+    const dashboard=u.searchParams.get('scope')==='dashboard';
+    if(dashboard && fail)throw new Error('private connection failure');
+    return {ok:true,json:async()=>({tasks:dashboard?[history[0],history[3]]:history,has_more:false})};
+  }});
+  const feed=createFeed({hubInventory:reader,resolveRepos:async a=>a,enrich:async a=>a,now:()=>now});
+  await feed.scan();
+  const snapshot=feed.snapshot();
+  assert.equal(snapshot.live,2);assert.equal(snapshot.settled,2);
+  assert.deepEqual(snapshot.agents.filter(a=>a.occupancy!=='settled').map(a=>a.id).sort(),['recent','waiting']);
+  assert.equal(snapshot.agents.find(a=>a.id==='child').parent,'recent');
+  assert.equal(snapshot.agents.find(a=>a.id==='old-pr').pr.url,link.url);
+  const detail=await reader.detail('recent');
+  assert.equal(detail.inventoryScope,'dashboard');assert.equal(detail.occupancy,'recent');
+  fail=true;await feed.scan();
+  assert.equal(feed.snapshot().stale,true);
+  assert.deepEqual(feed.snapshot().agents,snapshot.agents,'dashboard failure cannot publish a history-only snapshot');
+});
+
+test('canonical tasks can settle or disappear without old PRs resurrecting them',async()=>{
+  let phase=0;
+  const reader=createHubInventoryReader({baseUrl:'http://hub.test',now:()=>now,ttl:0,historyTtl:0,fetchFn:async url=>{
+    const dashboard=new URL(url).searchParams.get('scope')==='dashboard';
+    return {ok:true,json:async()=>({tasks:phase===2 || dashboard && phase===1 ? [] : [task('retiring',{resultLinks:[{kind:'pull_request',url:'https://github.com/acme/repo/pull/1'}]})],has_more:false})};
+  }});
+  const feed=createFeed({hubInventory:reader,resolveRepos:async a=>a,enrich:async a=>a,now:()=>now});
+  await feed.scan();assert.equal(feed.snapshot().live,1);
+  phase=1;await feed.scan();assert.equal(feed.snapshot().live,0);assert.equal(feed.snapshot().settled,1);
+  phase=2;await feed.scan();assert.equal(feed.snapshot().agents.length,0);
+});
+
+test('dashboard keeps refreshing while expensive historical pages are cached',async()=>{
+  let clock=now;const scopes=[];
+  const reader=createHubInventoryReader({baseUrl:'http://hub.test',now:()=>clock,ttl:0,fetchFn:async url=>{
+    const u=new URL(url),scope=u.searchParams.get('scope');scopes.push(scope);
+    assert.equal(u.searchParams.get('limit'),'500');
+    return {ok:true,json:async()=>({tasks:[task(scope==='history'?'old':'current')],has_more:false})};
+  }});
+  await reader.read();clock+=5000;await reader.read();
+  assert.deepEqual(scopes,['history','dashboard','dashboard']);
+  clock+=60000;await reader.read();
+  assert.deepEqual(scopes,['history','dashboard','dashboard','history','dashboard']);
+});
 test('configured hub mode never calls standalone scanner or SQLite reader',async()=>{
   let scans=0,reads=0;
   const inventory={configured:true,read:async()=>({ok:true,agents:[toInventoryCottage(task('canonical'),now)],keys:new Set(),links:new Map()})};
   const feed=createFeed({hubInventory:inventory,scanClaude:async()=>{scans++;throw new Error('scanner forbidden');},readHub:()=>{reads++;throw new Error('DB forbidden');},resolveRepos:async a=>a,enrich:async a=>a,now:()=>now});
   await feed.scan();assert.equal(scans,0);assert.equal(reads,0);assert.equal(feed.snapshot().agents[0].id,'canonical');assert.equal(feed.snapshot().source,'hub');
+});
+
+test('historical inventory does not consume live repository and GitHub polling',async()=>{
+  const agents=[{...toInventoryCottage(task('current'),now),inventoryScope:'dashboard'},
+    {...toInventoryCottage(task('old',{resultLinks:[{kind:'pull_request',url:'https://github.com/acme/repo/pull/1'}]}),now),inventoryScope:'history'}];
+  const calls=[];
+  const feed=createFeed({hubInventory:{configured:true,read:async()=>({ok:true,agents})},
+    resolveRepos:async a=>{calls.push(['repos',a.map(agent=>agent.id)]);return a;},
+    enrich:async a=>{calls.push(['github',a.map(agent=>agent.id)]);return a;},now:()=>now});
+  await feed.scan();
+  assert.deepEqual(calls,[['repos',['current']],['github',['current']]]);
+  assert.equal(feed.snapshot().agents.length,2);
+  assert.equal(feed.snapshot().agents.find(a=>a.id==='old').pr.url,'https://github.com/acme/repo/pull/1');
 });
 test('failed continuation retains the previous complete feed without exposing token/errors',async()=>{
   let fail=false;

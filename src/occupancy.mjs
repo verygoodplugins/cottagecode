@@ -77,6 +77,9 @@ export function hasShowableWork(c) {
 }
 
 export function classifyOccupancy(c, now = Date.now()) {
+  if (c.inventoryScope === "history") return "settled";
+  if (c.inventoryScope === "dashboard")
+    return ["working", "blocked", "idle"].includes(c.status) ? "live" : "recent";
   if (c.status === "working" || c.status === "blocked") return "live";
   if (hasOutstandingPr(c, now)) return "live";
   if (c.status === "idle") {

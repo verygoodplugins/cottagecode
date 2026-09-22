@@ -57,7 +57,7 @@ export function toInventoryCottage(task, now=Date.now()) {
 
 export function createHubInventoryReader({
   baseUrl=process.env.AUTOHUB_HUB_BASE || '',token=process.env.AUTOHUB_HUB_TOKEN || process.env.COTTAGE_HUB_TOKEN || '',
-  fetchFn=globalThis.fetch,now=Date.now,ttl=5000,pageSize=250,
+  fetchFn=globalThis.fetch,now=Date.now,ttl=5000,pageSize=500,historyTtl=60000,timeoutMs=45000,
 }={}) {
   let base=null;
   if(baseUrl) {
@@ -67,28 +67,43 @@ export function createHubInventoryReader({
       base.pathname=base.pathname.replace(/\/$/,'').replace(/\/v1$/,'')+'/v1/';base.search='';base.hash='';
     } catch {throw new Error('AUTOHUB_HUB_BASE must be an HTTP(S) URL without credentials.');}
   }
-  let previous=null,checkedAt=0,inFlight=null;
+  let previous=null,checkedAt=0,inFlight=null,history=null,historyCheckedAt=0;
   async function get(path) {
-    const response=await fetchFn(new URL(path,base),{headers:{accept:'application/json',...(token?{authorization:`Bearer ${token}`}:{})},redirect:'error',signal:AbortSignal.timeout(8000)});
+    const response=await fetchFn(new URL(path,base),{headers:{accept:'application/json',...(token?{authorization:`Bearer ${token}`}:{})},redirect:'error',signal:AbortSignal.timeout(timeoutMs)});
     if(!response.ok)throw new Error('Hub inventory temporarily unavailable');
     return response.json();
   }
   async function refresh() {
     try {
-      const tasks=new Map(),seen=new Set();let cursor='';
-      do {
-        const query=new URLSearchParams({scope:'history',limit:String(pageSize)});
-        if(cursor)query.set('cursor',cursor);
-        const page=await get(`tasks?${query}`);
-        if(!Array.isArray(page.tasks))throw new Error();
-        for(const task of page.tasks) {
-          if(typeof task?.id!=='string'||!task.id)throw new Error();
-          tasks.set(task.id,toInventoryCottage(task,now()));
+      const tasks=new Map();
+      let nextHistory=null;
+      // The Hub owns Live + recent membership. History alone cannot reproduce
+      // it from PR links or task clocks, and includes old external children.
+      // Read dashboard last so its newer rows win if a task changes mid-scan.
+      for(const scope of ['history','dashboard']) {
+        if(scope==='history'&&history&&now()-historyCheckedAt<historyTtl){
+          for(const [id,cottage] of history)tasks.set(id,cottage);
+          continue;
         }
-        cursor=page.has_more ? page.next_cursor : '';
-        if(page.has_more && (typeof cursor!=='string'||!cursor||seen.has(cursor)))throw new Error();
-        if(cursor)seen.add(cursor);
-      }while(cursor);
+        const seen=new Set();let cursor='';
+        do {
+          const query=new URLSearchParams({scope,limit:String(pageSize)});
+          if(cursor)query.set('cursor',cursor);
+          const page=await get(`tasks?${query}`);
+          if(!Array.isArray(page.tasks))throw new Error();
+          for(const task of page.tasks) {
+            if(typeof task?.id!=='string'||!task.id)throw new Error();
+            const cottage={...toInventoryCottage(task,now()),inventoryScope:scope};
+            cottage.occupancy=classifyOccupancy(cottage,now());
+            tasks.set(task.id,cottage);
+          }
+          cursor=page.has_more ? page.next_cursor : '';
+          if(page.has_more && (typeof cursor!=='string'||!cursor||seen.has(cursor)))throw new Error();
+          if(cursor)seen.add(cursor);
+        }while(cursor);
+        if(scope==='history')nextHistory=new Map(tasks);
+      }
+      if(nextHistory){history=nextHistory;historyCheckedAt=now();}
       previous={ok:true,agents:[...tasks.values()],keys:new Set(tasks.keys()),links:new Map([...tasks.keys()].map(id=>[id,new Set([id])]))};
       checkedAt=now();return previous;
     }catch {throw new Error('Hub inventory temporarily unavailable');}
@@ -105,7 +120,11 @@ export function createHubInventoryReader({
       try {
         const task=await get(`tasks/${encodeURIComponent(id)}`);
         if(task.id!==id)throw new Error();
-        return toInventoryCottage(task,now());
+        const cottage=toInventoryCottage(task,now());
+        const scope=previous?.agents.find(agent=>agent.id===id)?.inventoryScope;
+        if(scope)cottage.inventoryScope=scope;
+        cottage.occupancy=classifyOccupancy(cottage,now());
+        return cottage;
       }catch {throw new Error('Hub task detail temporarily unavailable');}
     },
   };

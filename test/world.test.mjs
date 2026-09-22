@@ -1,6 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createTownLayout,movePoint,normalizeRelationships,normalizedHandoffs,advanceDuck} from '../src/world.mjs';
+import {layoutCottages} from '../src/feed-client.mjs';
+import {plotAgentsForLayout} from '../src/roommates.mjs';
+
+test('Hub history does not reserve empty districts or become the live roommate host',()=>{
+  const history=Array.from({length:500},(_,i)=>({id:'a-old-'+i,town:'HubTown',inventoryScope:'history',occupancy:'settled',worktreePath:i===0?'/project/shared':'/old/'+i}));
+  const active={id:'z-current',town:'HubTown',inventoryScope:'dashboard',occupancy:'live',worktreePath:'/project/shared'};
+  const all=[...history,active],layout=createTownLayout(),options={trimEmptyBlocks:true};
+  const current=()=>layout.update(plotAgentsForLayout(layoutCottages(all)),options);
+  const first=current();
+  assert.equal(first.plots.length,1);assert.equal(first.blocks.length,1);
+  assert.equal(first.plots[0].agent.id,active.id);assert.deepEqual(first.plots[0].agent.roommates,[]);
+  const expanded=layout.fork().update(plotAgentsForLayout(layoutCottages(all,{showSettled:true})),options);
+  assert.ok(expanded.height>first.height);
+  const restored=current();
+  assert.equal(restored.height,first.height);assert.equal(restored.blocks.length,1);
+  assert.equal(restored.plots[0].x,first.plots[0].x);assert.equal(restored.plots[0].y,first.plots[0].y);
+  const historical=expanded.plots.find(p=>p.agent.id==='a-old-10');
+  const again=layout.fork().update(plotAgentsForLayout(layoutCottages(all,{showSettled:true})),options);
+  assert.deepEqual(again.plots.find(p=>p.agent.id==='a-old-10'),historical,'history locations survive toggling');
+  all.push({...active,id:'new-arrival',worktreePath:'/project/new'});
+  const arrived=current();
+  assert.equal(arrived.height,first.height,'history never pushes new live work into distant annexes');
+  assert.equal(arrived.blocks.length,1);assert.equal(arrived.plots.length,2);
+});
 test('plots remain fixed through reorder, departure, overflow and new towns',()=>{
   const layout=createTownLayout({columns:2,rows:1});
   const a={id:'a',town:'HubTown'},b={id:'b',town:'AppTown'};

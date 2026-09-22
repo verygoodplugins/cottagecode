@@ -23,8 +23,26 @@ export function normalizeCottage(a,i,{town,model,occupancy,now=Date.now()}){
     activity:String(a.activity||''),lastLine:String(a.lastLine||''),result:String(a.result||''),
     attention:String(a.attention||''),model:model(a.model),tokens:Number(a.tokens)||0,cost:Number(a.cost)||0,
     dispatchedBy:String(a.dispatchedBy||a.parent||'unknown'),pr};
-  result.occupancy=hasOutstandingPr(result,now)?'live':(a.occupancy||occupancy(result,now));
+  // The Hub owns dashboard membership. A historical PR link is still useful
+  // at the desk, but it cannot bring an archived task back into the village.
+  result.occupancy=a.inventoryScope==='history'?'settled':
+    a.inventoryScope==='dashboard'?(a.occupancy||(['working','blocked','idle'].includes(status)?'live':'recent')):
+    hasOutstandingPr(result,now)?'live':(a.occupancy||occupancy(result,now));
   return result;
+}
+export function isCottageVisible(agent,{showSettled=false,interiorId=null,now=Date.now()}={}){
+  return showSettled||interiorId===agent.id||
+    (agent.inventoryScope!=='history'&&(agent.occupancy!=='settled'||hasOutstandingPr(agent,now)));
+}
+export function layoutCottages(agents,options={}){
+  // Standalone feeds retain their stable household anchors. Canonical history
+  // gets plots only when requested, so it cannot crowd out the live village.
+  return agents.filter(agent=>agent.inventoryScope!=='history'||isCottageVisible(agent,options));
+}
+export function feedStatusNote(agents,{source='',stale=false}={}){
+  const visible=agents.filter(agent=>isCottageVisible(agent)).length;
+  const sourceName=({hub:'AutoHub',claude:'Claude sessions','hub+claude':'AutoHub + Claude sessions',codex:'Codex tasks',demo:'Demo village',none:'Local feed'})[source]||source||'Custom feed';
+  return `${stale?'Stale snapshot · ':''}${sourceName} · ${visible} live + recent · ${agents.length-visible} settled`;
 }
 export function activityAddress(agent,endpoint){
   if(!agent.activityUrl)return null;

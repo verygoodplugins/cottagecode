@@ -2,7 +2,7 @@ import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
 import { createTownLayout, advanceDuck, normalizeTown } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory, apprenticeResidentTarget } from "./observatory.mjs";
-import { normalizeCottage } from "./feed-client.mjs";
+import { normalizeCottage, isCottageVisible, layoutCottages, feedStatusNote } from "./feed-client.mjs";
 import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import {
@@ -41,6 +41,7 @@ let feedRevision = 0;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
 let observatory;
 const stableLayout = createTownLayout();
+let historyLayout = null;
 let sceneSolids = [], scenePonds = [], sceneDistricts = [];
 let showSettled = false;
 
@@ -128,7 +129,7 @@ async function fetchAgents(){
     builtInDemo=false;LIVE=true;feedStale=!!data.stale;FEED_META=data;
     const list=data.agents.filter(a=>a&&typeof a==="object").map((a,i)=>normalizeCottage(data.stale?{...a,pr:{...a.pr,stale:true,reason:"The feed is stale; PR readiness is unverified."}}:a,i,{town:normalizeTown,model:shortModel,occupancy:classifyOccupancy}));
     lastSnapshot=list;lastEndpoint=endpoint;
-    feedNote((feedStale?"Stale snapshot · ":"live. ")+list.length+" cottages ("+(data.source||"custom feed")+")",feedStale?"#e7b778":"#94c99e");
+    feedNote(feedStatusNote(list,{source:data.source,stale:feedStale}),feedStale?"#e7b778":"#94c99e");
     return list;
   }catch(err){
     if(!current())return null;
@@ -1609,7 +1610,7 @@ function drawSign(x, y, label, color){
 
 /* ---------- layout ---------- */
 function visibleAgents(){
-  return agents.filter(a => showSettled || a.occupancy !== "settled" || hasOutstandingPr(a) || observatory?.state.interiorId===a.id);
+  return agents.filter(a => isCottageVisible(a,{showSettled,interiorId:observatory?.state.interiorId}));
 }
 
 function drawParcel(x, y, state){
@@ -1625,22 +1626,27 @@ function drawParcel(x, y, state){
 }
 
 function layout(){
-  // Group from the full feed so a settled host cannot lose the shared slot
-  // when roommates remain live and visible.
-  const rooted=plotAgentsForLayout(agents);
-  const lodgers=roommateLodgerIds(agents);
-  const hostById=new Map(rooted.map(h=>[h.id,h]));
-  const forLayout=agents.filter(a=>!lodgers.has(a.id)).map(a=>{
-    const host=hostById.get(a.id);
-    if(host) return host;
-    if(a.parent && lodgers.has(a.parent)){
-      const hostId=plotHostId(agents, a.parent);
-      return hostId ? {...a, parent:hostId} : a;
-    }
-    return a;
-  });
-  const world=stableLayout.update(forLayout);
-  const styles=districtsFrom(agents);
+  const prepare=residents=>{
+    const rooted=plotAgentsForLayout(residents),lodgers=roommateLodgerIds(residents);
+    const hostById=new Map(rooted.map(h=>[h.id,h]));
+    const forLayout=residents.filter(a=>!lodgers.has(a.id)).map(a=>{
+      const host=hostById.get(a.id);
+      if(host)return host;
+      if(a.parent&&lodgers.has(a.parent)){
+        const hostId=plotHostId(residents,a.parent);
+        return hostId?{...a,parent:hostId}:a;
+      }
+      return a;
+    });
+    return {residents,hostById,forLayout};
+  };
+  const current=prepare(layoutCottages(agents,{interiorId:showSettled?null:observatory?.state.interiorId}));
+  const options={trimEmptyBlocks:agents.some(a=>a.inventoryScope)};
+  const liveWorld=stableLayout.update(current.forLayout,options);
+  if(showSettled)historyLayout??=stableLayout.fork();else historyLayout=null;
+  const {residents,hostById,forLayout}=showSettled?prepare(agents):current;
+  const world=showSettled?historyLayout.update(forLayout,options):liveWorld;
+  const styles=districtsFrom(residents);
   TOWNS=world.blocks.map(b=>({...styles.find(d=>d.key===b.key)||FALLBACK_TOWN,key:b.key,label:b.key.toUpperCase()+(b.page?" ANNEX":"")}));
   DR=world.blocks;sceneDistricts=DR;
   if(!TOWNS.length){TOWNS=[{key:"HubTown",label:"HOME HUBTOWN",...TOWN_PALETTE[0]}];DR=[{key:"HubTown",x:MARGIN,y:MARGIN,w:world.districtWidth,h:340,row:0,col:0}];sceneDistricts=DR;}
@@ -2070,7 +2076,7 @@ document.getElementById("connect").onclick = ()=>{
     if(ENDPOINT!==null){
       activeFeedAbort?.abort();feedRevision++;clearFeedState();
     }
-    ENDPOINT=null;builtInDemo=true;stableLayout.reset();layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
+    ENDPOINT=null;builtInDemo=true;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
   }
   if(!isAllowedFeedUrl(v)){
     feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
@@ -2080,7 +2086,7 @@ document.getElementById("connect").onclick = ()=>{
   if(nextEndpoint!==ENDPOINT){
     activeFeedAbort?.abort();feedRevision++;clearFeedState();
   }
-  ENDPOINT=nextEndpoint;builtInDemo=false;stableLayout.reset();layoutSignature="";feedNote("connecting...");refresh({latest:true});
+  ENDPOINT=nextEndpoint;builtInDemo=false;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("connecting...");refresh({latest:true});
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
   if(e.key==="Enter") document.getElementById("connect").click();
@@ -2088,7 +2094,7 @@ document.getElementById("endpoint").addEventListener("keydown", e=>{
 document.getElementById("settled").onclick = (e)=>{
   showSettled = !showSettled;
   e.target.setAttribute("aria-pressed", String(showSettled));
-  layout(); renderTally(); renderPanel();
+  layout(); observatory?.update(agents,{...FEED_META,stale:feedStale}); renderTally(); renderPanel();
 };
 document.getElementById("pause").onclick = (e)=>{
   paused = !paused; SIM.setLive(!paused);
@@ -2160,7 +2166,7 @@ const refresh=createLatestRefresh(async ()=>{
     if(incoming===null)return true;
     agents=incoming;
     const nextSource=feedNamespace(ENDPOINT,builtInDemo);
-    if(nextSource!==layoutSource){layoutSource=nextSource;stableLayout.reset();layoutSignature="";fauna.length=0;}
+    if(nextSource!==layoutSource){layoutSource=nextSource;stableLayout.reset();historyLayout=null;layoutSignature="";fauna.length=0;}
     layout();observatory?.update(agents,{...FEED_META,stale:feedStale});renderTally();renderPanel();
     return false;
 });

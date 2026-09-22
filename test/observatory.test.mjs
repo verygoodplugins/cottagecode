@@ -1,8 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activityJournalPresentation,activityCacheFor,applyActivityPage,returnToLatestActivity,activityPagingButtons,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml} from '../src/observatory.mjs';
+import {activityJournalPresentation,activityCacheFor,applyActivityPage,returnToLatestActivity,activityPagingButtons,isPracticeDemo,button,handoffAction,appendInlineHandoffs,isApprenticeArrivalActive,apprenticeArrivalPosition,apprenticeResidentPosition,apprenticeResidentTarget,prSnapshotHtml,cottageSelection,inspectorPrCounts} from '../src/observatory.mjs';
 
 const pending = { id: 'practice-question', prompt: 'Which scope should I use?' };
+
+test('automatic inspection chooses visible work instead of the first historical record',()=>{
+  const agents=[
+    {id:'old-pr',inventoryScope:'history',occupancy:'settled',pr:{url:'https://github.com/example/repo/pull/1395'}},
+    {id:'child',inventoryScope:'dashboard',occupancy:'live',parent:'working',status:'working'},
+    {id:'recent',inventoryScope:'dashboard',occupancy:'recent',status:'done'},
+    {id:'working',inventoryScope:'dashboard',occupancy:'live',status:'working'},
+  ];
+  assert.equal(cottageSelection(agents),'working');
+  assert.equal(cottageSelection(agents,{selected:'removed-cottage'}),'working','a vanished selection is replaced with visible work');
+  assert.equal(cottageSelection(agents.slice(0,1)),null,'a history-only feed has no automatic hidden selection');
+  assert.equal(cottageSelection(agents.slice(0,1),{showSettled:true}),'old-pr');
+  assert.equal(cottageSelection(agents.slice(1,2)),'child','a visible child is inspectable even without a visible host');
+});
+
+test('explicit history inspection and the current room survive inventory updates and toggles',()=>{
+  const agents=[
+    {id:'history',inventoryScope:'history',occupancy:'settled'},
+    {id:'working',inventoryScope:'dashboard',occupancy:'live',status:'working'},
+  ];
+  assert.equal(cottageSelection(agents,{selected:'history',showSettled:true}),'history');
+  assert.equal(cottageSelection(agents,{selected:'history',showSettled:false}),'history');
+  assert.equal(cottageSelection(agents,{selected:'working',interiorId:'history'}),'history');
+  assert.equal(cottageSelection(agents.slice(1),{selected:'history',interiorId:'history'}),'working');
+  assert.equal(cottageSelection([],{selected:'working'}),null);
+});
+
+test('PR tally excludes canonical history until settled is shown and keeps standalone accounting',()=>{
+  const now=1700000000000;
+  const sharedPr={url:'https://github.com/example/repo/pull/42',state:'open',checkedAt:now};
+  const agents=[
+    {id:'working',inventoryScope:'dashboard',occupancy:'live',pr:sharedPr},
+    {id:'shared',inventoryScope:'dashboard',occupancy:'live',pr:sharedPr},
+    {id:'standalone',occupancy:'settled'},
+    ...Array.from({length:500},(_,i)=>({id:`history-${i}`,inventoryScope:'history',occupancy:'settled'})),
+  ];
+  const current=inspectorPrCounts(agents,{now});
+  assert.equal(current.total,1,'shared PRs still count once');
+  assert.equal(current.open,1);
+  assert.equal(current.unknown,1,'standalone accounting remains unchanged');
+  const all=inspectorPrCounts(agents,{showSettled:true,now});
+  assert.equal(all.open,1);
+  assert.equal(all.unknown,501);
+});
 
 test('practice replies require the built-in demo state, not a feed source label', () => {
   assert.equal(isPracticeDemo({ source: 'demo', inputRequest: pending }, true), true);

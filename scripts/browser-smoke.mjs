@@ -42,7 +42,7 @@ async function until(code,message,timeout=7000){
 }
 const state=()=>evaluate('window.cottageObservatory.state');
 async function key(key,ms=60){
-  return evaluate(`(async()=>{const c=document.getElementById(window.cottageObservatory.mode==='room'?'room-canvas':'town');c.focus();c.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true}));await new Promise(r=>setTimeout(r,${ms}));window.dispatchEvent(new KeyboardEvent('keyup',{key:${JSON.stringify(key)},bubbles:true}));return window.cottageObservatory.state;})()`);
+  return evaluate(`(async()=>{const c=document.getElementById(window.cottageObservatory.mode==='room'?'room-canvas':'town');c.focus();c.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true}));if(${ms}>0)await new Promise(r=>setTimeout(r,${ms}));window.dispatchEvent(new KeyboardEvent('keyup',{key:${JSON.stringify(key)},bubbles:true}));return window.cottageObservatory.state;})()`);
 }
 function pass(label){process.stdout.write('PASS '+label+'\n');}
 try{
@@ -67,6 +67,8 @@ try{
   assert.equal(await evaluate('document.activeElement.classList.contains(\'journal\')'),true);
   await click('[data-action="older"]');
   await until('document.querySelectorAll(\'.journal-event\').length===131','Older entries did not load');
+  await click('[data-action="latest"]');
+  await until('!window.cottageObservatory.state.activity.browsingHistory','Journal did not return to live entries');
   pass('walk indoors, inspect request, stream and paginate journal without scroll jumps');
   await click('[data-action="tab:review"]');
   assert.match(await evaluate('document.querySelector(\'.pr-snapshot\').textContent'),/Ready to merge/);
@@ -96,7 +98,9 @@ try{
     for(const target of path){let p=window.cottageObservatory.state.roomPlayer;const horizontal=Math.abs(target.x-p.x)>Math.abs(target.y-p.y),axis=horizontal?'x':'y',sign=Math.sign(target[axis]-p[axis]);if(Math.abs(target[axis]-p[axis])<1)continue;const key=horizontal?(sign>0?'ArrowRight':'ArrowLeft'):(sign>0?'ArrowDown':'ArrowUp');canvas.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true}));const end=performance.now()+800;while(sign*(target[axis]-window.cottageObservatory.state.roomPlayer[axis])>0&&performance.now()<end)await new Promise(requestAnimationFrame);window.dispatchEvent(new KeyboardEvent('keyup',{key,bubbles:true}));}
     if(Math.hypot(window.cottageObservatory.state.roomPlayer.x-room.resident.x,window.cottageObservatory.state.roomPlayer.y-room.resident.y)>=30)throw new Error('Did not reach host');
   })()`);
-  await key('e');assert.equal((await state()).tab,'talk');assert.equal((await state()).talking,true);assert.equal((await state()).sound,false);
+  // Check the short murmur animation in the keypress response, before bridge
+  // round trips can outlast its 1.5-second lifetime.
+  const talking=await key('e',0);assert.equal(talking.tab,'talk');assert.equal(talking.talking,true);assert.equal(talking.sound,false);
   await browser('snapshot');
   await browser('fill',['--fields',JSON.stringify({'#agent-message':'Please keep the cottage furniture stable.'})]);
   await evaluate('const input=document.getElementById(\'agent-message\');input.focus();input.setSelectionRange(7,11);');
@@ -226,6 +230,41 @@ try{
   await until('window.cottageObservatory.state.replayIndex>'+reducedReplay,'Reduced motion incorrectly disabled replay');
   await key('Escape');
   pass('emulated reduced-motion preference preserves walking and recorded replay');
+  const historical=Array.from({length:500},(_,i)=>({id:'archived-'+i,name:'Old task '+i,town:'HubTown',status:'offline',occupancy:'settled',inventoryScope:'history',worktreePath:i===0?'/fixture/shared':'/fixture/history/'+i,pr:{...pr,number:i+1000,url:'https://github.com/example/history/pull/'+(i+1000),labels:['babysit:blocked']}}));
+  agents=[...historical,
+    {id:'current',name:'Current work',town:'HubTown',status:'working',occupancy:'live',inventoryScope:'dashboard',worktreePath:'/fixture/shared',task:'Current task',pr},
+    {id:'recent',name:'Recent work',town:'AppTown',status:'offline',occupancy:'recent',inventoryScope:'dashboard',task:'Recent task',pr:{state:'none'}},
+  ];
+  handoffs=[];
+  await browser('goto',['--url',url]);
+  await until('window.cottageObservatory?.state.selected===\'current\'','Hub history stole the initial selection');
+  assert.equal(await evaluate('window.cottageState().plots.length'),2);
+  assert.equal(await evaluate('document.querySelectorAll(\'#cottage-list button\').length'),2);
+  assert.equal(await evaluate('!!document.querySelector(\'[data-pr="blocked"]\')'),false);
+  assert.equal(await evaluate('document.querySelector(\'[data-pr="ready"] span\').textContent'),'1');
+  const compact=await evaluate('({height:window.cottageState().height,plot:window.cottageState().plots.find(p=>p.id===\'current\')})');
+  assert.ok(compact.height<1000);assert.deepEqual(compact.plot.roommates,[]);
+  await click('#settled');
+  await until('document.querySelectorAll(\'#cottage-list button\').length===502','Settled toggle did not expose canonical history');
+  assert.equal(await evaluate('document.querySelector(\'[data-pr="blocked"] span\').textContent'),'500');
+  await click('[data-pr="blocked"]');
+  await click('#settled');
+  await until('document.querySelectorAll(\'#cottage-list button\').length===2','Settled history did not hide again');
+  assert.equal(await evaluate('window.cottageState().height'),compact.height);
+  assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'current\')'),compact.plot);
+  assert.equal(await evaluate('!!document.querySelector(\'[data-pr="blocked"]\')'),false);
+  assert.equal((await state()).prFilter,null,'A hidden history-only PR filter cannot strand the village');
+  agents.push({...agents.at(-2),id:'arrival',name:'New arrival',worktreePath:'/fixture/new'});
+  await until('window.cottageState().plots.length===3','New dashboard arrival did not get a plot');
+  assert.equal(await evaluate('window.cottageState().height'),compact.height,'Historical plots must not push new live cottages into distant annexes');
+  await click('#settled');
+  await click('.cottage-directory summary');
+  await click('[data-cottage="archived-400"]');
+  await click('[data-action="enter"]');
+  await click('#settled');
+  await key('Escape');
+  assert.equal(await evaluate('window.cottageObservatory.state.player.y<window.cottageState().height'),true,'Leaving a hidden historical cottage must return Jack inside the compact village');
+  pass('canonical live inventory keeps history out of plots, selection and PR counts; settled toggle restores stable homes');
   await browser('screenshot');
   process.stdout.write('Browser journey passed. Fixture: '+url+'\n');
 }finally{server.close();}
