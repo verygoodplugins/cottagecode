@@ -15,7 +15,7 @@ import {
   paintLetterCrows,
   paintCheckStorm,
 } from "./folklore.mjs";
-import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds } from "./roommates.mjs";
+import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds, householdWorking } from "./roommates.mjs";
 import {
   isMapFullscreen,
   fullscreenButtonCopy,
@@ -1157,7 +1157,7 @@ function drawHouse(x, y, ag){
   ctx.fillText(nm, nb.x + Math.round((nb.w - ctx.measureText(nm).width)/2), nb.y+3);
 
   // windows + door
-  const lit = ag.status==="working";
+  const lit = householdWorking(ag);
   const winC = dead ? "#3d454b" : (lit ? C.winOn : C.winOff);
   [x+12, x+34].forEach(wx=>{
     px(wx-1, bodyY+4, 10, 10, O);
@@ -1701,8 +1701,8 @@ function draw(){
     drawHouse(p.x, p.y, ag);
     drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch || ag.worktree, ag.status==="offline");
     paintBranchWeeds(px, p.x, p.y, HOUSE_W, HOUSE_H, branchLane(ag));
-    const householdWorking = ag.status==="working" || (ag.roommates||[]).some(m=>m.status==="working");
-    if(householdWorking){
+    const householdWorkingNow = householdWorking(ag);
+    if(householdWorkingNow){
       const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
       drawSmoke(p.x+40, p.y+2, phase);
     }
@@ -1796,7 +1796,11 @@ function draw(){
   });
   moveFauna();
   drawFauna();
-  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>({...p,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1}))},t,paletteCtx=>observatory.drawApprenticeArrivals(paletteCtx,t));
+  observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>{
+    const working=householdWorking(p.agent);
+    const agent=working&&p.agent.status!=="working"?{...p.agent,status:"working"}:p.agent;
+    return {...p,agent,opacity:(filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)?0.3:1};
+  })},t,paletteCtx=>observatory.drawApprenticeArrivals(paletteCtx,t));
   const nightInk=Math.min(1,(observatory?.lightAt(t).darkness||0)/.4);
   if(nightInk>0){
     ctx.textBaseline='top';ctx.fillStyle='#bacbe2';

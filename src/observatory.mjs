@@ -177,7 +177,12 @@ export function createObservatory(api){
     return conversations.get(key);
   };
   const capabilityFor=a=>isPracticeDemo(a,api.isBuiltInDemo?.())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
-  const visible=a=>!prFilter||prStage(a.pr)===prFilter;
+  const visible=a=>{
+    if(!prFilter) return true;
+    if(prStage(a.pr)===prFilter) return true;
+    // Shared cottages stay visible/enterable when any roommate matches the filter.
+    return (a.roommates||[]).some(mate=>prStage((byId(mate.id)||mate).pr)===prFilter);
+  };
   const hint=text=>{if(text!==lastHint){$('scene-status').textContent=text;lastHint=text;}};
   function placePlayer(){
     if(player)return;

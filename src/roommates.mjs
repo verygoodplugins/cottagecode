@@ -10,14 +10,8 @@ export function roommateKey(agent) {
   return isAbsolutePath(path) ? path : "";
 }
 
-/**
- * Stable plot anchor: prefer a recorded parent in the group, then earliest id.
- * Status must not move the cottage between feed refreshes.
- */
-function preferHost(a, b, parentIds = new Set()) {
-  const aParent = parentIds.has(a?.id) ? 0 : 1;
-  const bParent = parentIds.has(b?.id) ? 0 : 1;
-  if (aParent !== bParent) return aParent < bParent ? a : b;
+/** Stable plot anchor: earliest id. Status and children must not move the cottage. */
+function preferHost(a, b) {
   const left = String(a?.id || "");
   const right = String(b?.id || "");
   return left <= right ? a : b;
@@ -30,7 +24,6 @@ function preferHost(a, b, parentIds = new Set()) {
 export function plotAgentsForLayout(agents = []) {
   const list = Array.isArray(agents) ? agents.filter(Boolean) : [];
   const ids = new Set(list.map((a) => a.id));
-  const parentIds = new Set(list.map((a) => a.parent).filter((id) => id && ids.has(id)));
   const candidates = list.filter((a) => !a.parent || !ids.has(a.parent));
   const groups = new Map();
   const result = [];
@@ -50,7 +43,7 @@ export function plotAgentsForLayout(agents = []) {
       result.push({ ...members[0], roommates: [] });
       continue;
     }
-    const host = members.reduce((best, next) => preferHost(best, next, parentIds));
+    const host = members.reduce(preferHost);
     const roommates = members
       .filter((m) => m.id !== host.id)
       .sort((a, b) => String(a.id).localeCompare(String(b.id)));
@@ -85,4 +78,11 @@ export function plotHouseholdIds(host) {
     host?.id,
     ...((host?.roommates || []).map((mate) => mate.id)),
   ].filter(Boolean));
+}
+
+/** True when the host or any roommate is actively working. */
+export function householdWorking(agent) {
+  if (!agent) return false;
+  if (agent.status === "working") return true;
+  return (agent.roommates || []).some((mate) => mate.status === "working");
 }
