@@ -10,6 +10,8 @@ export function toInventoryCottage(task, now=Date.now()) {
   const resultLinks=Array.isArray(task.resultLinks) ? task.resultLinks.filter(link=>typeof link?.url==='string' && /^https?:\/\//.test(link.url)) : [];
   const prLink=resultLinks.find(link=>link.kind==='pull_request');
   const cottage=toCottage({...task,
+    model:task.model || context.agentKernel?.route?.model ||
+      (task.backend==='codex'?'openai':task.provider || task.backend || 'unknown'),
     record_kind:task.recordKind,parent_id:task.parentId,session_id:task.sessionId,
     status:task.normalizedStatus==='completed_without_report'?'completed':task.normalizedStatus || task.status,
     queued_at:task.queuedAt,started_at:task.startedAt,completed_at:task.completedAt,updated_at:task.updatedAt,

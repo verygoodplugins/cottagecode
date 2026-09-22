@@ -43,7 +43,8 @@ export function applyActivityPage(cache,data,{older=false}={}){
     if(!older)cache.events=[];
     cache.hasMore=!!data.hasMore;cache.warning='An activity cursor expired. Only retained source history is available.';
   }
-  cache.events=(older?mergeActivity(data.events,cache.events):mergeActivity(cache.events,data.events)).slice(-1500);
+  const merged=older?mergeActivity(data.events,cache.events):mergeActivity(cache.events,data.events);
+  cache.events=older?merged.slice(0,1500):merged.slice(-1500);
   cache.source=String(data.source||'feed');
   if(older||!cache.cursor)cache.hasMore=!!data.hasMore;
   if(!older)cache.cursor=data.cursor||cache.events.at(-1)?.id||cache.cursor;

@@ -4,6 +4,14 @@ import {createHubInventoryReader,toInventoryCottage} from '../src/hub-inventory.
 import {createFeed} from '../src/feed.mjs';
 const now=Date.parse('2026-09-22T06:00:00Z');
 const task=(id,extra={})=>({id,recordKind:'logical_task',task:'Short task',originalRequest:'Full request',status:'running',updatedAt:new Date(now).toISOString(),projectPath:'/projects/autohub',worktreePath:'/projects/autohub/.worktrees/fix',branch:'fix/cursor',source:'codex_app_server',provider:'openai',backend:'codex',sessionId:'session',currentActivity:'Testing pagination',controlTargetId:null,capabilities:{canInspect:true,canRespond:false,canSteer:false},...extra});
+test('canonical model hints preserve known providers without inventing a model family',()=>{
+  assert.equal(toInventoryCottage(task('codex'),now).model,'gpt');
+  assert.equal(toInventoryCottage(task('backend',{provider:null}),now).model,'gpt');
+  assert.equal(toInventoryCottage(task('explicit',{model:'claude-opus-4'}),now).model,'opus');
+  assert.equal(toInventoryCottage(task('route',{context:{agentKernel:{route:{model:'claude-haiku-4'}}}}),now).model,'haiku');
+  assert.equal(toInventoryCottage(task('anthropic',{provider:'anthropic',backend:'claude-code'}),now).model,'anthropic');
+  assert.equal(toInventoryCottage(task('unknown',{provider:null,backend:null}),now).model,'unknown');
+});
 test('inventory adapter follows all cursor pages and preserves canonical parent/control identities',async()=>{
   const calls=[];
   const reader=createHubInventoryReader({baseUrl:'http://hub.test',token:'secret',now:()=>now,ttl:0,fetchFn:async(url,options)=>{

@@ -100,3 +100,12 @@ test('activity cache clears task artifacts when a session-only cottage advances 
   assert.equal(next.todos,undefined,'an omitted new-session todo snapshot cannot reuse the prior task checklist');
   assert.equal(next.cursor,null);
 });
+
+test('older journal pages remain visible within the bounded browser window',()=>{
+  const records=Array.from({length:2000},(_,index)=>({id:'history-'+(index+1),kind:'progress',text:'Event '+(index+1),timestamp:Date.parse('2026-09-22T00:00:00Z')+index}));
+  const cache={events:records.slice(-1500),cursor:'history-2000',hasMore:true};
+  applyActivityPage(cache,{events:records.slice(0,500),hasMore:false,source:'hub'}, {older:true});
+  assert.equal(cache.events.length,1500);
+  assert.equal(cache.events[0].id,'history-1');assert.equal(cache.events.at(-1).id,'history-1500');
+  assert.equal(cache.cursor,'history-2000','live polling keeps its own cursor');
+});

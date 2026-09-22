@@ -488,3 +488,24 @@ test("unconfigured and unsupported Hub timelines have explicit unavailable resul
   assert.equal(unsupported.stale, true);
   assert.deepEqual(unsupported.events, []);
 });
+
+test("Hub history traverses past the live cache limit without evicting forward polling", async () => {
+  const records=Array.from({length:2600},(_,index)=>event(index+1));
+  const timeline=createHubTimelineReader({baseUrl:"http://hub.local",ttl:0,now:()=>start,fetchFn:async url=>{
+    if(url.pathname.endsWith("/todo"))return {ok:true,json:async()=>({todos:[]})};
+    const before=url.searchParams.get("before"),end=before?records.findIndex(item=>item.id===before):records.length;
+    return {ok:true,json:async()=>({source:"claude-transcript",events:records.slice(Math.max(0,end-500),end),has_more:end>500})};
+  }});
+  const head=await timeline.read("long-task",{limit:500});
+  let page=head;const all=[...head.events];
+  for(let count=0;page.hasMore&&count<10;count++){
+    page=await timeline.read("long-task",{before:page.events[0]?.id,limit:500});
+    assert.ok(page.events.length,"an available older page must survive the retention cap");
+    all.unshift(...page.events);
+  }
+  assert.equal(page.hasMore,false);assert.deepEqual(all.map(item=>item.id),records.map(item=>item.id));
+  records.push(event(2601));
+  const increment=await timeline.read("long-task",{after:head.cursor});
+  assert.notEqual(increment.cursorReset,true);
+  assert.deepEqual(increment.events.map(item=>item.id),["event-2601"]);
+});
