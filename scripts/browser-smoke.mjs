@@ -255,8 +255,18 @@ try{
   assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'current\')'),compact.plot);
   assert.equal(await evaluate('!!document.querySelector(\'[data-pr="blocked"]\')'),false);
   assert.equal((await state()).prFilter,null,'A hidden history-only PR filter cannot strand the village');
+  await click('#settled');
+  const historicalPlot=await evaluate('window.cottageState().plots.find(p=>p.id===\'archived-400\')');
+  agents=[...agents.slice(0,500).reverse(),...agents.slice(500)];
+  await until('window.cottageState().agents[0].id===\'archived-499\'','Reordered history did not refresh');
+  assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'archived-400\')'),historicalPlot,'Ordinary history refreshes preserve existing homes');
   agents.push({...agents.at(-2),id:'arrival',name:'New arrival',worktreePath:'/fixture/new'});
+  await until('window.cottageState().plots.some(p=>p.id===\'arrival\')','New dashboard arrival did not get a plot while history was visible');
+  const expandedArrival=await evaluate('window.cottageState().plots.find(p=>p.id===\'arrival\')');
+  assert.equal(await evaluate('new Set(window.cottageState().plots.map(p=>p.x+\",\"+p.y)).size===window.cottageState().plots.length'),true,'Live arrivals never overlap historical cottages');
+  await click('#settled');
   await until('window.cottageState().plots.length===3','New dashboard arrival did not get a plot');
+  assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'arrival\')'),expandedArrival,'A live cottage arriving while history is visible keeps its canonical position');
   assert.equal(await evaluate('window.cottageState().height'),compact.height,'Historical plots must not push new live cottages into distant annexes');
   await click('#settled');
   await click('.cottage-directory summary');

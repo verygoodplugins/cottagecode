@@ -41,7 +41,7 @@ let feedRevision = 0;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
 let observatory;
 const stableLayout = createTownLayout();
-let historyLayout = null;
+let historyLayout = null, historyLiveSignature = '';
 let sceneSolids = [], scenePonds = [], sceneDistricts = [];
 let showSettled = false;
 
@@ -1643,7 +1643,14 @@ function layout(){
   const current=prepare(layoutCottages(agents));
   const options={trimEmptyBlocks:agents.some(a=>a.inventoryScope)};
   const liveWorld=stableLayout.update(current.forLayout,options);
-  if(showSettled)historyLayout??=stableLayout.fork();else historyLayout=null;
+  const liveSignature=JSON.stringify(liveWorld.plots.map(p=>[p.agent.plotKey||p.agent.id,p.x,p.y]).sort())+
+    JSON.stringify(Object.entries(liveWorld.shedSlots).sort());
+  // Preserve historical positions across ordinary feed updates, rebasing only
+  // when live allocations change so new arrivals keep their canonical slots.
+  if(showSettled){
+    if(!historyLayout||historyLiveSignature!==liveSignature)historyLayout=stableLayout.fork();
+    historyLiveSignature=liveSignature;
+  }else historyLayout=null;
   const {residents,hostById,forLayout}=showSettled?prepare(agents):
     prepare(layoutCottages(agents,{interiorId:observatory?.state.interiorId}));
   // An occupied historical room needs an exit plot while hidden, but visiting
