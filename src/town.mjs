@@ -15,6 +15,12 @@ import {
   paintLetterCrows,
   paintCheckStorm,
 } from "./folklore.mjs";
+import { plotAgentsForLayout, roommateLodgerIds } from "./roommates.mjs";
+import {
+  isMapFullscreen,
+  fullscreenButtonCopy,
+  nextFullscreenAction,
+} from "./fullscreen.mjs";
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 import { residentTargets } from "./interaction.mjs";
@@ -256,7 +262,14 @@ const SIM = (() => {
       a.branch = mum ? mum.branch : "main";
     }
   });
-  const FOLKLORE_PINNED = new Set(["Moss", "Sable", "Vera", "Kip", "Gus"]);
+  const FOLKLORE_PINNED = new Set([
+    "Moss", "Sable", "Reed", "Vera", "Cass", "Wren", "Ruth", "Kip", "Gus", "Marge", "Otto",
+  ]);
+  const openParcel = (agent, stamp, { number, title, openedAt, reviewState = "open" }) => ({
+    number, repo: "demo/" + agent.town, url: "https://github.com/demo/" + agent.town + "/pull/" + number,
+    title, state: "open", reviewState, headSha: "demo-" + agent.id,
+    source: "demo", checkedAt: stamp, openedAt,
+  });
   const stampFolkloreDemo = (stamp = Date.now()) => {
     const moss = agents.find(a => a.name === "Moss");
     if (moss) {
@@ -288,17 +301,61 @@ const SIM = (() => {
       sable.lastLine = pick(LINES.offline);
       sable.activity = pick(ACTIVITY.offline);
     }
+    // Settled but not offline → cobweb only (contrast with ivy/ruins).
+    const reed = agents.find(a => a.name === "Reed");
+    if (reed) {
+      reed.status = "done";
+      reed.endedAt = stamp - 45 * 60 * 1000;
+      reed.updatedAt = reed.endedAt;
+      reed.occupancy = "settled";
+      reed.branch = "main";
+      reed.defaultBranch = "main";
+      reed.pr = { state: "none", source: "demo", checkedAt: stamp };
+      reed.inputRequest = null;
+      reed.attention = "";
+      reed.task = "Session wrapped; cottage still warm.";
+      reed.lastLine = pick(LINES.done);
+      reed.activity = pick(ACTIVITY.done);
+    }
     const vera = agents.find(a => a.name === "Vera");
     if (vera) {
       vera.status = "done";
       vera.occupancy = "live";
       vera.endedAt = stamp - 14 * 60 * 60 * 1000;
       vera.updatedAt = stamp;
-      vera.pr = {
-        number: 501, repo: "demo/HubTown", url: "https://github.com/demo/HubTown/pull/501",
-        title: "stale parcel", state: "open", reviewState: "open", headSha: "demo-vera",
-        source: "demo", checkedAt: stamp, openedAt: stamp - 14 * 60 * 60 * 1000,
-      };
+      vera.pr = openParcel(vera, stamp, {
+        number: 501, title: "nest parcel", openedAt: stamp - 14 * 60 * 60 * 1000,
+      });
+    }
+    const cass = agents.find(a => a.name === "Cass");
+    if (cass) {
+      cass.status = "done";
+      cass.occupancy = "live";
+      cass.endedAt = stamp - 6 * 60 * 60 * 1000;
+      cass.updatedAt = stamp;
+      cass.pr = openParcel(cass, stamp, {
+        number: 503, title: "moss parcel", openedAt: stamp - 6 * 60 * 60 * 1000,
+      });
+    }
+    const wren = agents.find(a => a.name === "Wren");
+    if (wren) {
+      wren.status = "done";
+      wren.occupancy = "live";
+      wren.endedAt = stamp - 50 * 60 * 60 * 1000;
+      wren.updatedAt = stamp;
+      wren.pr = openParcel(wren, stamp, {
+        number: 504, title: "shrine parcel", openedAt: stamp - 50 * 60 * 60 * 1000,
+      });
+    }
+    const ruth = agents.find(a => a.name === "Ruth");
+    if (ruth) {
+      ruth.status = "done";
+      ruth.occupancy = "live";
+      ruth.endedAt = stamp - 20 * 60 * 1000;
+      ruth.updatedAt = stamp;
+      ruth.pr = openParcel(ruth, stamp, {
+        number: 505, title: "fresh parcel", openedAt: stamp - 20 * 60 * 1000,
+      });
     }
     const kip = agents.find(a => a.name === "Kip");
     if (kip) {
@@ -325,6 +382,20 @@ const SIM = (() => {
         labels: ["babysit:waiting-ci"], headSha: "demo-gus", source: "demo", checkedAt: stamp,
         checks: [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }],
       };
+    }
+    // Shared checkout → one cramped cottage (roommates).
+    const marge = agents.find(a => a.name === "Marge");
+    const otto = agents.find(a => a.name === "Otto");
+    if (marge && otto) {
+      const shared = "/demo/hubtown/shared-checkout";
+      marge.worktreePath = shared;
+      otto.worktreePath = shared;
+      marge.worktree = "shared-checkout";
+      otto.worktree = "shared-checkout";
+      marge.occupancy = "live";
+      otto.occupancy = "live";
+      if (!["working", "idle", "blocked"].includes(marge.status)) marge.status = "working";
+      if (!["working", "idle", "blocked"].includes(otto.status)) otto.status = "idle";
     }
   };
   stampFolkloreDemo(now);
@@ -1080,7 +1151,8 @@ function drawHouse(x, y, ag){
   px(nb.x+1, nb.y+1, nb.w-2, 1, dead ? "#7d8288" : C.woodLt);
   ctx.font = '8px "Silkscreen", monospace';
   ctx.textBaseline = "top";
-  const nm = cottageName(ag.name);
+  const mates = Array.isArray(ag.roommates) ? ag.roommates.length : 0;
+  const nm = mates ? cottageName(ag.name) + "+" + mates : cottageName(ag.name);
   ctx.fillStyle = dead ? "#2d3238" : "#2b1d10";
   ctx.fillText(nm, nb.x + Math.round((nb.w - ctx.measureText(nm).width)/2), nb.y+3);
 
@@ -1551,7 +1623,11 @@ function drawParcel(x, y, state){
 
 function layout(){
   const vis=visibleAgents();
-  const world=stableLayout.update(vis);
+  const lodgers=roommateLodgerIds(vis);
+  const rooted=plotAgentsForLayout(vis);
+  const hostById=new Map(rooted.map(h=>[h.id,h]));
+  const forLayout=vis.filter(a=>!lodgers.has(a.id)).map(a=>hostById.get(a.id)||a);
+  const world=stableLayout.update(forLayout);
   const styles=districtsFrom(agents);
   TOWNS=world.blocks.map(b=>({...styles.find(d=>d.key===b.key)||FALLBACK_TOWN,key:b.key,label:b.key.toUpperCase()+(b.page?" ANNEX":"")}));
   DR=world.blocks;sceneDistricts=DR;
@@ -1559,10 +1635,13 @@ function layout(){
   COLS=world.columns;D_W=world.districtWidth;VERT_ROAD=world.roadX;HORZ_ROADS=world.roadYs;
   ROAD_Y=HORZ_ROADS[0];W=world.width;H=world.height+112;
   if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;bg.width=W;bg.height=H;ctx.imageSmoothingEnabled=false;}
-  plots=world.plots.map(p=>({...p,district:townStyle(p.agent),
-    kids:vis.filter(a=>a.parent===p.agent.id&&world.shedSlots[a.id]<3&&!world.plots.some(q=>q.agent.id===a.id)).map(a=>({agent:a,x:p.x+1+world.shedSlots[a.id]*18,y:p.y+HOUSE_H+SHED_Y}))}));
+  plots=world.plots.map(p=>{
+    const host=hostById.get(p.agent.id)||p.agent;
+    return {...p,agent:host,district:townStyle(host),
+      kids:vis.filter(a=>a.parent===host.id&&world.shedSlots[a.id]<3&&!world.plots.some(q=>q.agent.id===a.id)).map(a=>({agent:a,x:p.x+1+world.shedSlots[a.id]*18,y:p.y+HOUSE_H+SHED_Y}))};
+  });
   gardens=[];
-  const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,p.kids.map(k=>k.agent.id)]))+W+":"+H;
+  const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,(p.agent.roommates||[]).map(m=>m.id),p.kids.map(k=>k.agent.id)]))+W+":"+H;
   if(signature!==layoutSignature){paintBackground();layoutSignature=signature;}
   if(!fauna.length)stockTown();
   placeJack();
@@ -1662,6 +1741,12 @@ function draw(){
         const bob  = (atBench && !reduce) ? (Math.floor(t*7) % 2) : 0;
         if(observatory)renderResident(ctx,Math.round(a.x)+5,Math.round(a.y)+bob+14,observatory.resident(ag),{time:t*1000,walking:!!step,scale:1,talking:observatory.isTalking(ag.id),reduce});
         else drawPerson(Math.round(a.x),Math.round(a.y)+bob,townStyle(ag).roof,step);
+        // Shared checkout roommates crowd the stoop — decorative only.
+        (ag.roommates||[]).forEach((mate,i)=>{
+          const ox = 7 + i * 6, oy = bob + (i % 2);
+          if(observatory)renderResident(ctx,Math.round(a.x)+5+ox,Math.round(a.y)+oy+14,observatory.resident(mate),{time:t*1000,walking:false,scale:.78,talking:observatory.isTalking(mate.id),reduce});
+          else drawPerson(Math.round(a.x)+ox,Math.round(a.y)+oy,townStyle(mate).roof,0);
+        });
         if(atBench && !reduce) drawSparks(p.x+35, p.y+HOUSE_H+3, p.x);
       }
     }
@@ -1690,7 +1775,8 @@ function draw(){
     }
     ctx.globalAlpha = 1;
 
-    const on = ag.id===selectedId, over = ag.id===hoverId;
+    const on = ag.id===selectedId || (ag.roommates||[]).some(m=>m.id===selectedId);
+    const over = ag.id===hoverId || (ag.roommates||[]).some(m=>m.id===hoverId);
     if(on || over){
       ctx.strokeStyle = on ? "#ffd166" : "#ffffff";
       ctx.lineWidth = 1;
@@ -1940,6 +2026,8 @@ function renderTally(){
     sb.textContent = `settled (${settledN})`;
     sb.setAttribute("aria-pressed", showSettled ? "true":"false");
   }
+  const folkloreHint = document.getElementById("folklore-hint");
+  if(folkloreHint) folkloreHint.hidden = !(builtInDemo || PUBLIC_DEMO);
 }
 const noteEl = document.getElementById("note");
 function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
@@ -1981,6 +2069,56 @@ document.getElementById("pause").onclick = (e)=>{
   e.target.textContent = paused ? "resume feed" : "pause feed";
 };
 
+const stageEl = document.querySelector(".stage");
+const fullscreenBtn = document.getElementById("fullscreen-toggle");
+function mapFullscreenActive(){
+  return isMapFullscreen({
+    fullscreenElement: document.fullscreenElement === stageEl ? stageEl : null,
+    cssFallback: document.body.classList.contains("is-map-fullscreen"),
+  });
+}
+function syncFullscreenButton(){
+  if(!fullscreenBtn) return;
+  const active = mapFullscreenActive();
+  const copy = fullscreenButtonCopy(active);
+  fullscreenBtn.setAttribute("aria-pressed", String(active));
+  fullscreenBtn.setAttribute("aria-label", copy.ariaLabel);
+  fullscreenBtn.textContent = copy.label;
+}
+async function exitMapFullscreen(){
+  if(document.fullscreenElement){
+    try{ await document.exitFullscreen(); }catch{ /* CSS fallback below */ }
+  }
+  document.body.classList.remove("is-map-fullscreen");
+  syncFullscreenButton();
+  return true;
+}
+async function toggleMapFullscreen(){
+  const action = nextFullscreenAction({
+    fullscreenElement: document.fullscreenElement === stageEl ? stageEl : null,
+    cssFallback: document.body.classList.contains("is-map-fullscreen"),
+    canRequest: Boolean(stageEl?.requestFullscreen),
+  });
+  if(action === "exit-api" || action === "exit-css"){
+    await exitMapFullscreen();
+    return mapFullscreenActive();
+  }
+  if(action === "enter-api"){
+    try{
+      await stageEl.requestFullscreen();
+      document.body.classList.remove("is-map-fullscreen");
+      syncFullscreenButton();
+      return true;
+    }catch{ /* fall through to CSS */ }
+  }
+  document.body.classList.add("is-map-fullscreen");
+  syncFullscreenButton();
+  return true;
+}
+fullscreenBtn?.addEventListener("click", ()=>{ void toggleMapFullscreen(); });
+document.addEventListener("fullscreenchange", syncFullscreenButton);
+syncFullscreenButton();
+
 const refresh=createLatestRefresh(async ()=>{
     const incoming=await fetchAgents();
     if(incoming===null)return true;
@@ -2002,18 +2140,25 @@ observatory=createObservatory({
   })),
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
-  answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh
+  answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh,
+  isMapFullscreen:mapFullscreenActive,toggleMapFullscreen,exitMapFullscreen
 });
 window.cottageObservatory=observatory;
-window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
+window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,roommates:(p.agent.roommates||[]).map(m=>m.id),kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
 
 (function boot(){
+  const previewNight=()=>{
+    try{if(sessionStorage.getItem("cottage-demo-night"))return;sessionStorage.setItem("cottage-demo-night","1");}catch{/* still preview once */}
+    const sel=document.getElementById("village-time");
+    if(sel&&sel.tagName==="SELECT"&&sel.value!=="night"){sel.value="night";sel.dispatchEvent(new Event("change"));}
+  };
   const box = document.getElementById("endpoint");
   if(PUBLIC_DEMO){
     ENDPOINT=null;box.value="";box.disabled=true;
     document.getElementById("connect").disabled=true;
     box.closest(".feed").hidden=true;
     feedNote("Sample village · fictional agents and activity.");
+    previewNight();
     return;
   }
   const params = new URLSearchParams(location.search);
@@ -2022,6 +2167,7 @@ window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,
     box.value = "";
     ENDPOINT = null;
     feedNote("demo townmap. connect a cottage JSON feed when you have one.");
+    previewNight();
     return;
   }
   const ep = params.get("endpoint") || params.get("feed");
@@ -2038,6 +2184,8 @@ window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,
     ENDPOINT = same;
     builtInDemo = false;
     feedNote("connecting to local feed...");
+  } else {
+    previewNight();
   }
 })();
 refresh();

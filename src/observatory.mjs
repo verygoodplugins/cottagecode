@@ -152,7 +152,15 @@ export function createObservatory(api){
   matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',e=>{reduce=e.matches;if(reduce)transition=1;});
   let storage=null;try{storage=localStorage;}catch{}
   const byId=id=>latestAgents.find(a=>a.id===id);
-  const plotFor=id=>{for(const p of api.getPlots()){if(p.agent.id===id)return p;const k=p.kids?.find(k=>k.agent.id===id);if(k)return {...k,agent:k.agent,parentPlot:p};}return null;};
+  const plotFor=id=>{
+    for(const p of api.getPlots()){
+      if(p.agent.id===id)return p;
+      if((p.agent.roommates||[]).some(mate=>mate.id===id))return p;
+      const k=p.kids?.find(k=>k.agent.id===id);
+      if(k)return {...k,agent:k.agent,parentPlot:p};
+    }
+    return null;
+  };
   const roomFor=a=>{const key=a.id+'|'+(a.taskId||'');if(!rooms.has(key))rooms.set(key,createInterior(a));return rooms.get(key);};
   const extras=createVillageExtras({clearKeys:()=>keys.clear(),getPostcard(id){
     const agent=byId(id);if(!agent)return null;
@@ -287,7 +295,13 @@ export function createObservatory(api){
       keys.add(key);e.preventDefault();
     }
     if((key==='e'||key==='Enter')&&!e.repeat){e.preventDefault();interact();}
-    if(key==='Escape'){e.preventDefault();if(mode==='room')leave();else{followId=null;replaying=false;setMode('town');renderPanel(selected);}}
+    if((key==='f')&&!e.repeat&&!e.metaKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();void api.toggleMapFullscreen?.();}
+    if(key==='Escape'){
+      e.preventDefault();
+      if(mode==='room')leave();
+      else if(api.isMapFullscreen?.())void api.exitMapFullscreen();
+      else{followId=null;replaying=false;setMode('town');renderPanel(selected);}
+    }
   }
   canvas.addEventListener('keydown',onKey);roomCanvas.addEventListener('keydown',onKey);
   window.addEventListener('keyup',e=>keys.delete(e.key.length===1?e.key.toLowerCase():e.key));

@@ -14,8 +14,18 @@ export function residentTargets(actors, plots) {
   const rendered = new Set((plots || [])
     .filter(plot => plot?.agent && plot.hidden !== true && plot.rendered !== false && plot.visible !== false)
     .map(plot => plot.agent.id));
-  return [...(actors || [])].flatMap(([id, actor]) =>
+  const byId = new Map(actors || []);
+  const hosts = [...byId].flatMap(([id, actor]) =>
     rendered.has(id) && !actor?.indoors ? [{id, x:actor.x + 5, y:actor.y + 14}] : []);
+  const mates = (plots || []).flatMap(plot => {
+    if (!rendered.has(plot.agent?.id)) return [];
+    const actor = byId.get(plot.agent.id);
+    if (!actor || actor.indoors) return [];
+    return (plot.agent.roommates || []).map((mate, i) => ({
+      id: mate.id, x: actor.x + 12 + i * 6, y: actor.y + 14,
+    }));
+  });
+  return hosts.concat(mates);
 }
 
 export function crossedDoor(from, to, doors, direction = 'in') {
