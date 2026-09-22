@@ -116,3 +116,28 @@ test('canonical freshness keeps healthy running tasks live despite an older task
   const question=toInventoryCottage(task('question',{updatedAt:old,freshness:{isStale:false},attentionType:'question',attentionMessage:'Proceed?'}),now);
   assert.equal(question.status,'blocked','freshness never hides a pending question');
 });
+
+test('canonical requests honor the public original request limit and truncation flag',()=>{
+  const text='x'.repeat(32769);
+  const truncated=toInventoryCottage(task('large',{originalRequest:text}),now);
+  assert.equal(truncated.originalAsk.length,32768);
+  assert.equal(truncated.originalAsk,text.slice(0,32768));
+  assert.equal(truncated.originalAskTruncated,true);
+  const exact=toInventoryCottage(task('exact',{originalRequest:text.slice(1)}),now);
+  assert.equal(exact.originalAskTruncated,false);
+  const absent=toInventoryCottage(task('missing',{originalRequest:null,task:text}),now);
+  assert.equal(absent.originalAsk,'');assert.equal(absent.originalAskTruncated,false);
+});
+
+test('canonical result links reject credentials and malformed URLs before public projection',()=>{
+  const cottage=toInventoryCottage(task('links',{resultLinks:[
+    {kind:'result',url:'https://user:secret@example.com/report'},
+    {kind:'pull_request',url:'https://secret@github.com/acme/repo/pull/1'},
+    {kind:'result',url:'https://'},
+    {kind:'result',url:'javascript:alert(1)'},
+    {kind:'result',url:'https://example.com/report',label:'Report'},
+  ]}),now);
+  assert.deepEqual(cottage.resultLinks,[{kind:'result',url:'https://example.com/report'}]);
+  assert.deepEqual(cottage.artifacts,[{url:'https://example.com/report',title:'Report'}]);
+  assert.doesNotMatch(JSON.stringify(cottage),/secret/);
+});

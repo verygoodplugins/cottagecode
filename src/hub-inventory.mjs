@@ -1,13 +1,16 @@
 /** Canonical AutoHub task inventory, adapted to the existing cottage contract.
  * Only this server holds the optional bearer token; it is never in feed JSON. */
 import {toCottage} from './hub.mjs';
-import {timestampMs} from './activity.mjs';
+import {timestampMs,safeActivityUrl} from './activity.mjs';
 import {taskText} from './task-text.mjs';
 import {classifyOccupancy} from './occupancy.mjs';
 
 export function toInventoryCottage(task, now=Date.now()) {
   const context=typeof task.context==='object' && task.context ? task.context : {};
-  const resultLinks=Array.isArray(task.resultLinks) ? task.resultLinks.filter(link=>typeof link?.url==='string' && /^https?:\/\//.test(link.url)) : [];
+  const resultLinks=Array.isArray(task.resultLinks) ? task.resultLinks.flatMap(link=>{
+    const url=safeActivityUrl(link?.url);
+    return url?[{...link,url}]:[];
+  }) : [];
   const prLink=resultLinks.find(link=>link.kind==='pull_request');
   const cottage=toCottage({...task,
     model:task.model || context.agentKernel?.route?.model ||
@@ -23,7 +26,8 @@ export function toInventoryCottage(task, now=Date.now()) {
   },now);
   const request=taskText(task.originalRequest);
   cottage.taskId=task.id;
-  cottage.originalAsk=request;
+  cottage.originalAsk=request.slice(0,32768);
+  cottage.originalAskTruncated=request.length>32768;
   cottage.originalAskSource=task.recordKind==='external_session'?'session':'task';
   cottage.task=(request || taskText(task.title || task.task) || 'Task').slice(0,150);
   cottage.activity=task.currentActivity || task.currentStep || cottage.activity;
