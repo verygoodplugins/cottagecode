@@ -12,6 +12,8 @@ renders pixel cottages; a tiny local HTTP process serves the page and
 npm start                 # http://127.0.0.1:8787
 npm test                  # Node test runner, no install step
 npm run test:browser      # Real Chrome journey; requires Browser Hand
+npm run test:viewport     # Fullscreen, zoom, floating details and responsive camera
+npm run test:layout       # Compact towns, Overview, branch grouping and stable arrivals
 npm run test:ambience     # Music, light, and postcards in real Chrome
 npm run test:night        # Night pixels, bedtime and talking beside a bed
 node src/feed.mjs --once  # print one /agents snapshot as JSON
@@ -31,6 +33,8 @@ duck. Check direct inspector controls, the connect box, and stale-feed recovery.
 |---|---|
 | `src/town.html` | Page structure and styles |
 | `src/town.mjs` | Exterior pixel renderer, demo simulator, feed polling |
+| `src/viewport.mjs` / `src/map-display.mjs` | Stable map scale, scrolling, zoom, fullscreen and floating inspector chrome |
+| `src/town-layout.mjs` | Compact stable districts, branch grouping, street routes, resident counts and Overview bounds |
 | `src/observatory.mjs` | Walking, interiors, inspector, journals, filters, wildlife interactions |
 | `src/interiors.mjs` / `src/world.mjs` | Seeded rooms/residents, walkability, stable plots, explicit paths/handoffs |
 | `src/feed-client.mjs` | Browser feed normalization and incremental activity merging |
@@ -69,6 +73,10 @@ visited rooms and cottage positions. Only explicit relationships and recorded
 handoffs create paths and couriers. Sound starts off. Scrapbook replay is limited
 to locally observed history. Walk into doors to enter/leave; E talks to a nearby
 resident or inspects an object. Direct buttons and Escape remain available.
+
+Fullscreen fills the browser window with CSS; never request native fullscreen
+or switch macOS spaces. Keep map scale and stable cottage positions independent
+of viewport size. Overview is an explicit camera action, not a layout reshuffle.
 
 Music is independent of sound effects and starts off on every load. The village
 clock uses device-local time; musical location follows Jack, not the selected
