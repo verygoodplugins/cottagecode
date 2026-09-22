@@ -39,6 +39,8 @@ export function toInventoryCottage(task, now=Date.now()) {
     controlTargetId:typeof task.controlTargetId==='string'?task.controlTargetId:null,
     capabilities:{canRespond:task.capabilities?.canRespond===true,canSteer:task.capabilities?.canSteer===true},
   };
+  const canonicalFresh = task.freshness?.isStale===false || task.isStale===false;
+  if((task.normalizedStatus || task.status)==='running' && canonicalFresh && !cottage.inputRequest) cottage.status='working';
   if(task.isStale || cottage.freshness.isStale) {
     if(cottage.status==='working')cottage.status='offline';
     if(cottage.inputRequest)cottage.inputRequest={...cottage.inputRequest,stale:true};

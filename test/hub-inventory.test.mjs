@@ -93,3 +93,18 @@ test('detail failure keeps cached journal pages and marks the input evidence sta
   applyActivityPage(cache,next);
   assert.deepEqual(cache.events,events);assert.equal(reads,2);
 });
+
+test('canonical freshness keeps healthy running tasks live despite an older task update',()=>{
+  const old=new Date(now-3600e3).toISOString();
+  for(const fields of [{freshness:{lastSeenAt:new Date(now).toISOString(),isStale:false}},{isStale:false}]){
+    const fresh=toInventoryCottage(task('healthy',{updatedAt:old,...fields}),now);
+    assert.equal(fresh.status,'working');assert.equal(fresh.occupancy,'live');
+    assert.equal(fresh.updatedAt,Date.parse(old),'retain the actual task update timestamp');
+  }
+  const stale=toInventoryCottage(task('stale',{freshness:{isStale:true}}),now);
+  assert.equal(stale.status,'offline');
+  const unknown=toInventoryCottage(task('unknown',{updatedAt:old}),now);
+  assert.equal(unknown.status,'offline','legacy heuristic remains when canonical freshness is absent');
+  const question=toInventoryCottage(task('question',{updatedAt:old,freshness:{isStale:false},attentionType:'question',attentionMessage:'Proceed?'}),now);
+  assert.equal(question.status,'blocked','freshness never hides a pending question');
+});
