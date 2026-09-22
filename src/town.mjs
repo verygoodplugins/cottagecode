@@ -1097,6 +1097,10 @@ function cottageName(raw){
   while(name.length>1&&ctx.measureText(name).width>40)name=name.slice(0,-1);
   return name;
 }
+function nameplateLabel(ag){
+  const mates = Array.isArray(ag.roommates) ? ag.roommates.length : 0;
+  return mates ? cottageName(ag.name) + "+" + mates : cottageName(ag.name);
+}
 
 function drawHouse(x, y, ag){
   const d = townStyle(ag);
@@ -1151,8 +1155,7 @@ function drawHouse(x, y, ag){
   px(nb.x+1, nb.y+1, nb.w-2, 1, dead ? "#7d8288" : C.woodLt);
   ctx.font = '8px "Silkscreen", monospace';
   ctx.textBaseline = "top";
-  const mates = Array.isArray(ag.roommates) ? ag.roommates.length : 0;
-  const nm = mates ? cottageName(ag.name) + "+" + mates : cottageName(ag.name);
+  const nm = nameplateLabel(ag);
   ctx.fillStyle = dead ? "#2d3238" : "#2b1d10";
   ctx.fillText(nm, nb.x + Math.round((nb.w - ctx.measureText(nm).width)/2), nb.y+3);
 
@@ -1821,7 +1824,7 @@ function draw(){
     });
     for(const p of plots){
       ctx.globalAlpha=nightInk*(((filter&&filter!==townKey(p.agent))||!observatory.visible(p.agent)) ? .3 : 1);
-      const name=cottageName(p.agent.name);
+      const name=nameplateLabel(p.agent);
       ctx.fillText(name,p.x+4+Math.round((46-ctx.measureText(name).width)/2),p.y+26);
     }
     ctx.globalAlpha=1;
