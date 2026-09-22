@@ -9,13 +9,27 @@ export function cottageDoors(plots, visible = () => true) {
 
 /** A resident is interactable only while their own cottage still has a
  * rendered plot. Actors survive scene refreshes for animation continuity, so
- * the plot list is the authoritative visibility boundary. */
+ * the plot list is the authoritative visibility boundary. Roommates stay
+ * talkable beside the stoop even when the host is indoors. */
 export function residentTargets(actors, plots) {
   const rendered = new Set((plots || [])
     .filter(plot => plot?.agent && plot.hidden !== true && plot.rendered !== false && plot.visible !== false)
     .map(plot => plot.agent.id));
-  return [...(actors || [])].flatMap(([id, actor]) =>
+  const byId = new Map(actors || []);
+  const hosts = [...byId].flatMap(([id, actor]) =>
     rendered.has(id) && !actor?.indoors ? [{id, x:actor.x + 5, y:actor.y + 14}] : []);
+  const mates = (plots || []).flatMap(plot => {
+    if (!rendered.has(plot.agent?.id)) return [];
+    const actor = byId.get(plot.agent.id);
+    const baseX = actor ? actor.x : plot.x + 22;
+    const baseY = actor ? actor.y : plot.y + 52;
+    return (plot.agent.roommates || [])
+      .filter((mate) => mate.status !== "offline")
+      .map((mate, i) => ({
+        id: mate.id, x: baseX + 12 + i * 6, y: baseY + 14,
+      }));
+  });
+  return hosts.concat(mates);
 }
 
 export function crossedDoor(from, to, doors, direction = 'in') {

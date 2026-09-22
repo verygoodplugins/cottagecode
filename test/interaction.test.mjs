@@ -43,3 +43,21 @@ test('only actors with a currently rendered cottage remain conversation targets'
   ];
   assert.deepEqual(residentTargets(actors,plots),[{id:'shown',x:15,y:34}]);
 });
+
+test('roommates on a shared plot stay talkable beside the host', () => {
+  const actors=new Map([['host',{x:10,y:20,indoors:false}]]);
+  const plots=[{agent:{id:'host',roommates:[{id:'guest',status:'working'}]}}];
+  assert.deepEqual(residentTargets(actors,plots),[
+    {id:'host',x:15,y:34},
+    {id:'guest',x:22,y:34},
+  ]);
+});
+
+test('roommates stay talkable when the host is indoors', () => {
+  const actors=new Map([['host',{x:10,y:20,indoors:true}]]);
+  const plots=[{agent:{id:'host',roommates:[{id:'guest',status:'working'}]},x:40,y:50}];
+  assert.deepEqual(residentTargets(actors,plots),[
+    {id:'guest',x:22,y:34},
+  ]);
+});
+

@@ -114,6 +114,18 @@
   .map-viewport:has(#room-canvas:not([hidden])){overflow:hidden}
   .map-viewport:has(#room-canvas:not([hidden])) #town{display:none}
   #room-canvas:not([hidden]){margin-top:0}
+  .stage:fullscreen,.stage:-webkit-full-screen{box-sizing:border-box;width:100%;height:100%;display:flex;flex-direction:column;padding:12px;border:none;border-radius:0;background:#171d23}
+  .stage:fullscreen .map-viewport,.stage:-webkit-full-screen .map-viewport{flex:1 1 auto;height:auto;min-height:0}
+  .stage:fullscreen .stage-foot,.stage:fullscreen .feed,.stage:fullscreen #folklore-hint,
+  .stage:-webkit-full-screen .stage-foot,.stage:-webkit-full-screen .feed,.stage:-webkit-full-screen #folklore-hint{display:none!important}
+  body.is-map-fullscreen{overflow:hidden}
+  body.is-map-fullscreen .app{max-width:none;width:100%;height:100vh;height:100dvh;padding:0;gap:0}
+  body.is-map-fullscreen header,body.is-map-fullscreen #panel,body.is-map-fullscreen .cottage-directory,
+  body.is-map-fullscreen .stage-foot,body.is-map-fullscreen .feed,body.is-map-fullscreen #folklore-hint,
+  body.is-map-fullscreen .pr-tally,body.is-map-fullscreen .village-settings,body.is-map-fullscreen #sound-settings{display:none!important}
+  body.is-map-fullscreen .split{grid-template-columns:minmax(0,1fr);height:100%;gap:0}
+  body.is-map-fullscreen .stage{height:100%;display:flex;flex-direction:column;border:none;border-radius:0;padding:10px 12px;background:#171d23}
+  body.is-map-fullscreen .map-viewport{flex:1 1 auto;height:auto;min-height:0}
   .scene-status{font-size:11px;color:#c9c9a9;margin:9px 0 1px;min-height:18px}
   #sound-settings{font-size:12px;color:#bdd2c4;margin-bottom:8px}
   .village-settings{margin:0 0 10px;color:#c9d4c7;font-size:12px}
@@ -237,6 +249,7 @@
         <button id="scrapbook" type="button">Scrapbook</button>
         <button id="sound-toggle" type="button" aria-pressed="false">Sound off</button>
         <button id="music-toggle" type="button" aria-pressed="false" aria-label="Play village music">♫ Music off</button>
+        <button id="fullscreen-toggle" type="button" aria-pressed="false" aria-label="Enter fullscreen townmap">Fullscreen</button>
         <button id="leave-cottage" type="button" hidden>Leave cottage ↗</button>
       </div>
       <div id="sound-settings" hidden><label><input id="ambient-sound" type="checkbox" checked> Ambience</label> <label><input id="alert-sound" type="checkbox" checked> Alerts</label></div>
@@ -257,7 +270,7 @@
       <div id="map-viewport" class="map-viewport">
       <canvas id="town" tabindex="0" role="img" aria-label="Townmap: arrow keys or WASD to walk, walk into doors to enter, E near an agent to talk, click cottages to inspect"></canvas><canvas id="room-canvas" tabindex="0" role="img" aria-label="Cottage interior. Arrow keys to walk, walk through the doorway to leave, E near your host to talk or inspect objects, Escape to leave." hidden></canvas>
       </div>
-      <p class="scene-status" id="scene-status">Arrow keys / WASD to walk · Walk into doors · E to talk · Click to inspect</p>
+      <p class="scene-status" id="scene-status">Arrow keys / WASD to walk · Walk into doors · E to talk · F for fullscreen · Click to inspect</p>
       <div class="stage-foot">
         <span class="key"><i style="background:#e8eef2;border-radius:50%"></i>smoke = working</span>
         <span class="key"><i style="background:#93a1b0"></i>idle</span>
@@ -271,6 +284,7 @@
         <button id="settled" aria-pressed="false">settled (0)</button>
         <button id="pause" aria-pressed="false">pause feed</button>
       </div>
+      <p id="folklore-hint" class="hint" hidden>Toggle settled for haunted cottages. Time → Night shows pale ghosts. Shared worktrees crowd one stoop.</p>
       <div class="stage-foot" style="margin-top:4px">
         <span class="key">roof flag:</span>
         <span class="key"><i style="background:#b07bd4"></i>opus</span>
