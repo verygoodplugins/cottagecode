@@ -1622,16 +1622,16 @@ function drawParcel(x, y, state){
 }
 
 function layout(){
-  const vis=visibleAgents();
-  const lodgers=roommateLodgerIds(vis);
-  const rooted=plotAgentsForLayout(vis);
+  // Group from the full feed so a settled host cannot lose the shared slot
+  // when roommates remain live and visible.
+  const rooted=plotAgentsForLayout(agents);
+  const lodgers=roommateLodgerIds(agents);
   const hostById=new Map(rooted.map(h=>[h.id,h]));
-  const forLayout=vis.filter(a=>!lodgers.has(a.id)).map(a=>{
+  const forLayout=agents.filter(a=>!lodgers.has(a.id)).map(a=>{
     const host=hostById.get(a.id);
     if(host) return host;
-    // Keep sheds attached when their recorded parent is a roommate lodger.
     if(a.parent && lodgers.has(a.parent)){
-      const hostId=plotHostId(vis, a.parent);
+      const hostId=plotHostId(agents, a.parent);
       return hostId ? {...a, parent:hostId} : a;
     }
     return a;
@@ -1644,11 +1644,16 @@ function layout(){
   COLS=world.columns;D_W=world.districtWidth;VERT_ROAD=world.roadX;HORZ_ROADS=world.roadYs;
   ROAD_Y=HORZ_ROADS[0];W=world.width;H=world.height+112;
   if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;bg.width=W;bg.height=H;ctx.imageSmoothingEnabled=false;}
+  const vis=visibleAgents();
+  const visIds=new Set(vis.map(a=>a.id));
   plots=world.plots.map(p=>{
     const host=hostById.get(p.agent.id)||p.agent;
     const household=plotHouseholdIds(host);
     return {...p,agent:host,district:townStyle(host),
       kids:vis.filter(a=>household.has(a.parent)&&world.shedSlots[a.id]<3&&!world.plots.some(q=>q.agent.id===a.id)).map(a=>({agent:a,x:p.x+1+world.shedSlots[a.id]*18,y:p.y+HOUSE_H+SHED_Y}))};
+  }).filter(p=>{
+    const household=plotHouseholdIds(p.agent);
+    return [...household].some(id=>visIds.has(id));
   });
   gardens=[];
   const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,(p.agent.roommates||[]).map(m=>m.id),p.kids.map(k=>k.agent.id)]))+W+":"+H;
@@ -1822,7 +1827,8 @@ function draw(){
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
     observatory?.drawDispatch(ctx,p,t);
-    const bubble=statusBubbleAnchor({agent:p.agent,plot:p,routine:bedtimeFrames.get(p.agent.id),actor:actors.get(p.agent.id),time:t,reduce});
+    const bubbleAgent=(p.agent.status==="blocked")?p.agent:((p.agent.roommates||[]).find(m=>m.status==="blocked")?{...p.agent,status:"blocked"}:p.agent);
+    const bubble=statusBubbleAnchor({agent:bubbleAgent,plot:p,routine:bedtimeFrames.get(p.agent.id),actor:actors.get(p.agent.id),time:t,reduce});
     if(bubble)drawBubble(bubble.x,bubble.y,bubble.status);
     for(const kid of p.kids||[])if(['blocked','done'].includes(kid.agent.status)){
       px(kid.x+6,kid.y-3,5,5,C.outline);px(kid.x+7,kid.y-2,3,3,kid.agent.status==='blocked'?C.alert:C.ok);
@@ -2135,10 +2141,9 @@ document.addEventListener("fullscreenchange", syncFullscreenButton);
 // CSS fallback keeps focus on the button; Escape must still exit without canvas focus.
 window.addEventListener("keydown", (e)=>{
   if(e.key !== "Escape") return;
+  if(e.defaultPrevented) return; // canvas already left the cottage / cleared follow
   if(document.fullscreenElement) return; // browser owns native fullscreen Escape
   if(!document.body.classList.contains("is-map-fullscreen")) return;
-  const leave = document.getElementById("leave-cottage");
-  if(leave && !leave.hidden) return; // cottage Escape leaves the room first
   e.preventDefault();
   void exitMapFullscreen();
 });
