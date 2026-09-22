@@ -15,7 +15,7 @@ import {
   paintLetterCrows,
   paintCheckStorm,
 } from "./folklore.mjs";
-import { plotAgentsForLayout, roommateLodgerIds } from "./roommates.mjs";
+import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds } from "./roommates.mjs";
 import {
   isMapFullscreen,
   fullscreenButtonCopy,
@@ -1626,7 +1626,16 @@ function layout(){
   const lodgers=roommateLodgerIds(vis);
   const rooted=plotAgentsForLayout(vis);
   const hostById=new Map(rooted.map(h=>[h.id,h]));
-  const forLayout=vis.filter(a=>!lodgers.has(a.id)).map(a=>hostById.get(a.id)||a);
+  const forLayout=vis.filter(a=>!lodgers.has(a.id)).map(a=>{
+    const host=hostById.get(a.id);
+    if(host) return host;
+    // Keep sheds attached when their recorded parent is a roommate lodger.
+    if(a.parent && lodgers.has(a.parent)){
+      const hostId=plotHostId(vis, a.parent);
+      return hostId ? {...a, parent:hostId} : a;
+    }
+    return a;
+  });
   const world=stableLayout.update(forLayout);
   const styles=districtsFrom(agents);
   TOWNS=world.blocks.map(b=>({...styles.find(d=>d.key===b.key)||FALLBACK_TOWN,key:b.key,label:b.key.toUpperCase()+(b.page?" ANNEX":"")}));
@@ -1637,8 +1646,9 @@ function layout(){
   if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;bg.width=W;bg.height=H;ctx.imageSmoothingEnabled=false;}
   plots=world.plots.map(p=>{
     const host=hostById.get(p.agent.id)||p.agent;
+    const household=plotHouseholdIds(host);
     return {...p,agent:host,district:townStyle(host),
-      kids:vis.filter(a=>a.parent===host.id&&world.shedSlots[a.id]<3&&!world.plots.some(q=>q.agent.id===a.id)).map(a=>({agent:a,x:p.x+1+world.shedSlots[a.id]*18,y:p.y+HOUSE_H+SHED_Y}))};
+      kids:vis.filter(a=>household.has(a.parent)&&world.shedSlots[a.id]<3&&!world.plots.some(q=>q.agent.id===a.id)).map(a=>({agent:a,x:p.x+1+world.shedSlots[a.id]*18,y:p.y+HOUSE_H+SHED_Y}))};
   });
   gardens=[];
   const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,(p.agent.roommates||[]).map(m=>m.id),p.kids.map(k=>k.agent.id)]))+W+":"+H;
@@ -1691,7 +1701,8 @@ function draw(){
     drawHouse(p.x, p.y, ag);
     drawBranchPost(p.x, p.y+HOUSE_H+SIGN_Y, ag.branch || ag.worktree, ag.status==="offline");
     paintBranchWeeds(px, p.x, p.y, HOUSE_W, HOUSE_H, branchLane(ag));
-    if(ag.status === "working"){
+    const householdWorking = ag.status==="working" || (ag.roommates||[]).some(m=>m.status==="working");
+    if(householdWorking){
       const phase = reduce ? 0.4 : (t*0.35 + p.x*0.07) % 1;
       drawSmoke(p.x+40, p.y+2, phase);
     }
@@ -2117,6 +2128,16 @@ async function toggleMapFullscreen(){
 }
 fullscreenBtn?.addEventListener("click", ()=>{ void toggleMapFullscreen(); });
 document.addEventListener("fullscreenchange", syncFullscreenButton);
+// CSS fallback keeps focus on the button; Escape must still exit without canvas focus.
+window.addEventListener("keydown", (e)=>{
+  if(e.key !== "Escape") return;
+  if(document.fullscreenElement) return; // browser owns native fullscreen Escape
+  if(!document.body.classList.contains("is-map-fullscreen")) return;
+  const leave = document.getElementById("leave-cottage");
+  if(leave && !leave.hidden) return; // cottage Escape leaves the room first
+  e.preventDefault();
+  void exitMapFullscreen();
+});
 syncFullscreenButton();
 
 const refresh=createLatestRefresh(async ()=>{

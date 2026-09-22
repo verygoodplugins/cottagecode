@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { roommateKey, plotAgentsForLayout } from "../src/roommates.mjs";
+import { roommateKey, plotAgentsForLayout, plotHostId } from "../src/roommates.mjs";
 
 test("roommateKey only groups absolute worktree paths", () => {
   assert.equal(roommateKey({ worktreePath: "/tmp/wt-a" }), "/tmp/wt-a");
@@ -20,18 +20,36 @@ test("plotAgentsForLayout keeps unique paths as their own cottages", () => {
   assert.equal(plots[0].roommates.length, 0);
 });
 
-test("shared worktreePath collapses to one host with cramped roommates", () => {
+test("shared worktreePath collapses to a stable host regardless of status churn", () => {
   const agents = [
-    { id: "host", worktreePath: "/tmp/shared", status: "idle", occupancy: "live", startedAt: 100 },
-    { id: "guest", worktreePath: "/tmp/shared", status: "working", occupancy: "live", startedAt: 200 },
-    { id: "kid", parent: "host", worktreePath: "/tmp/shared", status: "working", occupancy: "live" },
+    { id: "aaa", worktreePath: "/tmp/shared", status: "idle", occupancy: "live", startedAt: 100 },
+    { id: "zzz", worktreePath: "/tmp/shared", status: "working", occupancy: "live", startedAt: 200 },
+    { id: "kid", parent: "aaa", worktreePath: "/tmp/shared", status: "working", occupancy: "live" },
   ];
   const plots = plotAgentsForLayout(agents);
   assert.equal(plots.length, 1);
-  assert.equal(plots[0].id, "guest"); // working preferred as host
-  assert.deepEqual(plots[0].roommates.map((r) => r.id), ["host"]);
-  // parented agents stay sheds, not roommates of the shared checkout
+  assert.equal(plots[0].id, "aaa"); // stable id, not the working roommate
+  assert.deepEqual(plots[0].roommates.map((r) => r.id), ["zzz"]);
   assert.ok(!plots[0].roommates.some((r) => r.id === "kid"));
+
+  // Status flip must not move the cottage to another agent id.
+  const flipped = plotAgentsForLayout([
+    { ...agents[0], status: "working" },
+    { ...agents[1], status: "idle" },
+    agents[2],
+  ]);
+  assert.equal(flipped[0].id, "aaa");
+});
+
+test("shared checkout prefers a recorded parent as the plot host", () => {
+  const agents = [
+    { id: "childless", worktreePath: "/tmp/shared", status: "working", occupancy: "live" },
+    { id: "parent", worktreePath: "/tmp/shared", status: "idle", occupancy: "live" },
+    { id: "kid", parent: "parent", worktreePath: "/tmp/shared", status: "working", occupancy: "live" },
+  ];
+  const plots = plotAgentsForLayout(agents);
+  assert.equal(plots[0].id, "parent");
+  assert.equal(plotHostId(agents, "childless"), "parent");
 });
 
 test("missing paths never roommate together", () => {

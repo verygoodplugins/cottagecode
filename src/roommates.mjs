@@ -5,26 +5,22 @@
 
 import { isAbsolutePath } from "./occupancy.mjs";
 
-const RANK = { working: 0, blocked: 1, idle: 2, done: 3, offline: 4 };
-
 export function roommateKey(agent) {
   const path = typeof agent?.worktreePath === "string" ? agent.worktreePath.trim() : "";
   return isAbsolutePath(path) ? path : "";
 }
 
-function hostScore(agent) {
-  const rank = RANK[agent?.status] ?? 5;
-  const started = Number(agent?.startedAt) || 0;
-  return [rank, -started, String(agent?.id || "")];
-}
-
-function preferHost(a, b) {
-  const left = hostScore(a), right = hostScore(b);
-  for (let i = 0; i < left.length; i++) {
-    if (left[i] < right[i]) return a;
-    if (left[i] > right[i]) return b;
-  }
-  return a;
+/**
+ * Stable plot anchor: prefer a recorded parent in the group, then earliest id.
+ * Status must not move the cottage between feed refreshes.
+ */
+function preferHost(a, b, parentIds = new Set()) {
+  const aParent = parentIds.has(a?.id) ? 0 : 1;
+  const bParent = parentIds.has(b?.id) ? 0 : 1;
+  if (aParent !== bParent) return aParent < bParent ? a : b;
+  const left = String(a?.id || "");
+  const right = String(b?.id || "");
+  return left <= right ? a : b;
 }
 
 /**
@@ -34,6 +30,7 @@ function preferHost(a, b) {
 export function plotAgentsForLayout(agents = []) {
   const list = Array.isArray(agents) ? agents.filter(Boolean) : [];
   const ids = new Set(list.map((a) => a.id));
+  const parentIds = new Set(list.map((a) => a.parent).filter((id) => id && ids.has(id)));
   const candidates = list.filter((a) => !a.parent || !ids.has(a.parent));
   const groups = new Map();
   const result = [];
@@ -53,7 +50,7 @@ export function plotAgentsForLayout(agents = []) {
       result.push({ ...members[0], roommates: [] });
       continue;
     }
-    const host = members.reduce(preferHost);
+    const host = members.reduce((best, next) => preferHost(best, next, parentIds));
     const roommates = members
       .filter((m) => m.id !== host.id)
       .sort((a, b) => String(a.id).localeCompare(String(b.id)));
@@ -80,4 +77,12 @@ export function plotHostId(agents, agentId) {
     if ((host.roommates || []).some((mate) => mate.id === agentId)) return host.id;
   }
   return agentId;
+}
+
+/** Household ids on a shared plot (host + roommates). */
+export function plotHouseholdIds(host) {
+  return new Set([
+    host?.id,
+    ...((host?.roommates || []).map((mate) => mate.id)),
+  ].filter(Boolean));
 }
