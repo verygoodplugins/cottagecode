@@ -8,6 +8,8 @@ import {readFile} from 'node:fs/promises';
 import {createFeedServer} from '../src/feed.mjs';
 import {pageActivity} from '../src/activity.mjs';
 import {inputRequestVersion} from '../src/input-request.mjs';
+import {createTownLayout} from '../src/town-layout.mjs';
+import {plotAgentsForLayout} from '../src/roommates.mjs';
 
 const run=promisify(execFile),page='cottagecode-browser-smoke';
 const stamp=Date.now(),pr={number:123,url:'https://github.com/example/observatory/pull/123',state:'open',labels:['feature','babysit:ready'],headSha:'head-one',source:'github',checkedAt:stamp,statusCheckRollup:[{name:'smoke',status:'COMPLETED',conclusion:'SUCCESS',detailsUrl:'https://github.com/example/observatory/actions/runs/123'}]};
@@ -230,6 +232,8 @@ try{
   await until('window.cottageObservatory.state.replayIndex>'+reducedReplay,'Reduced motion incorrectly disabled replay');
   await key('Escape');
   pass('emulated reduced-motion preference preserves walking and recorded replay');
+  // This next scenario needs fresh evidence even when the preceding real-browser journey took several minutes.
+  pr.checkedAt=Date.now();
   const historical=Array.from({length:500},(_,i)=>({id:'archived-'+i,name:'Old task '+i,town:'HubTown',status:'offline',occupancy:'settled',inventoryScope:'history',worktreePath:i===0?'/fixture/shared':'/fixture/history/'+i,pr:{...pr,number:i+1000,url:'https://github.com/example/history/pull/'+(i+1000),labels:['babysit:blocked']}}));
   agents=[...historical,
     {id:'current',name:'Current work',town:'HubTown',status:'working',occupancy:'live',inventoryScope:'dashboard',worktreePath:'/fixture/shared',task:'Current task',pr},
@@ -244,6 +248,11 @@ try{
   assert.equal(await evaluate('document.querySelector(\'[data-pr="ready"] span\').textContent'),'1');
   const compact=await evaluate('({height:window.cottageState().height,plot:window.cottageState().plots.find(p=>p.id===\'current\')})');
   assert.ok(compact.height<1000);assert.deepEqual(compact.plot.roommates,[]);
+  // A live-only control follows the same arrivals without ever visiting history.
+  // Compact courtyards may legitimately need an annex before the eighth cottage.
+  const layoutControl=createTownLayout({maxWidth:await evaluate('window.cottageState().packingWidth')});
+  const liveControl=async()=>layoutControl.update(plotAgentsForLayout(await evaluate('window.cottageState().agents.filter(a=>a.inventoryScope!=="history")')),{trimEmptyBlocks:true});
+  await liveControl();
   await click('#settled');
   await until('document.querySelectorAll(\'#cottage-list button\').length===502','Settled toggle did not expose canonical history');
   assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'current\').roommates'),['archived-0'],'The current task remains the shared-worktree host while history is visible');
@@ -268,6 +277,7 @@ try{
   await until('window.cottageState().plots.length===3','New dashboard arrival did not get a plot');
   assert.deepEqual(await evaluate('window.cottageState().plots.find(p=>p.id===\'arrival\')'),expandedArrival,'A live cottage arriving while history is visible keeps its canonical position');
   assert.equal(await evaluate('window.cottageState().height'),compact.height,'Historical plots must not push new live cottages into distant annexes');
+  await liveControl();
   await click('#settled');
   await click('.cottage-directory summary');
   await click('[data-cottage="archived-400"]');
@@ -277,7 +287,9 @@ try{
   assert.equal(await evaluate('window.cottageObservatory.state.player.y<window.cottageState().height'),true,'Leaving a hidden historical cottage must return Jack inside the compact village');
   agents.push(...Array.from({length:6},(_,i)=>({...agents.find(a=>a.id==='current'),id:'later-'+i,worktreePath:'/fixture/later/'+i})));
   await until('window.cottageState().plots.length===9','Later dashboard arrivals did not get plots after the historical visit');
-  assert.equal(await evaluate('window.cottageState().height'),compact.height,'Visiting history must not consume the eight live HubTown slots');
+  const expected=await liveControl();
+  const actual=await evaluate('({height:window.cottageState().height,width:window.cottageState().width,plots:window.cottageState().plots.map(p=>[p.id,p.x,p.y]).sort()})');
+  assert.deepEqual(actual,{height:expected.height+112,width:expected.width,plots:expected.plots.map(p=>[p.agent.id,p.x,p.y]).sort()},'Historical visits must not consume live plots or change where later cottages are built');
   pass('canonical live inventory keeps history out of plots, selection and PR counts; settled toggle restores stable homes');
   await browser('screenshot');
   process.stdout.write('Browser journey passed. Fixture: '+url+'\n');
