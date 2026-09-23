@@ -2,6 +2,7 @@ import {createInterior,isWalkable,renderInterior,renderResident} from './interio
 import {normalizePr,prCi,prStage,prCounts} from './pr.mjs';
 import {parcelReclaim,paintParcelReclaim} from './folklore.mjs';
 import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './world.mjs';
+import {createDistrictRouter} from './town-layout.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
 import {activityAddress,mergeActivity,elapsedMs,validTime,isCottageVisible} from './feed-client.mjs';
@@ -169,10 +170,11 @@ export function apprenticeResidentTarget(kid, arrival, arriving=false){
 }
 
 export function createObservatory(api){
-  const {canvas}=api,panel=$('panel'),viewport=$('map-viewport'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
+  const {canvas}=api,panel=$('panel'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
   const conversations=new Map();
   const messageReceipts=new Map();
+  const districtRoute=createDistrictRouter();
   let mode='town',selected=null,interiorId=null,room=null,roomPlayer=null,player=null,returnTo=null,tab='overview',prFilter=null;
   let followId=null,lastFrame=0,transition=1,latestAgents=[],relationships=[],handoffs=[],couriers=[],apprentices=[],knownKids=new Set();
   let sourceKey='',history=null,historyInitialized=false,stageSignature='',rosterSignature='',panelKey='',lastHint='',replayIndex=-1,replaying=false,replayTimer=0,replayEvents=[];
@@ -224,13 +226,16 @@ export function createObservatory(api){
   function setMode(value){
     mode=value;keys.clear();
     const indoors=mode==='room';
+    api.viewport.setIndoors(indoors);
     roomCanvas.hidden=!indoors;
     canvas.style.visibility=indoors?'hidden':'';
     $('mode-label').textContent=indoors?'INSIDE '+(byId(interiorId)?.name||'COTTAGE'):(followId?'FOLLOWING '+(byId(followId)?.name||'AGENT'):'TOWNMAP');
     $('leave-cottage').hidden=!indoors;
+    api.onModeChange?.();
   }
   function enter(id){
     const a=byId(id),p=plotFor(id);if(!a||!p)return;
+    api.showDetails?.();
     selected=id;api.select(id);interiorId=id;room=roomFor(a);
     roomPlayer={...room.door};returnTo=cottageReturnPoint(p);
     selectedObject=null;tab='overview';transition=reduce?1:0;
@@ -243,6 +248,7 @@ export function createObservatory(api){
   }
   function follow(id){
     const p=plotFor(id);if(!p)return;
+    api.showDetails?.();
     if(mode==='room')leave();
     followId=followId===id?null:id;
     if(followId){player={x:p.x+35,y:p.y+102};api.select(id);selected=id;scrollToPlayer(true);}
@@ -250,6 +256,7 @@ export function createObservatory(api){
   }
   function focusCottage(id){
     if(!byId(id))return;
+    api.showDetails?.();
     if(mode==='room'&&id!==interiorId)leave();
     if(mode==='board'||mode==='scrapbook')setMode('town');
     selected=id;tab='overview';selectedObject=null;api.select(id);
@@ -281,23 +288,23 @@ export function createObservatory(api){
   }
   function talk(id){
     const a=byId(id);if(!a)return;
+    api.showDetails?.();
     if(mode==='board'||mode==='scrapbook')setMode('town');
     selected=id;tab='talk';selectedObject=null;talkingId=id;talkingUntil=performance.now()+1500;
     api.select(id);sound.murmur({seed:roomFor(a).seed});ensureActivity(a);renderPanel(id);
   }
   function inspect(id){
+    api.showDetails?.();
     selectedObject=id;tab=({request:'request',clock:'overview',workbench:'journal',review:'review',shelf:'artifacts'})[id]||'overview';
     sound.play('talk');renderPanel(interiorId);
   }
   function scrollTo(x,y,immediate=false){
-    const scale=canvas.clientWidth/canvas.width;
-    const target=y*scale-viewport.clientHeight*.45;
-    viewport.scrollTo({top:Math.max(0,target),behavior:immediate||reduce?'instant':'smooth'});
+    api.viewport.focus({x,y},immediate);
   }
   function scrollToPlayer(immediate=false){
     if(!player||mode==='room')return;
-    const yy=player.y*(canvas.clientWidth/canvas.width);
-    if(immediate||yy<viewport.scrollTop+60||yy>viewport.scrollTop+viewport.clientHeight-60)scrollTo(player.x,player.y,immediate);
+    if(immediate)scrollTo(player.x,player.y,true);
+    else api.viewport.ensureVisible(player);
   }
   function walkable(x,y){
     const w=api.getWorld();
@@ -346,15 +353,15 @@ export function createObservatory(api){
   canvas.addEventListener('blur',()=>keys.clear());roomCanvas.addEventListener('blur',()=>keys.clear());
   roomCanvas.addEventListener('click',e=>{
     if(!room||transition<1)return;
-    const r=roomCanvas.getBoundingClientRect(),scale=Math.min(r.width/room.width,r.height/room.height);
-    const p={x:(e.clientX-r.left-(r.width-room.width*scale)/2)/scale,y:(e.clientY-r.top-(r.height-room.height*scale)/2)/scale};
+    const r=roomCanvas.getBoundingClientRect(),area=api.viewport.visibleArea(),scale=Math.min(area.width/room.width,area.height/room.height);
+    const p={x:(e.clientX-r.left-(area.width-room.width*scale)/2)/scale,y:(e.clientY-r.top-(area.height-room.height*scale)/2)/scale};
     const host=roomHost();
     if(inside(p,{x:host.x-9,y:host.y-21,w:18,h:24})){talk(interiorId);return;}
     const obj=room.objects.find(o=>o.interactable&&inside(p,o));
     if(obj){if(obj.id==='exit')leave();else inspect(obj.id);}
   });
   function handleClick(e){
-    const r=canvas.getBoundingClientRect(),p={x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};
+    const p=api.viewport.pointAtEvent(e);
     const resident=(api.getResidents?.()||[]).find(a=>visible(byId(a.id)||{})&&inside(p,{x:a.x-7,y:a.y-18,w:14,h:20}));
     if(resident){talk(resident.id);return true;}
     for(const plot of api.getPlots()){
@@ -378,7 +385,7 @@ export function createObservatory(api){
     const composing=same&&active?.id==='agent-message',selection=composing?[active.selectionStart,active.selectionEnd,active.scrollTop]:null;
     const todosOpen=same&&panel.querySelector('.talk-todos')?.open;
     const todoScroll=same?panel.querySelector('.todo-list')?.scrollTop:0;
-    panel.innerHTML=html;panelKey=key;
+    panel.innerHTML=html;panelKey=key;panel.dataset.view=key;
     const log=panel.querySelector('.journal');
     if(log&&same)log.scrollTop=atEnd?log.scrollHeight:scroll;
     if(log&&same&&!atEnd&&anchorId){const current=[...log.querySelectorAll('[data-event]')].find(e=>e.dataset.event===anchorId);if(current)log.scrollTop+=current.getBoundingClientRect().top-log.getBoundingClientRect().top-anchorOffset;}
@@ -523,6 +530,7 @@ export function createObservatory(api){
     return true;
   }
   function showHistory(next='board'){
+    api.showDetails?.();
     if(mode==='room')leave();followId=null;historyView=next==='board'?'since':'all';replaying=false;setMode(next);renderHistory();
   }
   function renderHistory(){
@@ -602,7 +610,10 @@ export function createObservatory(api){
     if(seenHandoffs.has(e.id))return;seenHandoffs.add(e.id);
     history?.recordObservation({id:'handoff:'+e.id,agentId:e.agentId||e.from,name:e.name||e.from,town:e.from,timestamp:e.timestamp,kind:'handoff',text:e.text||'Work handed over',url:e.url});
     const w=api.getWorld(),from=w.districts?.find(d=>d.key===e.from),to=w.districts?.find(d=>d.key===e.to);
-    if(from&&to&&Date.now()-e.timestamp<60000)couriers.push({...e,start:performance.now()/1000,fromPoint:{x:from.x+from.w/2,y:from.y+from.h-10},toPoint:{x:to.x+to.w/2,y:to.y+to.h-10}});
+    if(from&&to&&Date.now()-e.timestamp<60000){
+      const points=districtRoute(w,from,to);
+      if(points.length>1)couriers.push({...e,start:performance.now()/1000,points});
+    }
   }
   function update(agents,meta={}){
     const selectedWasCottage=latestAgents.some(agent=>agent.id===selected);
@@ -643,9 +654,10 @@ export function createObservatory(api){
       const nextSelected=cottageSelection(agents,{selected,interiorId,showSettled:w.showSettled});
       if(nextSelected!==selected){selected=nextSelected;tab='overview';selectedObject=null;api.select(selected);}
     }
-    relationships=normalizeRelationships(meta.relationships||[],[...new Set(agents.map(a=>a.town))]);
+    relationships=normalizeRelationships(meta.relationships||[],[...new Set(agents.map(a=>a.town))]).map(rel=>({...rel,
+      points:districtRoute(w,w.districts.find(d=>d.key===rel.from),w.districts.find(d=>d.key===rel.to))}));
     handoffs=normalizedHandoffs(meta.handoffs||[]);handoffs.forEach(appendHandoff);
-    board={x:w.roadX+26,y:(w.roadYs?.[0]||w.height-60)+16};
+    board=w.square?{x:w.square.x+2,y:w.square.y-8}:{x:w.roadX+26,y:(w.roadYs?.[0]||w.height-60)+16};
     gramophone={x:board.x+40,y:board.y};
     if(mode==='room'&&byId(interiorId)){const newRoom=roomFor(byId(interiorId));if(newRoom.seed!==room.seed){room=newRoom;roomPlayer={...room.door};}}
     updatePrTally();updateRoster();ensureActivity(byId(interiorId||selected));renderPanel(selected);
@@ -664,19 +676,18 @@ export function createObservatory(api){
     // Relationship paths are explicit metadata, not guessed from project names.
     ctx.save();ctx.lineWidth=3;ctx.strokeStyle='#f8de9a';
     for(const rel of relationships){
-      const from=w.districts.find(d=>d.key===rel.from),to=w.districts.find(d=>d.key===rel.to);if(!from||!to)continue;
-      const a={x:from.x+from.w/2,y:from.y+from.h-8},b={x:to.x+to.w/2,y:to.y+to.h-8},mid=w.roadX+24;
-      ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(mid,a.y);ctx.lineTo(mid,b.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.setLineDash([]);
-      const signY=Math.min(a.y,b.y)+23;
-      ctx.font='7px "Silkscreen",monospace';ctx.fillStyle='#584631';ctx.fillRect(mid-19,signY,38,10);ctx.fillStyle='#f8de9a';ctx.fillText('↔',mid-4,signY+8);
+      const points=rel.points;if(!points?.length)continue;
+      ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
+      points.slice(1).forEach(p=>ctx.lineTo(p.x,p.y));ctx.stroke();ctx.setLineDash([]);
+      const sign=points[Math.floor(points.length/2)];
+      ctx.font='7px "Silkscreen",monospace';ctx.fillStyle='#584631';ctx.fillRect(sign.x-19,sign.y+6,38,10);ctx.fillStyle='#f8de9a';ctx.fillText('↔',sign.x-4,sign.y+14);
     }
     ctx.restore();
     couriers=couriers.filter(e=>time-e.start<14);
     for(const c of couriers){
-      const fraction=reduce?1:Math.min(1,(time-c.start)/12),mid=w.roadX+24;
-      const pts=[c.fromPoint,{x:mid,y:c.fromPoint.y},{x:mid,y:c.toPoint.y},c.toPoint];
+      const fraction=reduce?1:Math.min(1,(time-c.start)/12),pts=c.points;
       const lengths=pts.slice(1).map((p,i)=>distance(p,pts[i])),total=lengths.reduce((a,b)=>a+b,0);
-      let traveled=fraction*total,index=0;while(index<2&&traveled>lengths[index]){traveled-=lengths[index];index++;}
+      let traveled=fraction*total,index=0;while(index<lengths.length-1&&traveled>lengths[index]){traveled-=lengths[index];index++;}
       const f=lengths[index]?traveled/lengths[index]:0,x=pts[index].x+(pts[index+1].x-pts[index].x)*f,y=pts[index].y+(pts[index+1].y-pts[index].y)*f;
       ctx.fillStyle='#eed19b';ctx.fillRect(x-3,y-8,7,6);ctx.strokeStyle='#564431';ctx.strokeRect(x-3,y-8,7,6);
     }
@@ -693,7 +704,7 @@ export function createObservatory(api){
     }
     if(followId)hint('On the bench with '+(byId(followId)?.name||'your agent')+' · Move or press Escape to leave');
     else if(mode==='town'&&gramophone&&distance(player,gramophone)<24)hint('E · '+(extras.state.music.enabled?'Stop':'Play')+' the village gramophone');
-    else if(mode==='town')hint('Arrow keys / WASD to walk · Walk into doors · E to talk or use a bench · Click to inspect');
+    else if(mode==='town')hint('Arrow keys / WASD to walk · E to talk · + / − zoom · 0 reset · F fullscreen · Click to inspect');
   }
   function draw(time){
     const dt=Math.min(.05,lastFrame?time-lastFrame:1/60);lastFrame=time;
@@ -706,8 +717,8 @@ export function createObservatory(api){
       const width=Math.max(1,Math.round(r.width*ratio)),height=Math.max(1,Math.round(r.height*ratio));
       if(roomCanvas.width!==width||roomCanvas.height!==height){roomCanvas.width=width;roomCanvas.height=height;}
       roomCtx.imageSmoothingEnabled=false;roomCtx.fillStyle='#171e22';roomCtx.fillRect(0,0,width,height);
-      const scale=Math.min(width/room.width,height/room.height),eased=1-Math.pow(1-transition,3);
-      roomCtx.save();roomCtx.translate(width/2,height/2);roomCtx.scale(scale*(.83+.17*eased),scale*(.83+.17*eased));roomCtx.translate(-room.width/2,-room.height/2);
+      const area=api.viewport.visibleArea(),scale=Math.min(area.width/room.width,area.height/room.height)*ratio,eased=1-Math.pow(1-transition,3);
+      roomCtx.save();roomCtx.translate(area.width*ratio/2,area.height*ratio/2);roomCtx.scale(scale*(.83+.17*eased),scale*(.83+.17*eased));roomCtx.translate(-room.width/2,-room.height/2);
       roomCtx.globalAlpha=eased;
       const rest=restForRoom();
       renderInterior(roomCtx,room,{time:time*1000,agent:byId(interiorId)||{},player:{...roomPlayer,walking:moving},selectedObject,reduce,talking:talkingId===interiorId&&performance.now()<talkingUntil,rest,paintRest:paintBed});
@@ -739,6 +750,7 @@ export function createObservatory(api){
     else if(stage==='none'){ctx.fillStyle=label;ctx.font='6px "Silkscreen",monospace';ctx.fillText('NO PR',x-4,y+26);}
   }
   return {update,draw,renderPanel,handleClick,enter,leave,follow,focusCottage,drawDispatch,latestLine,visible,talk,
+    unfollow(){followId=null;replaying=false;keys.clear();if(mode!=='room')setMode(mode);},
     drawAtmosphere:(ctx,world,time,beforePalette)=>extras.drawTown(ctx,world,time,reduce,beforePalette),
     drawApprenticeArrivals,
     lightAt:time=>extras.lightAt(time),

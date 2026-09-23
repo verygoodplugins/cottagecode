@@ -16,11 +16,9 @@ import {
   paintCheckStorm,
 } from "./folklore.mjs";
 import { plotAgentsForLayout, roommateLodgerIds, plotHostId, plotHouseholdIds, householdWorking, householdDispatchAgent } from "./roommates.mjs";
-import {
-  isMapFullscreen,
-  fullscreenButtonCopy,
-  nextFullscreenAction,
-} from "./fullscreen.mjs";
+import { createMapViewport } from "./viewport.mjs";
+import { createMapDisplay } from "./map-display.mjs";
+import {MAP_REFERENCE_WIDTH,townWidthBudget,townActivity,overviewBounds} from './town-layout.mjs';
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 import { residentTargets } from "./interaction.mjs";
@@ -40,9 +38,10 @@ let activeFeedAbort = null;
 let feedRevision = 0;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
 let observatory;
-const stableLayout = createTownLayout();
+let stableLayout;
 let historyLayout = null, historyLiveSignature = '';
-let sceneSolids = [], scenePonds = [], sceneDistricts = [];
+let sceneSolids = [], scenePonds = [], sceneDistricts = [], sceneRoads = [], townCounts = new Map();
+let villageSquare = null;
 let showSettled = false;
 
 function clearFeedState(){
@@ -510,14 +509,11 @@ function townStyle(ag){
 }
 
 const HOUSE_W=54, HOUSE_H=66;
-let COLS=4;
-const GAP_X=26, GAP_Y=70, PAD=18, SIGN_H=32, MARGIN=30, ROAD=48;
+const GAP_Y=70, PAD=18, SIGN_H=48, MARGIN=30, ROAD=48;
 // where things sit in the yard, measured down from the bottom of the house
 const LANE_Y = 1, LANE_H = 9, SIGN_Y = 13, BENCH_Y = 29, SHED_Y = 49;
-let D_W = COLS*HOUSE_W + (COLS-1)*GAP_X + PAD*2;
-let W = MARGIN*2 + D_W*2 + ROAD;
-let H = 400, ROAD_Y = 200, DR = [];
-let VERT_ROAD = MARGIN + D_W;
+let W = MAP_REFERENCE_WIDTH, H = 400, DR = [];
+let VERT_ROAD = MARGIN + 36;
 let HORZ_ROADS = [];
 
 const C = {
@@ -541,6 +537,15 @@ const cv = document.getElementById("town");
 const ctx = cv.getContext("2d");
 cv.width = W; cv.height = 0;
 ctx.imageSmoothingEnabled = false;
+let mapDisplay;
+const mapViewport = createMapViewport({canvas:cv,viewport:document.getElementById('map-viewport'),
+  surface:document.getElementById('map-surface'),referenceWidth:MAP_REFERENCE_WIDTH,getObscured:()=>mapDisplay?.obscured()||{}});
+const packingWidth=townWidthBudget({windowWidth:window.innerWidth,standardWidth:document.getElementById('map-viewport').clientWidth});
+stableLayout=createTownLayout({maxWidth:packingWidth});
+mapDisplay = createMapDisplay({camera:mapViewport,canvas:cv,getMode:()=>observatory?.mode||'town',onOverview:()=>{
+  observatory?.unfollow();
+  return mapViewport.overview(overviewBounds(plots.filter(p=>(!filter||filter===townKey(p.agent))&&(!observatory||observatory.visible(p.agent)))));
+}});
 const bg = document.createElement("canvas");
 const bx = bg.getContext("2d");
 let reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -581,160 +586,98 @@ function paintBackground(){
     else if(r>0.4) p(gx,gy,2,1,C.grassDk);
   }
 
-  const rx = VERT_ROAD;
-  const roadsY = HORZ_ROADS.length ? HORZ_ROADS : (H > ROAD + MARGIN*2 ? [ROAD_Y] : []);
-  p(rx-1, 0, ROAD+2, H, C.dirtEdge);
-  p(rx, 0, ROAD, H, C.dirt);
-  p(rx+7, 0, 1, H, C.dirtDk);
-  p(rx+ROAD-8, 0, 1, H, C.dirtDk);
-  roadsY.forEach(ry=>{
-    p(0, ry-1, W, ROAD+2, C.dirtEdge);
-    p(0, ry, W, ROAD, C.dirt);
-    p(0, ry+7, W, 1, C.dirtDk);
-    p(0, ry+ROAD-8, W, 1, C.dirtDk);
-    p(rx, ry, ROAD, ROAD, C.dirt);
-  });
+  const onRoad = (x,y,pad=0)=>sceneRoads.some(r=>x>=r.x-pad&&x<=r.x+r.w+pad&&y>=r.y-pad&&y<=r.y+r.h+pad);
+  // Draw the union of the streets, so unequal districts never cut roads through homes.
+  for(const r of sceneRoads)p(r.x-1,r.y-1,r.w+2,r.h+2,C.dirtEdge);
+  for(const r of sceneRoads)p(r.x,r.y,r.w,r.h,C.dirt);
   for(let i=0;i<700;i++){
-    const gx=(rnd()*W)|0, gy=(rnd()*H)|0;
-    const onH = roadsY.some(ry => gy>ry && gy<ry+ROAD);
-    if(onH || (gx>rx && gx<rx+ROAD)){
+    const gx=(rnd()*W)|0,gy=(rnd()*H)|0;
+    if(onRoad(gx,gy)){
       const r=rnd();
-      if(r>0.9){ p(gx,gy,2,2,C.stone); p(gx,gy+1,2,1,C.stoneDk); }
-      else if(r>0.55) p(gx,gy,2,1,C.dirtDk);
+      if(r>.9){p(gx,gy,2,2,C.stone);p(gx,gy+1,2,1,C.stoneDk);}
+      else if(r>.55)p(gx,gy,2,1,C.dirtDk);
     }
   }
-
-  const spurs = [];
-  TOWNS.forEach((d, di) => {
-    const r = DR[di];
-    if(!r) return;
-    const mine = plots.filter(pl => townKey(pl.agent) === d.key);
-    if (!mine.length) return;
-    const rows = Math.max(...mine.map(pl => Math.round((pl.y - (r.y+PAD+SIGN_H)) / (HOUSE_H+GAP_Y)))) + 1;
-    const nearest = roadsY.reduce((best, ry)=>{
-      const dist = Math.min(Math.abs((r.y+r.h) - ry), Math.abs(r.y - (ry+ROAD)));
-      return dist < best.dist ? {ry, dist} : best;
-    }, {ry: roadsY[0] ?? r.y+r.h, dist: Infinity});
-    const topSide = r.y + r.h/2 <= (nearest.ry + ROAD/2);
-
-    for (let row = 0; row < rows; row++) {
-      const rowY = r.y + PAD + SIGN_H + row*(HOUSE_H+GAP_Y);
-      const laneY = rowY + HOUSE_H + LANE_Y + (LANE_H>>1);
-      const inRow = mine.filter(pl => Math.abs(pl.y - rowY) < 4);
-      if (!inRow.length) continue;
-      const x0 = Math.min(...inRow.map(pl => pl.x)) - 8;
-      const x1 = Math.max(...inRow.map(pl => pl.x)) + HOUSE_W + 8;
-      dirtPath(p, [[x0, laneY], [x1, laneY]], LANE_H);
-      inRow.forEach(pl => dirtPath(p, [[pl.x+27, laneY], [pl.x+27, rowY+HOUSE_H-2]], 7));
-    }
-
-    const lastY = r.y + PAD + SIGN_H + (rows-1)*(HOUSE_H+GAP_Y) + HOUSE_H + LANE_Y + (LANE_H>>1);
-    const spurX = r.x + PAD + Math.round(D_W*0.34);
-    const jogX = spurX + (r.col % 2 ? -34 : 38);
-    if (roadsY.length) {
-      const roadY = topSide ? nearest.ry + 4 : nearest.ry + ROAD - 4;
-      const midY = topSide
-        ? lastY + Math.round((roadY - lastY) * 0.55)
-        : lastY - Math.round((lastY - roadY) * 0.55);
-      dirtPath(p, [[spurX, lastY], [spurX, midY], [jogX, midY], [jogX, roadY]], 8);
-    } else {
-      const roadX = r.col === 0 ? rx + 4 : rx + ROAD - 4;
-      dirtPath(p, [[spurX, lastY], [roadX, lastY]], 8);
-    }
-    spurs.push(jogX);
-  });
-
-  TOWNS.forEach((d, di) => {
-    const r = DR[di];
-    if(!r) return;
-    const mine = plots.filter(pl => townKey(pl.agent) === d.key);
-    const rows = mine.length ? Math.ceil(mine.length / COLS) : 0;
-    const used = SIGN_H + rows*(HOUSE_H+GAP_Y) + PAD*2;
-    const spare = r.h - used;
-    if (spare < 70) return;
-    const top = r.y + used - PAD + 6;
-    pondTo(p, r.x + PAD + 10, top + 8, Math.round(D_W*0.42), Math.min(58, spare-24), rnd);
-    const ox = r.x + PAD + Math.round(D_W*0.55);
-    const tone = di % 2
-      ? {light:"#ffd7e6", mid:"#f2a8c4", dark:"#c9789c"}
-      : {light:"#fff3c9", mid:"#f2d98a", dark:"#c9ab52"};
-    for (let oy = 0; oy < Math.min(2, Math.floor((spare-30)/34)); oy++)
-      for (let ox2 = 0; ox2 < 3; ox2++)
-        blossomTreeTo(p, ox + ox2*26, top + 10 + oy*34, 7, tone);
-  });
-
-  TOWNS.forEach((d, di) => {
-    const r = DR[di];
-    if(!r) return;
-    for(let i = 2; i < r.w - 6; i += 7){
-      const hx = r.x + i;
-      if(spurs.some(sx => Math.abs(hx - sx) < 16)) continue;
-      const hy = r.y + r.h - 12;
-      const onPlaza = roadsY.some(ry =>
-        Math.abs(hx - (rx + (ROAD>>1))) < PLAZA*0.6 &&
-        Math.abs(hy - (ry + (ROAD>>1))) < PLAZA*0.6);
-      if(onPlaza) continue;
-      bushTo(p, hx, hy, 5);
-    }
-  });
-
-  const onRoad = (ax,ay)=> roadsY.some(ry => ay>ry-10 && ay<ry+ROAD+10) || (ax>rx-10 && ax<rx+ROAD+10);
-  const inPlot = (ax,ay)=> DR.some(d=> ax>d.x-9 && ax<d.x+d.w+9 && ay>d.y-9 && ay<d.y+d.h+9);
-  for(let gy=-6; gy<H+6; gy+=17){
-    for(let gx=-6; gx<W+6; gx+=19){
-      const r = 6+((rnd()*3)|0);
-      const jx = gx + ((rnd()*7)|0), jy = gy + ((rnd()*7)|0);
-      if(onRoad(jx+r, jy+r) || inPlot(jx+r, jy+r)) continue;
-      const roll = rnd();
-      if(roll > 0.93)      stumpTo(p, jx+2, jy+4);
-      else if(roll > 0.89) rockTo(p, jx+2, jy+3, 4 + ((rnd()*2)|0));
-      else if(roll > 0.86) logsTo(p, jx, jy+4);
-      else if(roll > 0.84) barrelsTo(p, jx+1, jy+3);
-      else {
-        treeTo(p, jx, jy, r);
-        if(rnd() > 0.86) shroomsTo(p, jx+r+4, jy+r*2-2);
-      }
-    }
-  }
-
-  // grass overhangs the dirt in scalloped bumps rather than a ruled line
-  const scallop = (edge, horizontal, inward) => {
-    const len = horizontal ? W : H;
-    let d = 2;
-    for(let i = 0; i < len; i += 3){
-      d = Math.max(1, Math.min(4, d + ((rnd()*3)|0) - 1));   // random walk, stays continuous
-      const w2 = 3;
-      const y0 = inward ? edge : edge - d + 1;
+  // Scallop only exposed edges; intersections stay open dirt.
+  const edge=(x,y,length,horizontal,inward)=>{
+    let depth=2;
+    for(let i=0;i<length;i+=3){
+      const gx=x+(horizontal?i:0),gy=y+(horizontal?0:i);
+      if(onRoad(gx+(horizontal?0:(inward?-2:2)),gy+(horizontal?(inward?-2:2):0)))continue;
+      depth=Math.max(1,Math.min(4,depth+((rnd()*3)|0)-1));
       if(horizontal){
-        p(i, y0, w2, d, C.grass);
-        p(i, inward ? y0 + d : y0 - 1, w2, 1, C.grassDk);
-      } else {
-        p(y0, i, d, w2, C.grass);
-        p(inward ? y0 + d : y0 - 1, i, 1, w2, C.grassDk);
+        p(gx,gy+(inward?0:-depth),3,depth,C.grass);
+        p(gx,gy+(inward?7:-8),3,1,C.dirtDk);
+      }else{
+        p(gx+(inward?0:-depth),gy,depth,3,C.grass);
+        p(gx+(inward?7:-8),gy,1,3,C.dirtDk);
       }
     }
   };
-  scallop(rx, false, true);
-  scallop(rx + ROAD, false, false);
-  roadsY.forEach(ry=>{
-    scallop(ry, true, true);
-    scallop(ry + ROAD, true, false);
-  });
-  plots.forEach(pl=>{
-    benchTo(p, pl.x+30, pl.y+HOUSE_H+BENCH_Y, townKey(pl.agent));
-    if(!(pl.kids && pl.kids.length)) bushTo(p, pl.x-12, pl.y+HOUSE_H+BENCH_Y-2, 4);
-    if((pl.x+pl.y) % 3 === 0) flowersTo(p, pl.x+HOUSE_W+2, pl.y+HOUSE_H-4, rnd);
+  for(const r of sceneRoads){
+    edge(r.x,r.y,r.w,true,true);edge(r.x,r.y+r.h,r.w,true,false);
+    edge(r.x,r.y,r.h,false,true);edge(r.x+r.w,r.y,r.h,false,false);
+  }
+
+  const spurs=[];
+  TOWNS.forEach((d,di)=>{
+    const r=DR[di];if(!r)return;
+    const mine=plots.filter(pl=>pl.blockId===r.id);
+    if(!mine.length)return;
+    const rowCount=Math.max(...mine.map(pl=>Math.round((pl.y-(r.y+PAD+SIGN_H))/(HOUSE_H+GAP_Y))))+1;
+    const gateX=r.x+7;
+    let firstY;
+    for(let row=0;row<rowCount;row++){
+      const rowY=r.y+PAD+SIGN_H+row*(HOUSE_H+GAP_Y);
+      const laneY=rowY+HOUSE_H+LANE_Y+(LANE_H>>1);
+      const inRow=mine.filter(pl=>Math.abs(pl.y-rowY)<4);if(!inRow.length)continue;
+      const x1=Math.max(...inRow.map(pl=>pl.x))+HOUSE_W+8;
+      dirtPath(p,[[gateX,laneY],[x1,laneY]],LANE_H);
+      inRow.forEach(pl=>dirtPath(p,[[pl.x+27,laneY],[pl.x+27,rowY+HOUSE_H-2]],7));
+      firstY??=laneY;
+    }
+    dirtPath(p,[[gateX,firstY],[gateX,r.y+r.h+ROAD/2]],8);
+    spurs.push({x:gateX,y:r.y+r.h});
+    const used=SIGN_H+rowCount*(HOUSE_H+GAP_Y)+PAD*2,spare=r.h-used;
+    if(spare>=70){
+      const top=r.y+used-PAD+6;
+      pondTo(p,r.x+PAD+16,top+8,Math.min(110,r.w-PAD*2-24),Math.min(58,spare-24),rnd);
+    }
   });
 
-  if(roadsY.length){
-    roadsY.forEach(ry => plazaTo(p, rx + (ROAD>>1), ry + (ROAD>>1), rnd));
-  } else {
-    plazaTo(p, rx + (ROAD>>1), Math.round(H/2), rnd);
+  for(const r of DR){
+    for(let i=2;i<r.w-6;i+=7){
+      const hx=r.x+i,hy=r.y+r.h-12;
+      if(spurs.some(s=>Math.abs(hx-s.x)<16&&Math.abs(hy-s.y)<20))continue;
+      if(villageSquare&&Math.abs(hx-villageSquare.x)<PLAZA*.6&&Math.abs(hy-villageSquare.y)<PLAZA*.6)continue;
+      bushTo(p,hx,hy,5);
+    }
   }
-  gardens.forEach(g => gardenTo(p, g.x, g.y, g.w, g.h));
-  // A permanent pond on the reserved second row of the home district.
-  if(!scenePonds.length && DR.length){
-    pondTo(p,MARGIN+PAD,H-85,100,48,rnd);
+  const park={x:VERT_ROAD+ROAD+8,y:H-108,w:144,h:102};
+  const inPlot=(x,y)=>DR.some(d=>x>d.x-9&&x<d.x+d.w+9&&y>d.y-9&&y<d.y+d.h+9);
+  for(let gy=-6;gy<H+6;gy+=17)for(let gx=-6;gx<W+6;gx+=19){
+    const r=6+((rnd()*3)|0),jx=gx+((rnd()*7)|0),jy=gy+((rnd()*7)|0);
+    const x=jx+r,y=jy+r;
+    const inPark=x>park.x-10&&x<park.x+park.w+10&&y>park.y-10&&y<park.y+park.h+10;
+    const inSquare=villageSquare&&Math.abs(x-villageSquare.x)<PLAZA/2+14&&Math.abs(y-villageSquare.y)<PLAZA/2+14;
+    if(onRoad(x,y,10)||inPlot(x,y)||inPark||inSquare)continue;
+    const roll=rnd();
+    if(roll>.93)stumpTo(p,jx+2,jy+4);
+    else if(roll>.89)rockTo(p,jx+2,jy+3,4+((rnd()*2)|0));
+    else if(roll>.86)logsTo(p,jx,jy+4);
+    else if(roll>.84)barrelsTo(p,jx+1,jy+3);
+    else{treeTo(p,jx,jy,r);if(rnd()>.86)shroomsTo(p,jx+r+4,jy+r*2-2);}
+  }
+  plots.forEach(pl=>{
+    benchTo(p,pl.x+30,pl.y+HOUSE_H+BENCH_Y,townKey(pl.agent));
+    if(!pl.kids?.length)bushTo(p,pl.x+HOUSE_W+10,pl.y+HOUSE_H+BENCH_Y-2,4);
+    if((pl.x+pl.y)%3===0)flowersTo(p,pl.x+HOUSE_W+2,pl.y+HOUSE_H-4,rnd);
+  });
+  if(villageSquare)plazaTo(p,villageSquare.x,villageSquare.y,rnd);
+  gardens.forEach(g=>gardenTo(p,g.x,g.y,g.w,g.h));
+  if(!scenePonds.length&&DR.length){
+    pondTo(p,park.x+10,H-85,100,48,rnd);
+    dirtPath(p,[[VERT_ROAD+ROAD/2,H-22],[park.x+70,H-22]],7);
   }
 }
 
@@ -1608,6 +1551,30 @@ function drawSign(x, y, label, color){
   ctx.fillText(label, x+6, y+4);
 }
 
+function townSign(d,r){
+  let label=d.key==='HubTown'&&!r.page?'HOME HUBTOWN':d.label;
+  const maxWidth=r.w-PAD*2-(d.key==='HubTown'&&!r.page?70:0);
+  if(signWidth(label)>maxWidth){while(label.length&&signWidth(label+'…')>maxWidth)label=label.slice(0,-1);label+='…';}
+  return {x:r.x+PAD,y:r.y+PAD,label};
+}
+function activityLabel(){
+  let working=0,blocked=0;
+  for(const count of townCounts.values()){working+=count.working;blocked+=count.blocked;}
+  return working+' working, '+blocked+' blocked across '+townCounts.size+' towns';
+}
+function drawTownCounts(night){
+  ctx.save();ctx.font='8px "Silkscreen",monospace';ctx.textBaseline='top';
+  TOWNS.forEach((d,i)=>{
+    const r=DR[i],counts=d.counts;if(!r||!counts)return;
+    const label=counts.working||counts.blocked?counts.working+' working · '+counts.blocked+' blocked':counts.total+' resting';
+    ctx.globalAlpha=filter&&filter!==d.key?0.35:1;
+    const x=r.x+PAD,y=r.y+PAD+29;
+    px(x-2,y-2,Math.ceil(ctx.measureText(label).width)+6,12,night?'#1d3040':'#c4d9a6');
+    ctx.fillStyle=night?'#d1dfeb':'#294333';ctx.fillText(label,x,y);
+  });
+  ctx.restore();
+}
+
 /* ---------- layout ---------- */
 function visibleAgents(){
   return agents.filter(a => isCottageVisible(a,{showSettled,interiorId:observatory?.state.interiorId}));
@@ -1659,11 +1626,11 @@ function layout(){
     residents.length>current.residents.length?stableLayout.fork().update(forLayout,options):liveWorld;
   const styles=districtsFrom(residents);
   TOWNS=world.blocks.map(b=>({...styles.find(d=>d.key===b.key)||FALLBACK_TOWN,key:b.key,label:b.key.toUpperCase()+(b.page?" ANNEX":"")}));
-  DR=world.blocks;sceneDistricts=DR;
-  if(!TOWNS.length){TOWNS=[{key:"HubTown",label:"HOME HUBTOWN",...TOWN_PALETTE[0]}];DR=[{key:"HubTown",x:MARGIN,y:MARGIN,w:world.districtWidth,h:340,row:0,col:0}];sceneDistricts=DR;}
-  COLS=world.columns;D_W=world.districtWidth;VERT_ROAD=world.roadX;HORZ_ROADS=world.roadYs;
-  ROAD_Y=HORZ_ROADS[0];W=world.width;H=world.height+112;
+  DR=world.blocks;sceneDistricts=DR;sceneRoads=world.roads;villageSquare=world.square;
+  if(!TOWNS.length){TOWNS=[{key:"HubTown",label:"HOME HUBTOWN",...TOWN_PALETTE[0]}];DR=[{id:'empty-home',key:"HubTown",x:world.roadX+ROAD,y:MARGIN,w:world.districtWidth,h:220,page:0,columns:4}];sceneDistricts=DR;}
+  VERT_ROAD=world.roadX;HORZ_ROADS=world.roadYs;W=world.width;H=world.height+112;
   if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;bg.width=W;bg.height=H;ctx.imageSmoothingEnabled=false;}
+  mapViewport.setWorld(W,H);
   const vis=visibleAgents();
   const visIds=new Set(vis.map(a=>a.id));
   plots=world.plots.map(p=>{
@@ -1675,6 +1642,13 @@ function layout(){
     const household=plotHouseholdIds(p.agent);
     return [...household].some(id=>visIds.has(id));
   });
+  townCounts=townActivity(vis);
+  for(let i=0;i<TOWNS.length;i++){
+    const residents=plots.filter(p=>p.blockId===DR[i].id).flatMap(p=>[p.agent,...(p.kids||[]).map(k=>k.agent)]);
+    TOWNS[i].counts=[...townActivity(residents).values()].reduce((sum,c)=>({working:sum.working+c.working,blocked:sum.blocked+c.blocked,total:sum.total+c.total}),{working:0,blocked:0,total:0});
+  }
+  document.getElementById('map-overview').title='Frame working and blocked cottages · '+activityLabel();
+  cv.setAttribute('aria-description',activityLabel()+'. '+lastBedtimeLabel+'. Warm windows mark agents still working.');
   gardens=[];
   const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,(p.agent.roommates||[]).map(m=>m.id),p.kids.map(k=>k.agent.id)]))+W+":"+H;
   if(signature!==layoutSignature){paintBackground();layoutSignature=signature;}
@@ -1687,9 +1661,8 @@ function placeJack(){
   const di = TOWNS.findIndex(d => d.key === "HubTown");
   if(di < 0 || !DR[di]){ jackPlot = null; return; }
   const r = DR[di];
-  const signW = signWidth("HOME HUBTOWN");
-  const signX = r.col === 1 ? r.x + r.w - PAD - signW : r.x + PAD;
-  const x = r.col === 1 ? signX - 72 : signX + signW + 8;
+  const sign=townSign(TOWNS[di],r);
+  const x = sign.x+signWidth(sign.label)+8;
   const y = r.y + PAD + 2;
   jackPlot = { x, y, w: 62, h: 28 };
 }
@@ -1701,15 +1674,15 @@ function draw(){
   const villageLight=observatory?.lightAt(t);
   bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents,source:layoutSource||feedNamespace(ENDPOINT,builtInDemo)});
   const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
-  if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
+  if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',activityLabel()+'. '+bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
 
   TOWNS.forEach((d, di)=>{
     const r = DR[di];
     if(!r) return;
     ctx.globalAlpha = (filter && filter!==d.key) ? 0.35 : 1;
-    const sx = r.col === 1 ? r.x + r.w - PAD - signWidth(d.key === "HubTown" ? "HOME HUBTOWN" : d.label) : r.x + PAD;
-    drawSign(sx, r.y + PAD, d.key === "HubTown" ? "HOME HUBTOWN" : d.label, d.roof);
+    const sign=townSign(d,r);
+    drawSign(sign.x,sign.y,sign.label,d.roof);
     ctx.globalAlpha = 1;
   });
   if(jackPlot){
@@ -1834,8 +1807,7 @@ function draw(){
     ctx.textBaseline='top';ctx.fillStyle='#bacbe2';
     TOWNS.forEach((d,di)=>{
       const r=DR[di];if(!r)return;
-      const label=d.key==='HubTown'?'HOME HUBTOWN':d.label;
-      const sx=r.col===1?r.x+r.w-PAD-signWidth(label):r.x+PAD;
+      const {label,x:sx}=townSign(d,r);
       ctx.globalAlpha=nightInk*((filter&&filter!==d.key) ? .35 : 1);
       ctx.fillText(label,sx+6,r.y+PAD+4);
     });
@@ -1846,6 +1818,7 @@ function draw(){
     }
     ctx.globalAlpha=1;
   }
+  drawTownCounts(nightInk>0);
   // Operational colors are drawn after the blue palette, without daylight holes.
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
@@ -1877,9 +1850,7 @@ function draw(){
 
 /* ---------- interaction ---------- */
 function hit(evt){
-  const r = cv.getBoundingClientRect();
-  const x = (evt.clientX - r.left) * (W / r.width);
-  const y = (evt.clientY - r.top) * (H / r.height);
+  const {x,y} = mapViewport.pointAtEvent(evt);
   if(jackPlot && !(filter && filter !== "HubTown")){
     const j = jackPlot;
     if(x>=j.x-2 && x<=j.x+j.w+8 && y>=j.y-10 && y<=j.y+j.h+10) return JACK_ID;
@@ -1915,7 +1886,7 @@ cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverI
 cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
 cv.addEventListener("click", e=>{
   if(observatory?.handleClick(e))return;
-  const id=hit(e);if(id){selectedId=id;renderPanel();}
+  const id=hit(e);if(id){selectedId=id;renderPanel();mapDisplay.showDetails();}
 });
 cv.addEventListener("dblclick", e=>{
   const id = hit(e);
@@ -1979,6 +1950,7 @@ function launchHtml(ag){
 
 function renderPanel(){
   if(observatory?.renderPanel(selectedId))return;
+  panel.dataset.view='fallback:'+selectedId;
   if(selectedId === JACK_ID){
     renderJackPanel();
     return;
@@ -2113,65 +2085,6 @@ document.getElementById("pause").onclick = (e)=>{
   e.target.textContent = paused ? "resume feed" : "pause feed";
 };
 
-const stageEl = document.querySelector(".stage");
-const fullscreenBtn = document.getElementById("fullscreen-toggle");
-function mapFullscreenActive(){
-  return isMapFullscreen({
-    fullscreenElement: document.fullscreenElement === stageEl ? stageEl : null,
-    cssFallback: document.body.classList.contains("is-map-fullscreen"),
-  });
-}
-function syncFullscreenButton(){
-  if(!fullscreenBtn) return;
-  const active = mapFullscreenActive();
-  const copy = fullscreenButtonCopy(active);
-  fullscreenBtn.setAttribute("aria-pressed", String(active));
-  fullscreenBtn.setAttribute("aria-label", copy.ariaLabel);
-  fullscreenBtn.textContent = copy.label;
-}
-async function exitMapFullscreen(){
-  if(document.fullscreenElement){
-    try{ await document.exitFullscreen(); }catch{ /* CSS fallback below */ }
-  }
-  document.body.classList.remove("is-map-fullscreen");
-  syncFullscreenButton();
-  return true;
-}
-async function toggleMapFullscreen(){
-  const action = nextFullscreenAction({
-    fullscreenElement: document.fullscreenElement === stageEl ? stageEl : null,
-    cssFallback: document.body.classList.contains("is-map-fullscreen"),
-    canRequest: Boolean(stageEl?.requestFullscreen),
-  });
-  if(action === "exit-api" || action === "exit-css"){
-    await exitMapFullscreen();
-    return mapFullscreenActive();
-  }
-  if(action === "enter-api"){
-    try{
-      await stageEl.requestFullscreen();
-      document.body.classList.remove("is-map-fullscreen");
-      syncFullscreenButton();
-      return true;
-    }catch{ /* fall through to CSS */ }
-  }
-  document.body.classList.add("is-map-fullscreen");
-  syncFullscreenButton();
-  return true;
-}
-fullscreenBtn?.addEventListener("click", ()=>{ void toggleMapFullscreen(); });
-document.addEventListener("fullscreenchange", syncFullscreenButton);
-// CSS fallback keeps focus on the button; Escape must still exit without canvas focus.
-window.addEventListener("keydown", (e)=>{
-  if(e.key !== "Escape") return;
-  if(e.defaultPrevented) return; // canvas already left the cottage / cleared follow
-  if(document.fullscreenElement) return; // browser owns native fullscreen Escape
-  if(!document.body.classList.contains("is-map-fullscreen")) return;
-  e.preventDefault();
-  void exitMapFullscreen();
-});
-syncFullscreenButton();
-
 const refresh=createLatestRefresh(async ()=>{
     const incoming=await fetchAgents();
     if(incoming===null)return true;
@@ -2191,13 +2104,14 @@ observatory=createObservatory({
       k,observatory?.apprenticeArrival(k.id,t),observatory?.isApprenticeArriving(k.id,t)
     )).filter(Boolean);
   })),
-  getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,jack:jackPlot,showSettled}),
+  getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,roads:sceneRoads,road:ROAD,square:villageSquare,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh,
-  isMapFullscreen:mapFullscreenActive,toggleMapFullscreen,exitMapFullscreen
+  viewport:mapViewport,showDetails:mapDisplay.showDetails,onModeChange:mapDisplay.syncZoom,
+  isMapFullscreen:mapDisplay.isActive,toggleMapFullscreen:mapDisplay.toggle,exitMapFullscreen:mapDisplay.exit
 });
 window.cottageObservatory=observatory;
-window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,roommates:(p.agent.roommates||[]).map(m=>m.id),kids:p.kids})),solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state});
+window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,blockId:p.blockId,roommates:(p.agent.roommates||[]).map(m=>m.id),kids:p.kids})),districts:sceneDistricts,roads:sceneRoads,townCounts:Object.fromEntries(townCounts),packingWidth,solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state,viewport:mapViewport.state,display:mapDisplay.state});
 
 (function boot(){
   const previewNight=()=>{

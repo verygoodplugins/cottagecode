@@ -33,6 +33,8 @@
     "deploy:demo": "node scripts/deploy-demo.mjs",
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:viewport": "node scripts/browser-viewport-smoke.mjs",
+    "test:layout": "node scripts/browser-packing-smoke.mjs",
     "test:ambience": "node scripts/browser-ambience-smoke.mjs",
     "test:night": "node scripts/browser-night-smoke.mjs"
   },
