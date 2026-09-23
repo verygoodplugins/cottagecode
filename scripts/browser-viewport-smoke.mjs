@@ -60,7 +60,8 @@ try {
 
   for(const [tab,selector] of [['request','.request-paper'],['journal','.journal'],['todos','.todo-list'],['review','.pr-snapshot'],['artifacts','.artifact-list']]) {
     await click('[data-action="tab:'+tab+'"]');
-    assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(selector)})`),true);
+    await until(`window.cottageState().scene.tab===${JSON.stringify(tab)} && !!document.querySelector(${JSON.stringify(selector)})`,
+      `Inspector ${tab} content did not become available`);
   }
   await click('[data-action="tab:journal"]');
   await evaluate('document.querySelector(".journal").scrollTop=180; document.getElementById("panel").scrollTop=50;');
