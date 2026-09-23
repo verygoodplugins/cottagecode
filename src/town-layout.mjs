@@ -146,6 +146,19 @@ export function overviewBounds(plots) {
   return {x,y,w:Math.max(...included.map(p => p.x+72))-x,h:Math.max(...included.map(p => p.y+142))-y};
 }
 
+/** Reuse relationship and courier routes while the street geometry is unchanged. */
+export function createDistrictRouter() {
+  let signature = '', routes = new Map();
+  return (world, from, to) => {
+    if (!from || !to) return [];
+    const next = JSON.stringify([world.road || 48, world.roads.map(r => [r.x,r.y,r.w,r.h])]);
+    if (next !== signature) { signature = next; routes.clear(); }
+    const key = JSON.stringify([from.x,from.y,from.w,from.h,to.x,to.y,to.w,to.h]);
+    if (!routes.has(key)) routes.set(key, districtRoute(world,from,to));
+    return routes.get(key);
+  };
+}
+
 /** Orthogonal routes on actual streets, used only for explicit relationships. */
 export function districtRoute(world, from, to) {
   if (!from || !to) return [];

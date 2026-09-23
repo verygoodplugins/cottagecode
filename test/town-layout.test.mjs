@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTownLayout,townWidthBudget,townActivity,overviewBounds,districtRoute} from '../src/town-layout.mjs';
+import {createTownLayout,townWidthBudget,townActivity,overviewBounds,districtRoute,createDistrictRouter} from '../src/town-layout.mjs';
 
 const fleet = () => ['HubTown','AppTown','MemTown','VaultTown','FusionTown'].flatMap((town,i) =>
   Array.from({length:i===0?7:i===3?2:1},(_,n)=>({id:town+'-'+n,town,status:i===2?'blocked':'working'})));
@@ -92,4 +92,19 @@ test('every district has connected streets and explicit routes avoid all cottage
       }
     }
   }
+});
+
+test('relationship and courier routes reuse unchanged polls and invalidate changed geometry', () => {
+  const layout=createTownLayout({maxWidth:1500}),first=layout.update(fleet()),route=createDistrictRouter();
+  const [from,to]=first.blocks,points=route(first,from,to);
+  assert.ok(points.length>1);
+  const polled=layout.update(fleet().map(a=>({...a,status:'idle'})));
+  assert.equal(route(polled,polled.blocks[0],polled.blocks[1]),points,'Unchanged polls must reuse the route');
+  const moved={...to,x:to.x+8};
+  assert.deepEqual(route(polled,from,moved),districtRoute(polled,from,moved),'Changed endpoints must not use stale routes');
+  assert.notEqual(route(polled,from,moved),points);
+  assert.deepEqual(route({...polled,roads:[]},from,to),[],'Removed streets must invalidate cached paths');
+  const restored=route(polled,from,to);
+  assert.deepEqual(restored,points);assert.notEqual(restored,points);
+  assert.deepEqual(route(polled,null,to),[]);
 });

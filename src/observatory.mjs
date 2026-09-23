@@ -2,7 +2,7 @@ import {createInterior,isWalkable,renderInterior,renderResident} from './interio
 import {normalizePr,prCi,prStage,prCounts} from './pr.mjs';
 import {parcelReclaim,paintParcelReclaim} from './folklore.mjs';
 import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './world.mjs';
-import {districtRoute} from './town-layout.mjs';
+import {createDistrictRouter} from './town-layout.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
 import {activityAddress,mergeActivity,elapsedMs,validTime,isCottageVisible} from './feed-client.mjs';
@@ -158,6 +158,7 @@ export function createObservatory(api){
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
   const conversations=new Map();
   const messageReceipts=new Map();
+  const districtRoute=createDistrictRouter();
   let mode='town',selected=null,interiorId=null,room=null,roomPlayer=null,player=null,returnTo=null,tab='overview',prFilter=null;
   let followId=null,lastFrame=0,transition=1,latestAgents=[],relationships=[],handoffs=[],couriers=[],apprentices=[],knownKids=new Set();
   let sourceKey='',history=null,historyInitialized=false,stageSignature='',rosterSignature='',panelKey='',lastHint='',replayIndex=-1,replaying=false,replayTimer=0,replayEvents=[];
