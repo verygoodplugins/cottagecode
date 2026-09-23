@@ -457,8 +457,8 @@ Dashboard membership controls the default map, matching the voice TUI's
 Live + recent inventory across all towns. Remaining history is available through
 the settled toggle. External children excluded by the Hub dashboard retain their
 parent identities in history; historical PR links do not override this membership.
-Background GitHub enrichment is reserved for dashboard tasks; history retains
-the PR evidence supplied by the Hub without polling hundreds of old links.
+Both dashboard and history retain the PR evidence supplied by the Hub without
+independent GitHub polling.
 Failed pages in either scope keep the previous
 complete snapshot and mark the feed stale. `id`, `parent`, and `taskId` retain
 Hub canonical task identities, including observed external sessions. Their
@@ -472,3 +472,13 @@ and capabilities; a null target is read-only. Replies also use Hub's optional
 `expected_attention_version` guard when supplied by detail. The existing
 receipt ledger and uncertain-delivery behavior remain in effect. No new cancel
 or autonomous messaging behavior is added.
+
+### Canonical Hub delivery lifecycle
+
+When `AUTOHUB_HUB_BASE` is configured, Hub owns PR evidence and inventory membership. CottageCode does not independently query GitHub for those tasks. `pr` is the canonical Hub observation; an absent observation stays unknown. Standalone discovery retains its read-only GitHub adapter.
+
+Hub cottages also expose `executionStatus`, `version`, `finalization` (`status`, `disposition`, `summary`, `blocker`) and `cleanup` (`status`, `reason`, `checkedAt`). `ready_for_merge` renders as idle with “Ready for merge”; `blocked` renders blocked. Only successful completed work renders done. Failed and cancelled runs render offline, with their precise task state retained.
+
+Hub PR observations carry `authority: "hub"`: `reviewState` comes from canonical finalization, while raw `labels` remain evidence. The browser preserves that verified state during an outage and marks its evidence stale. It does not infer readiness from a stale ready label or overrule Hub's head-change blocker. Standalone observations retain conservative freshness-based classification.
+
+Hub `durationMs` is the recorded execution time; review and merge waits do not inflate elapsed time. Hub also owns PR freshness, including immutable merged observations. Once cleanup is `removed`, the historical worktree path remains copyable but no longer offers an open action.

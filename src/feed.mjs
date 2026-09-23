@@ -366,14 +366,12 @@ export function createFeed({
       if (agent.inputRequest && nextErrors.length) agent.inputRequest = { ...agent.inputRequest, stale: true };
     }
     let enriched = combined;
-    try {
-      // Historical inventories can contain hundreds of old PRs. Keep their
-      // supplied evidence without spending live GitHub polling on hidden work.
-      const current = hubInventory.configured ? combined.filter(agent => agent.inventoryScope !== "history") : combined;
-      const observations = new Map((await enrich(await resolveRepos(current))).map(agent => [agent.id, agent]));
-      enriched = combined.map(agent => observations.get(agent.id) || agent);
+    // Hub reconciles its own PRs. Independent enrichment could replace a newer
+    // shared task state and make CottageCode disagree with the TUI again.
+    if (!hubInventory.configured) {
+      try { enriched = await enrich(await resolveRepos(combined)); }
+      catch { nextErrors.push("PR metadata is temporarily unavailable"); }
     }
-    catch { nextErrors.push("PR metadata is temporarily unavailable"); }
     cache = stampOccupancy(sortCottages(enriched), now());
     // Retain activity for retained PR cottages; discard unrelated old sessions.
     activity = new Map(cache.map(agent => [agent.id, nextActivity.get(agent.id) || activity.get(agent.id) || []]));
@@ -426,7 +424,7 @@ export function createFeed({
       return scanning;
     },
     async flushEnrichment() {
-      if (typeof enrich.flush !== "function") return snapshot();
+      if (hubInventory.configured || typeof enrich.flush !== "function") return snapshot();
       await enrich.flush();
       return doScan();
     },

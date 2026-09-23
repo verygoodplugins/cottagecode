@@ -100,6 +100,22 @@ export function inspectorPrCounts(agents,{showSettled=false,now=Date.now()}={}){
   return prCounts(agents.filter(agent=>agent.inventoryScope!=='history'||isCottageVisible(agent,{showSettled,now})),now);
 }
 const link=(url,text)=>safeUrl(url)?'<a href="'+esc(safeUrl(url))+'" target="_blank" rel="noreferrer">'+esc(text)+'</a>':'';
+export function worktreeActionsHtml(agent) {
+  const path=agent.worktreePath;
+  if(!path)return '';
+  const open=agent.cleanup?.status!=='removed'&&path.startsWith('/')?'<a href="cursor://file'+path.split('/').map(encodeURIComponent).join('/')+'">Open worktree</a>':'';
+  return '<div class="launch">'+button('copy','Copy worktree path')+open+'</div>';
+}
+
+export function lifecycleHtml(agent) {
+  const label={ready_for_merge:'Ready for merge',completed:'Complete',blocked:'Blocked',failed:'Failed',cancelled:'Cancelled',interrupted:'Interrupted'}[agent.executionStatus];
+  const f=agent.finalization,c=agent.cleanup;
+  if(!label&&!f&&!c)return '';
+  return '<dl class="task-lifecycle">'+(label?'<dt>Task</dt><dd>'+esc(label)+'</dd>':'')+
+    (f?.blocker?'<dt>Blocker</dt><dd>'+esc(f.blocker)+'</dd>':'')+
+    (c?'<dt>Cleanup</dt><dd>'+esc([c.status,c.reason].filter(Boolean).join(' · '))+'</dd>':'')+'</dl>';
+}
+
 export function prSnapshotHtml(value){
   const pr=normalizePr(value),stage=pr.stage,s=STAGES[stage],ci=prCi(pr);
   const labels=pr.labels.length?'<ul class="pr-labels" aria-label="GitHub labels">'+pr.labels.map(label=>'<li>'+esc(label)+'</li>').join('')+'</ul>':'<span class="pr-muted">No GitHub labels supplied.</span>';
@@ -496,7 +512,7 @@ export function createObservatory(api){
       const presentation=activityJournalPresentation(cache);
       content='<div class="section-head"><h3>At the workbench</h3>'+activityPagingButtons(cache)+'</div><p class="hint activity-'+esc(presentation.state)+'">'+esc(presentation.text)+'</p>'+(cache.warning?'<p class="hint">'+esc(cache.warning)+'</p>':'')+(cache.unavailable?'<p class="hint">This source has not made a task journal available.</p>':'<ol class="journal" tabindex="0" aria-label="Task activity journal">'+eventHtml(cache.events)+'</ol>');
     }else if(tab==='review'){
-      content='<h3>Review desk</h3>'+prSnapshotHtml(pr)+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
+      content='<h3>Review desk</h3>'+lifecycleHtml(a)+prSnapshotHtml(pr)+'<p class="hint">The parcel opens the PR. Review and merge stay in your existing workflow.</p>';
     }else if(tab==='artifacts'){
       const arts=[...(Array.isArray(a.artifacts)?a.artifacts:[]),...cache.events.filter(e=>e.url).map(e=>({url:e.url,title:e.text}))];
       if(pr.url)arts.unshift({url:pr.url,title:'PR #'+pr.number+' · '+(pr.title||s.label)});
@@ -504,12 +520,12 @@ export function createObservatory(api){
       content='<h3>On the shelves</h3>'+(a.result?'<div class="request-paper">'+esc(a.result)+'</div>':'')+(rows.length?'<ul class="artifact-list">'+rows.map(e=>'<li>'+link(e.url,e.title||'Artifact')+'</li>').join('')+'</ul>':'<p class="hint">Artifacts appear here when the feed supplies them.</p>');
       if(stage==='merged')content='<h3>A keepsake from this work</h3><p class="hint">Merged · '+esc(clock(pr.mergedAt))+'</p>'+content;
     }else{
-      content='<h3>Today’s work</h3><p>'+esc(a.task&&a.task!=='-'?a.task:'Task description unavailable')+'</p><div class="current-activity">'+esc(latestLine(a)||'No current activity supplied.')+'</div>'+'<h3>Pull request</h3>'+prSnapshotHtml(pr)+'<dl><dt>Task started</dt><dd>'+esc(clock(a.taskStartedAt))+'</dd><dt>Elapsed</dt><dd>'+esc(elapsed(a))+'</dd><dt>Session started</dt><dd>'+esc(clock(a.sessionStartedAt))+'</dd><dt>Last signal</dt><dd>'+esc(clock(a.updatedAt))+'</dd><dt>Model</dt><dd>'+esc(a.model||'Unavailable')+'</dd><dt>Branch</dt><dd>'+esc(a.branch||'Unavailable')+'</dd></dl><h3>Pinned request</h3><p class="request-preview">'+esc(a.originalAsk?a.originalAsk.slice(0,230)+(a.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
+      content='<h3>Today’s work</h3><p>'+esc(a.task&&a.task!=='-'?a.task:'Task description unavailable')+'</p><div class="current-activity">'+esc(latestLine(a)||'No current activity supplied.')+'</div>'+lifecycleHtml(a)+'<h3>Pull request</h3>'+prSnapshotHtml(pr)+'<dl><dt>Task started</dt><dd>'+esc(clock(a.taskStartedAt))+'</dd><dt>Elapsed</dt><dd>'+esc(elapsed(a))+'</dd><dt>Session started</dt><dd>'+esc(clock(a.sessionStartedAt))+'</dd><dt>Last signal</dt><dd>'+esc(clock(a.updatedAt))+'</dd><dt>Model</dt><dd>'+esc(a.model||'Unavailable')+'</dd><dt>Branch</dt><dd>'+esc(a.branch||'Unavailable')+'</dd></dl><h3>Pinned request</h3><p class="request-preview">'+esc(a.originalAsk?a.originalAsk.slice(0,230)+(a.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
     }
     const nav=[['overview','Clock'],['request','Request'],['journal','Journal'],['todos','To-do'],['review','PR desk'],['artifacts','Shelves']].map(([key,label])=>button('tab:'+key,label,'aria-pressed="'+(tab===key)+'"')).join('');
     const header='<div class="inspector-heading"><span class="eyebrow">'+esc(a.town)+' · '+(mode==='room'?'INSIDE':'COTTAGE')+'</span><h2>'+esc(a.name)+'</h2></div><div class="inspector-chips"><span class="status-chip">'+esc(a.status)+'</span><span class="pr-chip" style="--pr-color:'+s.color+'">'+s.symbol+' '+s.label+'</span></div>';
     const actions='<div class="cottage-actions">'+button(mode==='room'?'leave':'enter',mode==='room'?'Leave cottage ↗':'Enter cottage ↗')+button('talk','Talk to '+esc(a.name),'aria-pressed="'+(tab==='talk')+'"')+button('follow',followId===a.id?'Leave bench':'Follow from bench')+handoffAction(a.handoffUrl)+button('postcard','Make a postcard')+'</div>';
-    const worktree=a.worktreePath?'<div class="launch">'+button('copy','Copy worktree path')+(a.worktreePath.startsWith('/')?'<a href="cursor://file'+a.worktreePath.split('/').map(encodeURIComponent).join('/')+'">Open worktree</a>':'')+'</div>':'';
+    const worktree=worktreeActionsHtml(a);
     replacePanel(header+actions+'<nav class="room-tabs" aria-label="Cottage objects">'+nav+'</nav>'+content+worktree,(mode==='room'?interiorId:id)+'|'+(a.taskId||'')+':'+tab);
     return true;
   }

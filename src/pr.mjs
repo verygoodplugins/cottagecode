@@ -33,11 +33,17 @@ function safeCheckUrl(value) {
 function checkName(value) { return str(value).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 160); }
 function checkWord(value) { return str(value).toUpperCase().replace(/[^A-Z_]/g, "").slice(0, 40); }
 function normalizeChecks(value) {
+  if (Array.isArray(value?.entries)) value = value.entries;
   if (!Array.isArray(value)) return [];
   return value.map((entry) => {
     let status = checkWord(entry?.status);
     let conclusion = checkWord(entry?.conclusion);
     const state = checkWord(entry?.state);
+    // Hub folds StatusContext state into status/conclusion.
+    if (["SUCCESS", "FAILURE", "ERROR"].includes(status)) {
+      conclusion ||= status;
+      status = "COMPLETED";
+    }
     // StatusContext has `state` instead of CheckRun's `status`/`conclusion`.
     if (!status && !conclusion && state) {
       if (["SUCCESS", "FAILURE", "ERROR"].includes(state)) {
@@ -54,7 +60,7 @@ function normalizeChecks(value) {
 
 /** A concise, factual rollup for presentation. It never determines merge readiness. */
 export function prCi(pr) {
-  const source = Array.isArray(pr?.checks) && pr.checks.length ? pr.checks : pr?.statusCheckRollup;
+  const source = Array.isArray(pr?.checks?.entries) ? pr.checks.entries : (Array.isArray(pr?.checks) && pr.checks.length ? pr.checks : pr?.statusCheckRollup);
   const checks = normalizeChecks(source);
   if (!checks.length) return { state: "unavailable", total: 0, passed: 0, failed: 0, pending: 0, url: "" };
   const failed = checks.filter(check => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(check.conclusion));
@@ -87,6 +93,7 @@ export function parsePrUrl(value) {
  */
 export function normalizePr(value, now = Date.now()) {
   const p = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const canonical = p.authority === "hub";
   const receipt = p.finalization && typeof p.finalization === "object" ? p.finalization : null;
   const liveUrl = parsePrUrl(p.url);
   const receiptUrl = parsePrUrl(receipt?.pullRequestUrl);
@@ -97,7 +104,7 @@ export function normalizePr(value, now = Date.now()) {
   const labels = labelNames(p.labels);
   const checks = normalizeChecks(p.checks || p.statusCheckRollup);
   const checkedAt = timestamp(p.checkedAt) || timestamp(receipt?.checkedAt);
-  const stale = p.stale === true || !checkedAt || now - checkedAt > PR_FRESH_MS || checkedAt > now + 60_000;
+  const stale = canonical ? p.stale === true : p.stale === true || !checkedAt || now - checkedAt > PR_FRESH_MS || checkedAt > now + 60_000;
   const headSha = str(p.headSha || p.headRefOid);
   const reviewedHeadSha = str(p.reviewedHeadSha || receipt?.branchHeadSha);
   const source = str(p.source) || (receipt ? "finalization" : value ? "feed" : "unavailable");
@@ -140,28 +147,28 @@ export function normalizePr(value, now = Date.now()) {
   const labelReview = babysitLabels.length === 1 ? reviewName(babysitLabels[0]) : null;
   const directReview = reviewName(p.reviewState);
   const receiptReview = reviewName(receipt?.terminalLabel) || reviewName(receipt?.status);
-  let reviewState = labelReview || (!liveLabels ? directReview || receiptReview : null) || "unknown";
+  let reviewState = canonical ? directReview || (state !== "open" ? labelReview : null) || "unknown" : labelReview || (!liveLabels ? directReview || receiptReview : null) || "unknown";
 
-  if (babysitLabels.length > 1 || (babysitLabels.length === 1 && !labelReview)) {
+  if (!canonical && (babysitLabels.length > 1 || (babysitLabels.length === 1 && !labelReview))) {
     uncertain = true;
     reason = "Conflicting or unrecognized babysit labels; review state is uncertain.";
-  } else if (labelReview && directReview && labelReview !== directReview) {
+  } else if (!canonical && labelReview && directReview && labelReview !== directReview) {
     uncertain = true;
     reason = "PR labels and the supplied review state disagree.";
   }
   const receiptTime = timestamp(receipt?.checkedAt);
-  if (labelReview && receiptReview && labelReview !== receiptReview &&
+  if (!canonical && labelReview && receiptReview && labelReview !== receiptReview &&
       (!checkedAt || !receiptTime || receiptTime >= checkedAt)) {
     uncertain = true;
     reason = "PR labels and the finalization receipt disagree.";
   }
-  if (receipt && reviewName(receipt.status) && reviewName(receipt.terminalLabel) &&
+  if (!canonical && receipt && reviewName(receipt.status) && reviewName(receipt.terminalLabel) &&
       reviewName(receipt.status) !== reviewName(receipt.terminalLabel)) {
     uncertain = true;
     reason = "Finalization status and terminal label disagree.";
   }
 
-  if (reviewState === "ready") {
+  if (reviewState === "ready" && !canonical) {
     if (stale) {
       uncertain = true;
       reason = "Readiness observation is stale or has no verification time.";
@@ -191,7 +198,7 @@ export function normalizePr(value, now = Date.now()) {
     labels, checks, headSha, reviewedHeadSha, source, checkedAt, stale, reason,
     stage, reviewUncertain: uncertain,
   };
-  for (const key of ["repo", "host", "observedReadyHeadSha", "isDraft", "mergedAt", "closedAt", "openedAt"])
+  for (const key of ["authority", "repo", "host", "observedReadyHeadSha", "isDraft", "mergedAt", "closedAt", "openedAt"])
     if (p[key] !== undefined) result[key] = p[key];
   if (receipt) result.finalization = { ...receipt };
   return result;

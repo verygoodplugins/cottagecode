@@ -61,7 +61,7 @@ export function createHubMessenger({
     // redirect: wait until Hub offers the matching response route.
     else if(shownInput)return unavailable('This task has a pending input request. Wait for AutoHub to expose its response route.');
     else if(target.taskStatus==='running'&&(canonical ? target.capabilities?.canSteer===true : target.transport==='tmux'&&target.supportsRedirection===true))mode='redirect';
-    else return unavailable(['completed','failed','cancelled','interrupted'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
+    else return unavailable(['completed','failed','cancelled','interrupted','blocked','ready_for_merge'].includes(target.taskStatus)?'This task has finished. Start any follow-up in its original workflow.':target.transport==='direct'?'This direct session does not support mid-task messages.':'This task has no supported live message route.');
     const resolution=agent.inputRequestResolution;
     const newerThanUnidentifiedResolution=!resolution?.id&&shownInput?.updatedAt&&resolution?.resolvedAt&&shownInput.updatedAt>resolution.resolvedAt;
     if(mode==='respond'&&resolution&&(!shownInput||(resolution.id?shownInput.id===resolution.id:!newerThanUnidentifiedResolution)))return unavailable('This input request was already resolved. Refresh before replying.');

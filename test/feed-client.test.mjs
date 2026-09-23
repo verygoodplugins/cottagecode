@@ -76,3 +76,12 @@ test('feed note separates live and recent cottages from historical inventory',()
   assert.equal(feedStatusNote([],{source:'claude'}),'Claude sessions · 0 live + recent · 0 settled');
   assert.equal(feedStatusNote([]),'Custom feed · 0 live + recent · 0 settled');
 });
+
+test('recorded execution duration excludes delivery wait and supports zero',()=>{
+  const start=1700000000000;
+  const merged={taskStartedAt:start,status:'done',endedAt:start+169*60000,durationMs:63*60000};
+  assert.equal(elapsedMs(merged),63*60000);
+  assert.equal(elapsedMs({...merged,durationMs:0}),0);
+  assert.equal(elapsedMs({durationMs:500}),500,'recorded duration does not need a start date');
+  for(const durationMs of [null,undefined,-1,Infinity,NaN,'1000'])assert.equal(elapsedMs({...merged,durationMs}),169*60000);
+});

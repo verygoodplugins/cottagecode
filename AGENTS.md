@@ -60,8 +60,12 @@ and accepting that JSON shape over teaching callers about Autohub internals.
 Keep task identity and task start separate from session identity and session
 start. Missing data stays unavailable. Preserve genuine requests separately
 from assistant updates; never export raw private thinking blocks. A missing PR
-is unknown, not confirmed none. Shared PRs count once, and stale or conflicting
-evidence cannot show ready. GitHub and transcript adapters remain read-only.
+is unknown, not confirmed none. Shared PRs count once. For standalone sources,
+stale or conflicting evidence cannot show ready. Hub-backed tasks use Hub as
+the authority for readiness and head validation: preserve its canonical state
+and freshness, including the last verified state during an outage. Raw labels
+and client cache age must not override Hub status. GitHub and transcript
+adapters remain read-only.
 Task writes require an explicit user Send through a supported messaging route;
 never send autonomous test messages to real agents. Recheck identity, status,
 and transport before sending. Preserve receipt deduplication across restarts;

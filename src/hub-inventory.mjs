@@ -4,6 +4,7 @@ import {toCottage} from './hub.mjs';
 import {timestampMs,safeActivityUrl} from './activity.mjs';
 import {taskText} from './task-text.mjs';
 import {classifyOccupancy} from './occupancy.mjs';
+import {normalizePr} from './pr.mjs';
 
 export function toInventoryCottage(task, now=Date.now()) {
   const context=typeof task.context==='object' && task.context ? task.context : {};
@@ -19,13 +20,30 @@ export function toInventoryCottage(task, now=Date.now()) {
     status:task.normalizedStatus==='completed_without_report'?'completed':task.normalizedStatus || task.status,
     queued_at:task.queuedAt,started_at:task.startedAt,completed_at:task.completedAt,updated_at:task.updatedAt,
     input_tokens:task.inputTokens,output_tokens:task.outputTokens,cache_write_tokens:task.cacheWriteTokens,cache_read_tokens:task.cacheReadTokens,total_cost:task.totalCost,
-    result_summary:task.resultSummary || task.displayResult,
+    result_summary:task.displayResult || task.resultSummary,
     context:{...context,projectPath:task.projectPath || context.projectPath,workFolder:task.worktreePath || task.projectPath,
       branch:task.branch,originalAsk:task.originalRequest,
       ...(prLink ? {pr:{url:prLink.url,state:'unknown',source:'context'}} : {})},
   },now);
   const request=taskText(task.originalRequest);
   cottage.taskId=task.id;
+  // The shared inventory owns lifecycle evidence. Old local context and prose
+  // must never override a fresher reconciliation (or invent a missing PR).
+  const finalizationState=task.finalization?.status;
+  const blocker=taskText(typeof task.finalization?.blocker==='string' ? task.finalization.blocker : task.finalization?.blocker?.message);
+  cottage.pr=normalizePr(task.pr ? {...task.pr,authority:'hub',
+    reviewState:['ready','blocked'].includes(finalizationState) ? finalizationState : task.pr.reviewState,
+    reason:blocker || task.pr.reason,
+  } : (prLink ? {url:prLink.url,state:'unknown',source:'hub',authority:'hub'} : null),now);
+  cottage.durationMs=Number.isFinite(task.durationMs)&&task.durationMs>=0?task.durationMs:null;
+  cottage.executionStatus=task.normalizedStatus || task.status;
+  cottage.finalization=task.finalization ? {
+    status:task.finalization.status,disposition:task.finalization.disposition,
+    summary:taskText(task.finalization.summary),
+    blocker:taskText(typeof task.finalization.blocker==='string' ? task.finalization.blocker : task.finalization.blocker?.message),
+  } : null;
+  cottage.cleanup=task.cleanup ? {status:task.cleanup.status,reason:taskText(task.cleanup.reason),checkedAt:task.cleanup.checkedAt} : null;
+  cottage.version=task.version || 0;
   cottage.originalAsk=request.slice(0,32768);
   cottage.originalAskTruncated=request.length>32768;
   cottage.originalAskSource=task.recordKind==='external_session'?'session':'task';

@@ -62,6 +62,8 @@ export function mergeActivity(current,incoming){
   }).sort((a,b)=>a.order-b.order).map(item=>item.event);
 }
 export function elapsedMs(agent,now=Date.now()){
+  // Delivery may finish long after execution, when its PR merges.
+  if(Number.isFinite(agent.durationMs)&&agent.durationMs>=0)return agent.durationMs;
   const start=validTime(agent.taskStartedAt);
   if(!start)return null;
   const terminal=['done','offline'].includes(agent.status)||agent.terminal===true;

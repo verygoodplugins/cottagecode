@@ -221,8 +221,8 @@ test("resolved terminal Hub attention does not remain blocked or visible", () =>
         ...resolution,
       };
       const cottage = toCottage(row, now);
-      assert.equal(mapHubStatus(row, now), "done", `${status} remains terminal after attention resolves`);
-      assert.equal(cottage.status, "done");
+      assert.equal(mapHubStatus(row, now), "offline", `${status} remains terminal after attention resolves`);
+      assert.equal(cottage.status, "offline");
       assert.equal(cottage.occupancy, "settled");
       assert.equal(cottage.inputRequest, null);
       assert.equal(cottage.attention, "");

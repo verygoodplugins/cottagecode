@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHubInventoryReader,toInventoryCottage} from '../src/hub-inventory.mjs';
 import {createFeed} from '../src/feed.mjs';
+import {elapsedMs,normalizeCottage} from '../src/feed-client.mjs';
+import {prCi,normalizePr} from '../src/pr.mjs';
 const now=Date.parse('2026-09-22T06:00:00Z');
 const task=(id,extra={})=>({id,recordKind:'logical_task',task:'Short task',originalRequest:'Full request',status:'running',updatedAt:new Date(now).toISOString(),projectPath:'/projects/autohub',worktreePath:'/projects/autohub/.worktrees/fix',branch:'fix/cursor',source:'codex_app_server',provider:'openai',backend:'codex',sessionId:'session',currentActivity:'Testing pagination',controlTargetId:null,capabilities:{canInspect:true,canRespond:false,canSteer:false},...extra});
 test('canonical model hints preserve known providers without inventing a model family',()=>{
@@ -92,7 +94,7 @@ test('configured hub mode never calls standalone scanner or SQLite reader',async
   await feed.scan();assert.equal(scans,0);assert.equal(reads,0);assert.equal(feed.snapshot().agents[0].id,'canonical');assert.equal(feed.snapshot().source,'hub');
 });
 
-test('historical inventory does not consume live repository and GitHub polling',async()=>{
+test('Hub inventory never consumes local repository or GitHub polling',async()=>{
   const agents=[{...toInventoryCottage(task('current'),now),inventoryScope:'dashboard'},
     {...toInventoryCottage(task('old',{resultLinks:[{kind:'pull_request',url:'https://github.com/acme/repo/pull/1'}]}),now),inventoryScope:'history'}];
   const calls=[];
@@ -100,7 +102,7 @@ test('historical inventory does not consume live repository and GitHub polling',
     resolveRepos:async a=>{calls.push(['repos',a.map(agent=>agent.id)]);return a;},
     enrich:async a=>{calls.push(['github',a.map(agent=>agent.id)]);return a;},now:()=>now});
   await feed.scan();
-  assert.deepEqual(calls,[['repos',['current']],['github',['current']]]);
+  assert.deepEqual(calls,[]);
   assert.equal(feed.snapshot().agents.length,2);
   assert.equal(feed.snapshot().agents.find(a=>a.id==='old').pr.url,'https://github.com/acme/repo/pull/1');
 });
@@ -208,4 +210,50 @@ test('canonical result links reject credentials and malformed URLs before public
   assert.deepEqual(cottage.resultLinks,[{kind:'result',url:'https://example.com/report'}]);
   assert.deepEqual(cottage.artifacts,[{url:'https://example.com/report',title:'Report'}]);
   assert.doesNotMatch(JSON.stringify(cottage),/secret/);
+});
+
+
+test('canonical lifecycle supersedes old development receipts and keeps delivery states stopped',()=>{
+  const url='https://github.com/verygoodplugins/autohub/pull/1757';
+  const row=task('1757',{status:'completed',displayResult:'Merged #1757',resultSummary:'Did not open a PR',
+    pr:{number:1757,url,state:'merged',headSha:'abc',checks:{status:'passing',total:1,entries:[{name:'CI',status:'SUCCESS',conclusion:'SUCCESS'}]},labels:['babysit:ready'],source:'github',checkedAt:new Date(now).toISOString()},
+    finalization:{status:'merged'},cleanup:{status:'deferred',reason:'Live process'},version:4,
+    context:{pr:{state:'open',url},finalization:{status:'blocked'}}});
+  const cottage=toInventoryCottage(row,now);
+  assert.equal(cottage.pr.state,'merged');assert.equal(cottage.result,'Merged #1757');
+  assert.equal(prCi(cottage.pr).state,'passing');assert.equal(prCi(cottage.pr).total,1);
+  assert.equal(cottage.finalization.status,'merged');assert.equal(cottage.cleanup.reason,'Live process');
+  assert.equal(cottage.executionStatus,'completed');assert.equal(cottage.version,4);
+  assert.equal(toInventoryCottage({...row,status:'ready_for_merge'},now).status,'idle');
+  assert.equal(toInventoryCottage({...row,status:'blocked'},now).status,'blocked');
+  assert.equal(toInventoryCottage({...row,status:'failed'},now).status,'offline');
+});
+
+
+test('Hub delivery authority wins over raw labels and preserves stale verified readiness',()=>{
+ const pr={number:1757,url:'https://github.com/verygoodplugins/autohub/pull/1757',state:'open',headSha:'new',labels:['babysit:ready'],source:'github',checkedAt:new Date(now).toISOString()};
+ const blocked=toInventoryCottage(task('head-changed',{status:'blocked',pr,finalization:{status:'blocked',blocker:'Head changed; review required'}}),now);
+ assert.equal(blocked.pr.stage,'blocked');assert.equal(blocked.pr.reviewState,'blocked');
+ assert.deepEqual(blocked.pr.labels,['babysit:ready'],'raw evidence remains visible');
+ assert.equal(blocked.pr.reason,'Head changed; review required');
+ const stale=toInventoryCottage(task('ready',{status:'ready_for_merge',pr:{...pr,stale:true,checkedAt:new Date(now-3600000).toISOString()},finalization:{status:'ready'}}),now);
+ assert.equal(stale.pr.stage,'ready');assert.equal(stale.pr.stale,true);
+ assert.equal(stale.status,'idle');
+ const renormalized=normalizePr(stale.pr,now);
+ assert.equal(renormalized.stage,'ready','browser normalization preserves Hub authority');
+});
+
+test('merged Hub tasks preserve execution duration through browser normalization',()=>{
+ const cottage=toInventoryCottage(task('merged',{status:'completed',startedAt:new Date(now-169*60000).toISOString(),completedAt:new Date(now).toISOString(),durationMs:63*60000}),now);
+ const browser=normalizeCottage(cottage,0,{town:x=>x,model:x=>x,occupancy:()=> 'recent',now});
+ assert.equal(elapsedMs(browser),63*60000);
+});
+
+test('canonical Hub freshness remains authoritative after local PR cache TTL',()=>{
+ const pr={number:1757,url:'https://github.com/verygoodplugins/autohub/pull/1757',state:'merged',stale:false,source:'github',checkedAt:new Date(now-86400000).toISOString()};
+ const cottage=toInventoryCottage(task('merged',{status:'completed',pr}),now);
+ assert.equal(cottage.pr.stale,false);
+ assert.equal(normalizePr(cottage.pr,now+86400000).stale,false,'browser must not invent a stale merged observation');
+ assert.equal(normalizePr({...cottage.pr,stale:true},now).stale,true,'Hub outage evidence remains visible');
+ assert.equal(normalizePr(pr,now).stale,true,'standalone observations retain their TTL');
 });
