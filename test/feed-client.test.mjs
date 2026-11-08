@@ -7,7 +7,24 @@ test('bare and wrapped feeds are compatible but missing agents is invalid',()=>{
 });
 test('missing timestamps never become the current time',()=>{
   const a=normalizeCottage({id:'a'},0,{town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'});
-  assert.equal(a.startedAt,null);assert.equal(a.originalAsk,'');assert.equal(a.taskId,null);
+  assert.equal(a.startedAt,null);assert.equal(a.originalAsk,'');assert.equal(a.taskId,null);assert.equal(a.turnStartedAt,null);
+});
+test('explicit turn clocks normalize independently of task and session clocks',()=>{
+  const start=1700000000000,options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'};
+  const value=normalizeCottage({turnStartedAt:new Date(start).toISOString()},0,options);
+  assert.equal(value.turnStartedAt,start);assert.equal(value.taskStartedAt,null);assert.equal(value.sessionStartedAt,null);
+  assert.equal(normalizeCottage({turnStartedAt:'invalid'},0,options).turnStartedAt,null);
+});
+test('missing usage stays unavailable while measured zero and positive values survive',()=>{
+ const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'};
+ for(const missing of [null,undefined,-1,Infinity,'unknown']){
+  const value=normalizeCottage({id:'a',tokens:missing,cost:missing},0,options);
+  assert.equal(value.tokens,null);assert.equal(value.cost,null);
+ }
+ for(const measured of [0,123]){
+  const value=normalizeCottage({id:'a',tokens:measured,cost:measured},0,options);
+  assert.equal(value.tokens,measured);assert.equal(value.cost,measured);
+ }
 });
 test('known task notifications show a summary and never their transport fields',()=>{
   const a=normalizeCottage({id:'a',task:'<task-notification><task-id>private</task-id><summary>Refresh release notes</summary><event>private event payload</event></task-notification>',originalAsk:'<task-notification><summary>Refresh release notes</summary></task-notification>'},0,{town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'});
@@ -53,6 +70,12 @@ test('Hub history stays settled even when it retains an unresolved PR link',()=>
   assert.equal(isCottageVisible(history,{interiorId:'history',now}),true);
   assert.equal(isCottageVisible(history,{interiorId:'another-cottage',now}),false);
 });
+test('canonical active family members stay visible without relabeling them dashboard roots',()=>{
+  const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'live'};
+  const child=normalizeCottage({id:'child',parent:'root',inventoryScope:'family',status:'working',occupancy:'live'},0,options);
+  assert.equal(child.inventoryScope,'family');assert.equal(child.parent,'root');
+  assert.equal(child.occupancy,'live');assert.equal(isCottageVisible(child),true);
+});
 test('Hub dashboard occupancy remains authoritative while standalone PRs stay visible',()=>{
   const now=1700000000000;
   const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'settled',now};
@@ -65,6 +88,21 @@ test('Hub dashboard occupancy remains authoritative while standalone PRs stay vi
   assert.equal(undated.occupancy,'recent');assert.equal(isCottageVisible(undated,{now}),true);
   assert.equal(standalone.occupancy,'live');
   assert.equal(isCottageVisible(standalone,{now}),true);
+});
+test('Hub dashboard membership keeps finished cottages visible despite settled occupancy',()=>{
+  const now=1700000000000;
+  const options={town:x=>x||'Town',model:x=>x||'?',occupancy:()=> 'settled',now};
+  const dashboard=normalizeCottage({id:'recently-ended',inventoryScope:'dashboard',occupancy:'settled',status:'offline',pr:{state:'unknown'}},0,options);
+  const history={...dashboard,id:'history',inventoryScope:'history'};
+  const standalone={...dashboard,id:'standalone',inventoryScope:undefined};
+  assert.equal(dashboard.occupancy,'settled','preserve recorded occupancy separately from membership');
+  assert.equal(dashboard.status,'offline','visibility must not imply working');
+  assert.equal(isCottageVisible(dashboard,{now}),true);
+  assert.equal(isCottageVisible(history,{now}),false);
+  assert.equal(isCottageVisible(standalone,{now}),false);
+  assert.equal(isCottageVisible(history,{showSettled:true,now}),true);
+  assert.equal(isCottageVisible(standalone,{showSettled:true,now}),true);
+  assert.equal(feedStatusNote([dashboard,history,standalone],{source:'hub'}),'AutoHub · 1 live + recent · 2 settled');
 });
 test('feed note separates live and recent cottages from historical inventory',()=>{
   const agents=[

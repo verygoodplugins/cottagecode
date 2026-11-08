@@ -1,10 +1,15 @@
 import {normalizePr,hasOutstandingPr} from './pr.mjs';
 import {taskText} from './task-text.mjs';
 const statuses=new Set(['working','idle','blocked','done','offline']);
+const measured=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
 export function feedEnvelope(data){
   if(Array.isArray(data))return {agents:data,source:'',relationships:[],handoffs:[]};
   if(!data||!Array.isArray(data.agents)) throw new Error('response must be an agents array or { agents: [] }');
-  return {agents:data.agents,source:String(data.source||''),relationships:data.relationships||[],handoffs:data.handoffs||[],stale:!!data.stale,errors:data.errors||[]};
+  return {agents:data.agents,source:String(data.source||''),relationships:data.relationships||[],handoffs:data.handoffs||[],stale:!!data.stale,errors:data.errors||[],checkedAt:validTime(data.checkedAt),timestamp:validTime(data.timestamp)};
+}
+/** Feed outages never rewrite the Hub's last canonical PR observation. */
+export function staleFeedPr(pr,reason){
+  return pr?.authority==='hub'?pr:{...pr,stale:true,reason};
 }
 export function validTime(value){
   const n=typeof value==='number'?value:Date.parse(value);
@@ -17,11 +22,11 @@ export function normalizeCottage(a,i,{town,model,occupancy,now=Date.now()}){
     role:town(a.town||a.role),status,parent:a.parent??null,task:taskText(a.task)||'-',
     originalAsk:taskText(a.originalAsk),
     taskId:a.taskId?String(a.taskId):null,
-    taskStartedAt:validTime(a.taskStartedAt),sessionStartedAt:validTime(a.sessionStartedAt),
+    taskStartedAt:validTime(a.taskStartedAt),sessionStartedAt:validTime(a.sessionStartedAt),turnStartedAt:validTime(a.turnStartedAt),
     startedAt:validTime(a.startedAt),endedAt:validTime(a.endedAt),updatedAt:validTime(a.updatedAt),terminal:!!a.terminal,
     worktree:String(a.worktree||''),worktreePath:String(a.worktreePath||''),branch:String(a.branch||''),
     activity:String(a.activity||''),lastLine:String(a.lastLine||''),result:String(a.result||''),
-    attention:String(a.attention||''),model:model(a.model),tokens:Number(a.tokens)||0,cost:Number(a.cost)||0,
+    attention:String(a.attention||''),model:model(a.model),tokens:measured(a.tokens),cost:measured(a.cost),
     dispatchedBy:String(a.dispatchedBy||a.parent||'unknown'),pr};
   // The Hub owns dashboard membership. A historical PR link is still useful
   // at the desk, but it cannot bring an archived task back into the village.
@@ -32,6 +37,7 @@ export function normalizeCottage(a,i,{town,model,occupancy,now=Date.now()}){
 }
 export function isCottageVisible(agent,{showSettled=false,interiorId=null,now=Date.now()}={}){
   return showSettled||interiorId===agent.id||
+    agent.inventoryScope==='dashboard'||
     (agent.inventoryScope!=='history'&&(agent.occupancy!=='settled'||hasOutstandingPr(agent,now)));
 }
 export function layoutCottages(agents,options={}){

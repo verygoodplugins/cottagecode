@@ -249,11 +249,9 @@ export function toCottage(row, now = Date.now()) {
   const attention = attentionText
     ? String(attentionText).replace(/\s+/g, " ").trim().slice(0, 240)
     : "";
-  const tokens =
-    (row.input_tokens || 0) +
-    (row.output_tokens || 0) +
-    (row.cache_write_tokens || 0) +
-    (row.cache_read_tokens || 0);
+  const measured = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const tokenValues = [row.input_tokens, row.output_tokens, row.cache_write_tokens, row.cache_read_tokens].filter(measured);
+  const tokens = tokenValues.length ? tokenValues.reduce((sum, value) => sum + value, 0) : null;
   const started = saneTime(
     parseDbTimestampMs(row.started_at) || parseDbTimestampMs(row.queued_at),
     0
@@ -276,7 +274,11 @@ export function toCottage(row, now = Date.now()) {
     originalAskSource: externalSession ? "session" : "task",
     originalAskTruncated: original.length > 32768,
     taskStartedAt: externalSession ? null : timestampMs(row.started_at),
-    sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) || (externalSession ? started || null : null),
+    // Codex rollout started_at is the latest explicit turn boundary, replaced
+    // whenever the persistent external session reopens. It is not its creation.
+    sessionStartedAt: timestampMs(ctx.sessionStartedAt || ctx.lifecycle?.sessionStartedAt) ||
+      (externalSession && (row.source || ctx.source) !== 'codex_rollout' ? started || null : null),
+    turnStartedAt: externalSession && (row.source || ctx.source) === 'codex_rollout' ? timestampMs(row.started_at) : null,
     activityUrl: `/agents/${encodeURIComponent(row.id)}/activity`,
     todos,
     inputRequest,
@@ -307,7 +309,7 @@ export function toCottage(row, now = Date.now()) {
     endedAt: ended,
     updatedAt,
     tokens,
-    cost: Number(row.total_cost || 0),
+    cost: measured(row.total_cost) ? row.total_cost : null,
     lastLine: pickLastLine({ ...row, attention_message: attention }, ctx, result, task),
     sessionId: row.session_id || null,
     source: "hub",
