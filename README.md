@@ -57,7 +57,7 @@ Click the map to give it keyboard focus.
 | + / − or zoom buttons | Zoom the Townmap between 50% and 200% |
 | 0 / percentage button | Reset to the initial map scale (100%) |
 | Overview | Frame working and blocked cottages, including active roommates and shed residents |
-| Details / Close | Show or hide the floating inspector in fullscreen |
+| Evidence / Close | Show or hide the shared inspector in any view |
 | Click a cottage or its roster button | Open its inspector without walking there |
 | Enter cottage / Leave cottage | Visit or exit using buttons |
 | Click a resident / Talk to agent | Open their conversation and recorded activity |
@@ -115,6 +115,77 @@ AutoHub tasks use their existing response route. Normal completed turns are idle
 and no longer create false input alerts.
 
 Use **Follow from bench** to keep one cottage selected as its work updates. The noticeboard lists changes observed since the previous visit. The scrapbook stores up to 1,600 milestones per feed in this browser, including result snippets and artifact links. Replay steps through that recorded history; it cannot reconstruct unobserved work or expired source logs.
+
+## 🧭 Oversee the village
+
+Townmap remains the playable home. Its **attention strip** shows the actual question
+or recorded blocker and cycles through work that needs attention. The **Village,
+Attention, Time, Delivery, and Owner lenses** annotate existing plots without
+moving cottages. Choose Village for the original scenery.
+
+**Dispatch** is a compact ledger of tasks, public activity, owner/harness, clocks,
+and delivery. **Threads** follows recorded issues, parent/child tasks,
+dependencies, and shared PRs; narrow screens show a readable cottage trace.
+Missing relationships stay missing. PR badges open a preview on hover or keyboard
+focus and the existing PR desk on click.
+
+All views share the same evidence inspector, journal, and reply composer.
+Switching views preserves Jack, the camera, the occupied room, and the selected
+work. Dispatch and Threads open beneath the playable town; the balance slider
+gives either surface more room. Walking continues with a workbench open.
+Choose a project in the heartbeat rail to scope the evidence and frame its
+cottages. Overview can fit below the ordinary manual zoom range for distant annexes.
+**Visit activity** brings you to an active or attention cottage in that project
+at normal street zoom, including when you start inside a room. Project pulses
+show both attention and ready shipments when a neighbourhood has each.
+
+The **Village activity** ribbon explains the small work yards in the scene.
+Click a worker or choose its accessible story button:
+
+- **Miners** gather material beside cottages with a read/search tool observed in
+  the last two minutes, while the canonical task is working. Generic shell tools
+  and task prose do not imply mining. This is recent tool evidence, not proof
+  that the individual call is still running.
+- **Workshops** light a small workbench beside working cottages with other
+  recent tool use, including shell calls. They use the same two-minute evidence
+  window and do not infer what a command does.
+- **Roadmenders** work on existing streets for three minutes after a newly
+  observed explicit parent/dependency link or a recent recorded handoff.
+- **Gardeners** gain seedlings for residents first observed in the last ten
+  minutes. Three arrivals make a growth spurt: more pots and a pause beside the
+  full bench. The initial snapshot establishes a baseline, without an arrival
+  parade. A calm garden does not imply idle agents.
+
+Unknown tool coverage stays unknown. Stale feeds and reduced motion stop the
+moving trade cues. Source changes clear observations; view changes do not invent
+arrivals. In `/?demo=1`, **Rehearse growth** adds three illustrative residents,
+recorded read/search tools, and a parent link without contacting real agents.
+Expand the ribbon to compare recent, older/stale, and unreported tool evidence
+for the selected project, and inspect a working cottage's exact tool name and
+observation age. A fresh feed check does not make an older tool event recent.
+
+| Key | Action |
+|---|---|
+| `1` / `2` / `3` | Townmap / Dispatch / Threads |
+| `Cmd/Ctrl+K` | Find a cottage by name, task, town, owner, PR, or recorded issue |
+| `J` / `K` in command views | Inspect next / previous visible task |
+| `↑` / `↓` / `Enter` in search | Choose and inspect a match |
+| `Escape` in command views | Close search/preview first, then return to the same place in town |
+
+Task age includes waiting; recorded execution, session age, last observation, and
+last progress are separate evidence. Quiet means at least 15 minutes since explicit
+progress, not a confirmed stall. Unknown harnesses and clocks are labeled honestly.
+Shared PR counts and states are reconciled across the fleet before filtering.
+The header's recorded cost is a partial subtotal of visible live/recent task
+records, not spend during a time interval. Running usage and unpriced sources
+may be missing; a healthy tool feed does not imply complete cost coverage.
+Hub verification remains authoritative through an outage; local staleness cannot
+turn an unverified standalone PR green.
+
+Only an explicit Send uses a supported message route. The client rechecks the
+latest task, question revision, status, and route, and persists a receipt before
+transport. Uncertain delivery stays locked across reloads instead of retrying.
+Draft text survives view changes and polling, but not a page reload.
 
 ## 🔌 Cottage feed
 
