@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>CottageCode · Command center</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<a class="skip" href="#canvas">Skip to town</a>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="CottageCode home"><span class="brand-house" aria-hidden="true">⌂</span>CottageCode<span class="edition">FIELD NOTES / 01</span></a>
+  <nav class="perspectives" aria-label="Perspective"><button data-view="townwatch">Townwatch <kbd>1</kbd></button><button data-view="dispatch">Dispatch <kbd>2</kbd></button><button data-view="threads">Threads <kbd>3</kbd></button></nav>
+  <div class="source-tools"><span id="freshness" role="status">Connecting…</span><button id="search-open" aria-label="Search tasks (Command K)">⌕ <kbd>⌘ K</kbd></button></div>
+</header>
+<div id="provenance" class="provenance"><div><span id="source-mark">○ LIVE FEED</span><span id="source-description">Your local village, as observed.</span></div><button id="source-switch">Explore illustrative scenario →</button></div>
+<div id="connection" role="status" hidden></div>
+<div class="workspace">
+  <aside class="town-rail" aria-label="Town filter"><div class="eyebrow">THE NEIGHBOURHOOD</div><div id="towns"></div><div class="rail-foot"><span class="compass" aria-hidden="true">✧</span><p>Small places.<br>Ambitious work.</p><span>THE COTTAGECODE ATLAS</span></div></aside>
+  <div class="mobile-town"><label for="town-select">Town</label><select id="town-select"></select></div>
+  <main id="canvas" tabindex="-1"><div id="view-heading"></div><div id="scene"></div></main>
+  <aside id="drawer" class="drawer" aria-label="Task evidence" hidden></aside>
+</div>
+<footer><span>OBSERVE · UNDERSTAND · RESPOND</span><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> perspective <i>·</i> <kbd>J</kbd><kbd>K</kbd> cottages <i>·</i> <kbd>ESC</kbd> close</span><span>Made for the work between the windows.</span></footer>
+<dialog id="search-dialog" aria-label="Search cottages"><div class="search-top"><label for="search-input">Find a cottage</label><button id="search-close" aria-label="Close search">×</button></div><input id="search-input" type="search" placeholder="Task, town, identifier or PR…" autocomplete="off"><p class="muted">Search across all towns. Select a result to inspect its evidence.</p><div id="search-results"></div></dialog>
+<div id="pr-preview" class="pr-preview" role="tooltip" hidden></div>
+<div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+<script type="module" src="/app.mjs"></script>
+</body></html>
