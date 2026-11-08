@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blankFeedMeta, blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "../src/live-feed.mjs";
+import { blankFeedMeta, blankFeedState, createLatestRefresh, createFeedNotifications, readCurrentFeed, snapshotForEndpoint } from "../src/live-feed.mjs";
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -64,4 +64,42 @@ test("a demo fallback clears a prior endpoint snapshot and metadata", () => {
   assert.equal(snapshotForEndpoint(fallback, prior.endpoint), null,
     "a later local-feed failure must not restore real cottages into the demo namespace");
   assert.notEqual(fallback.meta, prior.meta);
+});
+
+test("push wakeups follow only the current bundled feed and stop for pause/demo", () => {
+  const sources = [];
+  class EventSourceStub {
+    constructor(url) { this.url = url; this.closed = false; sources.push(this); }
+    addEventListener(name, callback) { assert.equal(name, "change"); this.notify = callback; }
+    close() { this.closed = true; }
+  }
+  let updates = 0;
+  const origin = "http://127.0.0.1:8787";
+  const notifications = createFeedNotifications({ origin, EventSourceClass: EventSourceStub, onChange: () => updates++ });
+  notifications.sync(origin + "/agents");
+  notifications.sync(origin + "/agents");
+  assert.equal(sources.length, 1, "one subscription per active endpoint");
+  assert.equal(sources[0].url, origin + "/agents/events");
+  sources[0].notify();
+  assert.equal(updates, 1);
+  notifications.sync(origin + "/agents", { enabled: false });
+  sources[0].notify();
+  assert.equal(updates, 1, "queued notifications cannot update a paused feed");
+  assert.equal(sources[0].closed, true);
+  notifications.sync(origin + "/agents");
+  sources[1].notify();
+  assert.equal(updates, 2);
+  for (const endpoint of ["https://custom.example/agents", origin + "/custom.json", null, origin + "/agents?source=other"]) {
+    notifications.sync(endpoint);
+    sources[1].notify();
+  }
+  assert.equal(updates, 2, "old connections cannot cross endpoint or demo boundaries");
+  assert.equal(sources.length, 2, "custom feeds are not assumed to support SSE");
+});
+
+test("an unavailable notification transport leaves JSON polling usable", async () => {
+  const notifications = createFeedNotifications({ origin: "http://localhost", EventSourceClass: class { constructor() { throw new Error("Unavailable"); } } });
+  assert.doesNotThrow(() => notifications.sync("http://localhost/agents"));
+  const result = await readCurrentFeed("http://localhost/agents", { fetchFn: async () => response({ agents: [{ id: "still-polling" }] }) });
+  assert.equal(result.kind, "success");
 });
