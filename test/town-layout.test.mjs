@@ -51,10 +51,18 @@ test('the noticeboard square remains reachable when the original busy town empti
   assert.deepEqual(positions(after)['AppTown-0'],positions(first)['AppTown-0']);
 });
 
-test('width budget uses the normal cottage scale and reserves the desktop panel', () => {
-  assert.equal(townWidthBudget({windowWidth:2077,standardWidth:1084}),1214);
+test('width budget uses the normal cottage scale and full scene width once', () => {
+  assert.equal(townWidthBudget({windowWidth:2077,standardWidth:1084}),1455);
   assert.equal(townWidthBudget({windowWidth:390,standardWidth:340}),827);
   assert.equal(townWidthBudget({windowWidth:8000,standardWidth:800}),1920);
+});
+
+test('a desktop fleet can place large districts abreast without shrinking cottages',()=>{
+  const agents=[16,13,3,3,3,2,2,1].flatMap((n,i)=>Array.from({length:n},(_,j)=>({id:`${i}-${j}`,town:i===0?'HubTown':`Repo${i}Town`,status:'idle'})));
+  const budget=townWidthBudget({windowWidth:1422,standardWidth:1007});
+  const compact=createTownLayout({maxWidth:budget}).update(agents),narrow=createTownLayout({maxWidth:807}).update(agents);
+  assert.ok(compact.height<narrow.height);assert.ok(compact.width<=budget);
+  assert.ok(compact.blocks.filter(b=>b.y===30&&b.w>300).length>=2);
 });
 
 test('town activity counts people once, including roommates and children', () => {
