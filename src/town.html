@@ -119,10 +119,16 @@
   .map-zoom button{min-width:34px;padding:8px}
   #zoom-reset{min-width:62px;font-variant-numeric:tabular-nums}
   .details-shell{min-width:0;min-height:0}
-  .details-heading{display:none}
+  .details-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid #44524f;border-bottom:0;background:#273238}
+  .split.details-closed{grid-template-columns:minmax(0,1fr)}
+  #perspective-stage{position:relative;min-width:0;min-height:0}
+  #command-view{position:absolute;inset:0;overflow:auto;outline:none;border-radius:3px}
+  #command-view[hidden],.details-shell[hidden]{display:none!important}
   .split.is-fullscreen{position:fixed;inset:0;width:100%;height:100dvh;max-width:none;display:block;overflow:hidden;z-index:100;background:#171d23}
   .is-fullscreen .stage{height:100%;display:flex;flex-direction:column;border:none;border-radius:0;padding:12px;background:#171d23}
-  .is-fullscreen .map-viewport{flex:1 1 0;height:0;min-height:0}
+  .is-fullscreen #perspective-stage{flex:1 1 0;min-height:0}
+  .is-fullscreen .map-viewport{height:100%;min-height:0}
+  #map-shell.is-fullscreen #command-view{max-height:none;min-height:0}
   .is-fullscreen .stage-foot,.is-fullscreen .feed,.is-fullscreen #folklore-hint,
   .is-fullscreen .pr-tally,.is-fullscreen .village-settings,.is-fullscreen #sound-settings{display:none!important}
   .is-fullscreen .town-tools,.is-fullscreen .scene-status{flex:none}
@@ -263,7 +269,7 @@
         </div>
         <span id="overview-status" class="sr-only" role="status"></span>
         <button id="fullscreen-toggle" type="button" aria-pressed="false" aria-label="Expand Townmap to fill browser window" title="Fill browser window (F)">Fullscreen</button>
-        <button id="details-toggle" type="button" aria-controls="details-shell" aria-expanded="true" hidden>Details</button>
+        <button id="details-toggle" type="button" aria-controls="details-shell" aria-expanded="true">Evidence</button>
         <button id="leave-cottage" type="button" hidden>Leave cottage ↗</button>
       </div>
       <div id="sound-settings" hidden><label><input id="ambient-sound" type="checkbox" checked> Ambience</label> <label><input id="alert-sound" type="checkbox" checked> Alerts</label></div>
@@ -281,8 +287,13 @@
         </div>
       </details>
       <div class="pr-tally" id="pr-tally" role="group"></div>
+      <div id="command-bar"></div>
+      <div id="command-attention"></div>
+      <div id="perspective-stage">
       <div id="map-viewport" class="map-viewport">
       <div class="map-surface" id="map-surface"><canvas id="town" tabindex="0" role="img" aria-label="Townmap: arrow keys or WASD to walk, walk into doors to enter, E near an agent to talk, click cottages to inspect, plus and minus to zoom, 0 to reset zoom, F for fullscreen"></canvas></div><canvas id="room-canvas" tabindex="0" role="img" aria-label="Cottage interior. Arrow keys to walk, walk through the doorway to leave, E near your host to talk or inspect objects, Escape to leave." hidden></canvas>
+      </div>
+      <section id="command-view" tabindex="-1" aria-label="Command workspace" hidden></section>
       </div>
       <p class="scene-status" id="scene-status">Arrow keys / WASD to walk · Walk into doors · E to talk · F for fullscreen · Click to inspect</p>
       <div class="stage-foot">
@@ -315,7 +326,7 @@
       </div>
     </div>
     <div class="details-shell" id="details-shell">
-      <div class="details-heading"><span class="eyebrow">DETAILS</span><button id="details-close" type="button" aria-label="Close details panel">Close</button></div>
+      <div class="details-heading"><span class="eyebrow">EVIDENCE</span><button id="details-close" type="button" aria-label="Close details panel">Close</button></div>
       <aside class="card" id="panel" aria-live="polite">
       <p class="hint">Click a cottage to inspect its work, or walk into its doorway.</p>
       </aside>

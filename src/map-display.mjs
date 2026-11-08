@@ -2,7 +2,7 @@ import {fullscreenButtonCopy} from './fullscreen.mjs';
 import {nextZoom, zoomKey, ZOOM_LEVELS} from './viewport.mjs';
 
 /** Fullscreen and panel chrome live outside the inspector's streaming content. */
-export function createMapDisplay({camera, canvas, getMode, onOverview}) {
+export function createMapDisplay({camera, canvas, getMode, onOverview, getWorkspaceView=()=> 'town', focusWorkspace}) {
   const $ = id => document.getElementById(id);
   const root = $('map-shell'), viewport = $('map-viewport'), details = $('details-shell');
   const panel = $('panel');
@@ -13,15 +13,15 @@ export function createMapDisplay({camera, canvas, getMode, onOverview}) {
   let frame = 0;
   let fullscreenReading = null;
   const isActive = () => active;
-  const focusMap = () => $(getMode() === 'room' ? 'room-canvas' : 'town').focus({preventScroll: true});
+  const focusMap = () => getWorkspaceView()!=='town' ? focusWorkspace?.() : $(getMode() === 'room' ? 'room-canvas' : 'town').focus({preventScroll: true});
 
   function positionPanel() {
     frame = 0;
     if (active) {
       const r = root.getBoundingClientRect(), v = viewport.getBoundingClientRect();
       root.style.setProperty('--details-top', Math.max(12, v.top - r.top + 12) + 'px');
-      root.style.setProperty('--details-right', Math.max(12, r.right - v.right + 12) + 'px');
-      root.style.setProperty('--details-bottom', Math.max(12, r.bottom - v.bottom + 12) + 'px');
+      root.style.setProperty('--details-right', (getWorkspaceView()==='town'?Math.max(12, r.right - v.right + 12):12) + 'px');
+      root.style.setProperty('--details-bottom', (getWorkspaceView()==='town'?Math.max(12, r.bottom - v.bottom + 12):12) + 'px');
     }
     camera.resize();
   }
@@ -30,8 +30,10 @@ export function createMapDisplay({camera, canvas, getMode, onOverview}) {
   observer.observe(viewport); observer.observe(details);
 
   function syncDetails() {
-    details.hidden = active && !detailsOpen;
-    toggle.hidden = !active;
+    camera.capture();
+    details.hidden = !detailsOpen;
+    root.classList.toggle('details-closed',!detailsOpen);
+    toggle.hidden = false;
     toggle.setAttribute('aria-expanded', String(detailsOpen));
     toggle.setAttribute('aria-pressed', String(detailsOpen));
     positionPanel();
@@ -67,7 +69,7 @@ export function createMapDisplay({camera, canvas, getMode, onOverview}) {
   function syncZoom() {
     const zoom = camera.state.zoom;
     zoomControls.hidden = getMode() === 'room';
-    minus.disabled = zoom === ZOOM_LEVELS[0]; plus.disabled = zoom === ZOOM_LEVELS.at(-1);
+    minus.disabled = zoom <= ZOOM_LEVELS[0]; plus.disabled = zoom === ZOOM_LEVELS.at(-1);
     reset.textContent = zoom + '%'; reset.setAttribute('aria-label', 'Map zoom ' + zoom + '%. Reset to 100%');
   }
   function changeZoom(action) {

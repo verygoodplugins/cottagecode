@@ -2,8 +2,8 @@ import { normalizePr, prStage, hasOutstandingPr } from "./pr.mjs";
 import { createTownLayout, advanceDuck, normalizeTown } from "./world.mjs";
 import { renderResident } from "./interiors.mjs";
 import { createObservatory, apprenticeResidentTarget } from "./observatory.mjs";
-import { normalizeCottage, isCottageVisible, layoutCottages, feedStatusNote } from "./feed-client.mjs";
-import { blankFeedState, createLatestRefresh, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
+import { normalizeCottage, isCottageVisible, layoutCottages, feedStatusNote, staleFeedPr } from "./feed-client.mjs";
+import { blankFeedState, createLatestRefresh, createFeedNotifications, readCurrentFeed, snapshotForEndpoint } from "./live-feed.mjs";
 import { lettersOf } from "./occupancy.mjs";
 import {
   hauntStage,
@@ -22,6 +22,15 @@ import {MAP_REFERENCE_WIDTH,townWidthBudget,townActivity,overviewBounds} from '.
 import { PUBLIC_DEMO } from "./runtime.mjs";
 import { createBedtimeRoutine, paintCoop, routineForAgent, statusBubbleAnchor, villageLifeLabel, visibleBedtimeKids } from "./bedtime.mjs";
 import { residentTargets } from "./interaction.mjs";
+import { commandSnapshot, fleetView } from "./command-model.mjs";
+import { createCommandCenter } from "./command-center.mjs";
+import { projectBounds } from "./command-workbench.mjs";
+import { createHeartbeat } from "./heartbeat.mjs";
+import { createTownTrades } from "./town-trades.mjs";
+import { drawTradeLife, tradeSites } from "./trade-art.mjs";
+import { parentPaths } from "./parent-paths.mjs";
+const heartbeat=createHeartbeat(), townTrades=createTownTrades();
+let currentTrades=townTrades.snapshot(), currentTradeSites=[];
 
 
 /* =======================================================================
@@ -37,16 +46,27 @@ let LIVE = false, feedStale = false, lastSnapshot = null, lastEndpoint = null;
 let activeFeedAbort = null;
 let feedRevision = 0;
 let FEED_META = {source:"demo",relationships:[],handoffs:[]};
-let observatory;
+let observatory, commandCenter;
+let commandEvidence = {agents:[]}, lastCommandClock = 0;
 let stableLayout;
 let historyLayout = null, historyLiveSignature = '';
 let sceneSolids = [], scenePonds = [], sceneDistricts = [], sceneRoads = [], townCounts = new Map();
 let villageSquare = null;
+let familyPaths = [];
 let showSettled = false;
 
-function clearFeedState(){
+function clearFeedState(clearView=false){
   const next=blankFeedState();
   lastSnapshot=next.snapshot;lastEndpoint=next.endpoint;FEED_META=next.meta;
+  if(clearView){
+    heartbeat.reset();townTrades.reset();currentTradeSites=[];
+    familyPaths=[];layoutSignature="";
+    // A new endpoint must never inherit the old source's question or transport.
+    feedStale=true;LIVE=false;agents=[];selectedId=null;filter=null;
+    commandEvidence={agents:[],stale:true};
+    observatory?.update([],{...FEED_META,stale:true});
+    updateCommandCenter();renderPanel();
+  }
 }
 
 function townKey(ag){
@@ -126,7 +146,7 @@ async function fetchAgents(){
     try{const u=new URL(endpoint,location.href);bundledEmpty=!data.stale&&!data.agents.length&&u.origin===location.origin&&u.pathname==="/agents"&&(!data.source||data.source==="none");}catch{}
     if(bundledEmpty){builtInDemo=true;LIVE=false;feedStale=false;clearFeedState();FEED_META=DEMO_META;feedNote("local feed empty. demo townmap until cottages show up.");return SIM.snapshot();}
     builtInDemo=false;LIVE=true;feedStale=!!data.stale;FEED_META=data;
-    const list=data.agents.filter(a=>a&&typeof a==="object").map((a,i)=>normalizeCottage(data.stale?{...a,pr:{...a.pr,stale:true,reason:"The feed is stale; PR readiness is unverified."}}:a,i,{town:normalizeTown,model:shortModel,occupancy:classifyOccupancy}));
+    const list=data.agents.filter(a=>a&&typeof a==="object").map((a,i)=>normalizeCottage(data.stale?{...a,pr:staleFeedPr(a.pr,"The feed is stale; PR readiness is unverified.")}:a,i,{town:normalizeTown,model:shortModel,occupancy:classifyOccupancy}));
     lastSnapshot=list;lastEndpoint=endpoint;
     feedNote(feedStatusNote(list,{source:data.source,stale:feedStale}),feedStale?"#e7b778":"#94c99e");
     return list;
@@ -134,7 +154,7 @@ async function fetchAgents(){
     if(!current())return null;
     feedStale=true;
     const staleSnapshot=snapshotForEndpoint({snapshot:lastSnapshot,endpoint:lastEndpoint},endpoint);
-    if(staleSnapshot){LIVE=true;feedNote("Connection interrupted · showing last live snapshot. Retrying…","#e7b778");return staleSnapshot.map(a=>({...a,pr:normalizePr({...a.pr,stale:true,reason:"Feed connection interrupted; PR readiness is unverified."})}));}
+    if(staleSnapshot){LIVE=true;feedNote("Connection interrupted · showing last live snapshot. Retrying…","#e7b778");return staleSnapshot.map(a=>({...a,pr:normalizePr(staleFeedPr(a.pr,"Feed connection interrupted; PR readiness is unverified."))}));}
     if(builtInDemo){LIVE=false;feedStale=false;FEED_META=DEMO_META;feedNote("local feed unavailable. demo townmap until cottages show up.","#e7b778");return SIM.snapshot();}
     LIVE=false;feedNote("Feed unavailable · "+err.message+". Retrying…","#e7b778");
     return [];
@@ -235,6 +255,7 @@ const SIM = (() => {
   }));
   agents.forEach(a=>{
     a.cost = a.tokens * RATE;
+    if(a.status==='working'&&Number(a.id.slice(1))%3===0)a.toolActivity={name:'Read',state:'succeeded',at:now,source:'demo',stale:false};
     a.taskId="demo-task-"+a.id;
     a.originalAsk="Please "+a.task+". Check the existing behavior, make the smallest useful change, and leave a clear result I can review.";
     a.taskStartedAt=a.startedAt;a.sessionStartedAt=a.startedAt-8*60000;a.updatedAt=now;
@@ -262,6 +283,7 @@ const SIM = (() => {
       a.branch = mum ? mum.branch : "main";
     }
   });
+  let rehearsal=0;
   const FOLKLORE_PINNED = new Set([
     "Moss", "Sable", "Reed", "Vera", "Cass", "Wren", "Ruth", "Kip", "Gus", "Marge", "Otto",
   ]);
@@ -471,6 +493,25 @@ const SIM = (() => {
       );
       a.events=a.events.slice(-100);return true;
     },
+    rehearseGrowth(town='HubTown'){
+      // Authored simulation only: never writes to a connected task or telemetry feed.
+      if(rehearsal>=6)return false;
+      const parent=agents.find(a=>a.town===town&&!a.parent)||agents[0],stamp=Date.now();rehearsal++;
+      for(let i=0;i<3;i++){
+        const id=`demo-growth-${rehearsal}-${i}`,name=['Flint','Fern','Cobble'][i]+(rehearsal>1?' '+rehearsal:'');
+        const a={...parent,id,name,parent:i===2?parent.id:null,roommates:[],worktreePath:null,
+          branch:`demo/growth-${rehearsal}-${i}`,taskId:'demo-task-'+id,sessionId:'demo-session-'+id,
+          status:'working',occupancy:'live',endedAt:0,inputRequest:null,attention:'',tokens:0,cost:0,
+          task:['Read the neighbourhood plans','Search for the new garden plots','Connect the new workshop'][i],
+          originalAsk:'Illustrative village growth rehearsal.',activity:'Illustrative resident gathering material.',
+          startedAt:stamp,taskStartedAt:stamp,sessionStartedAt:stamp,lastProgressAt:stamp,updatedAt:stamp,
+          toolActivity:{name:i===1?'Grep':'Read',state:'succeeded',at:stamp,source:'demo',stale:false},
+          pr:{state:'none',source:'demo',checkedAt:stamp},events:[]};
+        a.todos=demoTodos(a,stamp);agents.push(a);
+      }
+      return true;
+    },
+    get canRehearseGrowth(){return rehearsal<6;},
     setLive(v){ live = v; }
   };
 })();
@@ -542,7 +583,9 @@ const mapViewport = createMapViewport({canvas:cv,viewport:document.getElementByI
   surface:document.getElementById('map-surface'),referenceWidth:MAP_REFERENCE_WIDTH,getObscured:()=>mapDisplay?.obscured()||{}});
 const packingWidth=townWidthBudget({windowWidth:window.innerWidth,standardWidth:document.getElementById('map-viewport').clientWidth});
 stableLayout=createTownLayout({maxWidth:packingWidth});
-mapDisplay = createMapDisplay({camera:mapViewport,canvas:cv,getMode:()=>observatory?.mode||'town',onOverview:()=>{
+mapDisplay = createMapDisplay({camera:mapViewport,canvas:cv,getMode:()=>observatory?.mode||'town',
+  getWorkspaceView:()=>commandCenter?.state.view||'town',
+  focusWorkspace:()=>document.getElementById('command-view').focus({preventScroll:true}),onOverview:()=>{
   observatory?.unfollow();
   return mapViewport.overview(overviewBounds(plots.filter(p=>(!filter||filter===townKey(p.agent))&&(!observatory||observatory.visible(p.agent)))));
 }});
@@ -711,6 +754,34 @@ function dirtPath(p, pts, w){
       seg(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1], pass[0], pass[1]);
       p(pts[i+1][0]-(pass[0]>>1), pts[i+1][1]-(pass[0]>>1), pass[0], pass[0], pass[1]);
     }
+  }
+}
+
+function drawParentPaths({highlight=false,night=false}={}){
+  for(const path of familyPaths){
+    if(filter && (townKey(path.parent)!==filter || townKey(path.child)!==filter))continue;
+    if(observatory && (!observatory.visible(path.parent) || !observatory.visible(path.child)))continue;
+    const selected=[path.parent.id,path.child.id,path.parentHost,path.childHost].includes(selectedId);
+    const hovered=[path.parent.id,path.child.id].includes(hoverId);
+    if(highlight && !selected && !hovered)continue;
+    const pts=path.points.map(p=>[p.x,p.y]);
+    if(!highlight && path.kind==='yard'){
+      dirtPath(px,pts,3);
+      continue;
+    }
+    // Sparse paving stays quiet across the wider town. A selected family gains a
+    // continuous warm thread that remains readable after the night palette.
+    ctx.globalAlpha=highlight?(selected ? .8 : .5):.65;
+    const color=highlight?(night?'#cbb985':'#9a713d'):C.stone;
+    for(let i=1;i<pts.length;i++){
+      const [x,y]=pts[i-1],[endX,endY]=pts[i];
+      const length=Math.abs(endX-x)+Math.abs(endY-y);
+      const dx=Math.sign(endX-x),dy=Math.sign(endY-y);
+      if(highlight)px(Math.min(x,endX),Math.min(y,endY),dx?length+1:1,dy?length+1:1,color);
+      else for(let n=0;n<=length;n+=9)px(x+dx*n,y+dy*n,2,1,color);
+    }
+    if(highlight)for(const endpoint of [pts[0],pts.at(-1)])px(endpoint[0]-1,endpoint[1]-1,3,3,color);
+    ctx.globalAlpha=1;
   }
 }
 
@@ -1650,8 +1721,15 @@ function layout(){
   document.getElementById('map-overview').title='Frame working and blocked cottages · '+activityLabel();
   cv.setAttribute('aria-description',activityLabel()+'. '+lastBedtimeLabel+'. Warm windows mark agents still working.');
   gardens=[];
-  const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.x,p.y,(p.agent.roommates||[]).map(m=>m.id),p.kids.map(k=>k.agent.id)]))+W+":"+H;
-  if(signature!==layoutSignature){paintBackground();layoutSignature=signature;}
+  const signature=JSON.stringify(plots.map(p=>[p.agent.id,p.agent.parent,p.x,p.y,(p.agent.roommates||[]).map(m=>[m.id,m.parent]),p.kids.map(k=>[k.agent.id,k.agent.parent])]))+W+":"+H;
+  if(signature!==layoutSignature){
+    familyPaths=parentPaths(plots,world,{houseHeight:HOUSE_H,laneOffset:LANE_Y+(LANE_H>>1)});
+    paintBackground();layoutSignature=signature;
+  }else{
+    // Geometry is stable, but filters must evaluate the latest endpoint states.
+    const current=new Map(vis.map(a=>[a.id,a]));
+    familyPaths=familyPaths.map(p=>({...p,parent:current.get(p.parent.id)||p.parent,child:current.get(p.child.id)||p.child}));
+  }
   if(!fauna.length)stockTown();
   placeJack();
 }
@@ -1671,11 +1749,16 @@ function placeJack(){
 function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
+  // Clock labels age independently from feed polling, including a paused feed.
+  if(t-lastCommandClock>=1){lastCommandClock=t;updateCommandCenter();}
   const villageLight=observatory?.lightAt(t);
   bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents,source:layoutSource||feedNamespace(ENDPOINT,builtInDemo)});
   const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
   if(bedtimeLabel!==lastBedtimeLabel){const note=document.getElementById('village-life');if(note)note.textContent=bedtimeLabel;cv.setAttribute('aria-description',activityLabel()+'. '+bedtimeLabel+'. Warm windows mark agents still working.');lastBedtimeLabel=bedtimeLabel;}
   ctx.drawImage(bg, 0, 0);
+  const heartbeatScene={districts:sceneDistricts,plots:plots.filter(p=>!observatory||observatory.visible(p.agent)),tasks:commandCenter?.tasks||[],time:t,reduce,stale:feedStale||paused,townFilter:filter};
+  heartbeat.drawGround(ctx,heartbeatScene);
+  drawParentPaths();
 
   TOWNS.forEach((d, di)=>{
     const r = DR[di];
@@ -1795,6 +1878,9 @@ function draw(){
       ctx.strokeRect(p.x-1.5, p.y-1.5, HOUSE_W+3, HOUSE_H+3);
     }
   });
+  heartbeat.drawLife(ctx,heartbeatScene);
+  const tradeScene={...heartbeatScene,trades:currentTrades,roads:sceneRoads};
+  drawTradeLife(ctx,tradeScene);currentTradeSites=tradeSites(tradeScene);
   moveFauna();
   drawFauna();
   observatory?.drawAtmosphere(ctx,{width:W,height:H,ponds:scenePonds,trees:sceneSolids.filter(r=>r.w===6&&r.h===8),plots:plots.map(p=>{
@@ -1819,6 +1905,7 @@ function draw(){
     ctx.globalAlpha=1;
   }
   drawTownCounts(nightInk>0);
+  drawParentPaths({highlight:true,night:nightInk>0});
   // Operational colors are drawn after the blue palette, without daylight holes.
   for(const p of plots){
     ctx.globalAlpha=(filter&&filter!==townKey(p.agent))||!observatory?.visible(p.agent)?0.3:1;
@@ -1844,6 +1931,7 @@ function draw(){
     drawThought(Math.round(a.x)+5, a.indoors?p.y+20:Math.round(a.y)-2, thought, revealed);
   });
 
+  commandCenter?.drawLens(ctx,plots,{selectedId,hoverId,townFilter:filter,visible:a=>!observatory||observatory.visible(a),time:t,reduce});
   observatory?.draw(t);
   requestAnimationFrame(draw);
 }
@@ -1861,6 +1949,11 @@ function hit(evt){
     if(x>=p.x && x<=p.x+HOUSE_W && y>=p.y-4 && y<=p.y+HOUSE_H+6) return p.agent.id;
   }
   return null;
+}
+function hitTrade(evt){
+  if(observatory?.mode==='room')return null;
+  const {x,y}=mapViewport.pointAtEvent(evt);
+  return currentTradeSites.find(site=>x>=site.x&&x<site.x+site.w&&y>=site.y&&y<site.y+site.h)||null;
 }
 function walkIds(){
   const vis = [];
@@ -1882,13 +1975,15 @@ function openBest(ag){
     a.click();
   }
 }
-cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId ? "pointer":"default"; });
+cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId||hitTrade(e) ? "pointer":"default"; });
 cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
 cv.addEventListener("click", e=>{
+  const site=hitTrade(e);if(site){commandCenter?.inspectTrade(site);return;}
   if(observatory?.handleClick(e))return;
   const id=hit(e);if(id){selectedId=id;renderPanel();mapDisplay.showDetails();}
 });
 cv.addEventListener("dblclick", e=>{
+  if(hitTrade(e)){e.preventDefault();return;}
   const id = hit(e);
   if(!id || id === JACK_ID) return;
   e.preventDefault();
@@ -1908,11 +2003,12 @@ function clock(ms){
   return new Date(ms).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 }
 function money(n){
+  if(!Number.isFinite(n))return 'Unavailable';
   return n >= 1 ? `$${n.toFixed(2)}` : `${(n*100).toFixed(1)}c`;
 }
 function burnRate(ag){
   const mins = ag.taskStartedAt ? (Date.now() - ag.taskStartedAt) / 60000 : 0;
-  return mins > 0.5 ? money(ag.cost/mins) + "/min" : "—";
+  return Number.isFinite(ag.cost)&&mins > 0.5 ? money(ag.cost/mins) + "/min" : "—";
 }
 function renderJackPanel(){
   const pile = letters();
@@ -1949,6 +2045,7 @@ function launchHtml(ag){
 }
 
 function renderPanel(){
+  commandCenter?.select(selectedId);
   if(observatory?.renderPanel(selectedId))return;
   panel.dataset.view='fallback:'+selectedId;
   if(selectedId === JACK_ID){
@@ -1957,7 +2054,7 @@ function renderPanel(){
   }
   const ag = agents.find(a=>a.id===selectedId);
   if(!ag){
-    panel.innerHTML = `<p class="hint">Click a cottage to inspect, or focus the map and use arrow keys to walk. E enters a nearby door.</p>`;
+    panel.innerHTML = `<p class="hint">Click a cottage to inspect, or focus the map and use arrow keys to walk. Walk into a doorway to enter.</p>`;
     return;
   }
   const d = townStyle(ag);
@@ -1969,6 +2066,13 @@ function renderPanel(){
     ? `${pr.state === "merged" ? "merged" : "open"} ${pr.number ? "#"+pr.number : ""} ${pr.title || ""}`.trim()
     : "none we can see";
   const startedOk = ag.startedAt && ag.startedAt > Date.parse("2020-01-01");
+  const sessionUsage=ag.usage?.scope==='session'?ag.usage:null;
+  const sessionTotals=!!sessionUsage||ag.conversationTarget?.recordKind==='external_session';
+  const displayTokens=sessionUsage?sessionUsage.tokens?.totalTokens:ag.tokens;
+  const displayCost=sessionUsage?sessionUsage.cost?.usd:ag.cost;
+  const costNote=sessionTotals?(sessionUsage?.cost?.complete?'recorded session':'partial session coverage'):(live?burnRate(ag):'this run');
+  const tokenNote=sessionUsage&&(ag.usageCoverage?.reason==='partial'||sessionUsage.incompleteFields?.length||sessionUsage.lowerBound?.length)?' · partial':'';
+  const context=ag.contextUsage;
   panel.innerHTML = `
     <h2>${esc(ag.name)}</h2>
     <p class="role-line">${mum ? `shed in ${esc(mum.name)}'s yard` : (d.key === "HubTown" ? "HubTown · home" : esc(d.key))}</p>
@@ -1983,8 +2087,10 @@ function renderPanel(){
       <dt>Model</dt><dd><span style="color:${MODEL_COLOR[ag.model]||'#63a4e0'}">&#9646;</span> ${esc(ag.model)}</dd>
       <dt>Sent by</dt><dd>${mum ? `${esc(mum.name)} <span class="muted">(agent)</span>` : esc(ag.dispatchedBy)}</dd>
       <dt>Started</dt><dd>${startedOk ? `${clock(ag.startedAt)} <span class="muted">· ${uptime(ag.startedAt)} ago</span>` : "-"}</dd>
-      <dt>Cost</dt><dd>${money(ag.cost)} <span class="muted">· ${live ? burnRate(ag) : "this run"}</span></dd>
-      <dt>Tokens</dt><dd>${ag.tokens.toLocaleString()}</dd>
+      <dt>${sessionTotals?'Session cost':'Cost'}</dt><dd>${money(displayCost)}${Number.isFinite(displayCost)?` <span class="muted">· ${costNote}</span>`:''}</dd>
+      <dt>${sessionTotals?'Session tokens':'Tokens'}</dt><dd>${Number.isFinite(displayTokens)?displayTokens.toLocaleString()+tokenNote:'Unavailable'}</dd>
+      ${ag.usage?.scope==='attempt'?`<dt>Attempt tokens</dt><dd>${Number.isFinite(ag.usage.tokens?.totalTokens)?ag.usage.tokens.totalTokens.toLocaleString():'Unavailable'}${ag.usageCoverage?.reason==='partial'?' · partial':''}</dd>`:''}
+      ${context?`<dt>Context</dt><dd>${Number.isFinite(context.usedTokens)?context.usedTokens.toLocaleString():'?'} / ${Number.isFinite(context.windowTokens)?context.windowTokens.toLocaleString():'?'} tokens${context.stale?' <span class="muted">· last recorded</span>':''}</dd>`:''}
       ${kids.length ? `<dt>Spawned</dt><dd>${kids.map(k=>`<span style="color:${STATUS_COLOR[k.status]}">●</span> ${esc(k.name)} <span class="muted">${money(k.cost)}</span>`).join("<br>")}</dd>` : ""}
     </dl>
     <div class="log">${esc(ag.result || ag.lastLine || "")}</div>
@@ -2019,9 +2125,10 @@ function renderTally(){
     const n = vis.filter(a=>townKey(a)===d.key).length;
     const busy = vis.filter(a=>townKey(a)===d.key && a.status==="working").length;
     const b = document.createElement("button");
+    b.dataset.townScope=d.key;
     b.setAttribute("aria-pressed", filter===d.key ? "true":"false");
     b.innerHTML = `<span class="dot" style="background:${d.roof}"></span>${esc(d.key === "HubTown" ? "HubTown home" : d.key)}<span class="n">${busy}/${n}</span>`;
-    b.onclick = ()=>{ filter = (filter===d.key) ? null : d.key; renderTally(); };
+    b.onclick = ()=>{ focusTown(filter===d.key?null:d.key); };
     tally.appendChild(b);
   });
   const mailN = letters().length;
@@ -2033,8 +2140,10 @@ function renderTally(){
   const busy = vis.filter(a=>a.status==="working").length;
   const spend = vis.filter(a=>a.occupancy==="live" || a.occupancy==="recent").reduce((n,a)=>n + (a.cost||0), 0);
   const settledN = agents.filter(a=>a.occupancy==="settled").length;
-  document.querySelector(".sub").textContent =
-    `${busy} working · ${money(spend)} this window` +
+  const summary=document.querySelector(".sub");
+  summary.title='Recorded cost for visible live/recent tasks. Running usage and sources without pricing may be missing; this is not spend within a time interval.';
+  summary.textContent =
+    `${busy} working · ${money(spend)} recorded · partial` +
     (mailN ? ` · ${mailN} letter${mailN===1?"":"s"}` : "") +
     (settledN ? ` · ${settledN} settled` : "");
   const sb = document.getElementById("settled");
@@ -2044,6 +2153,7 @@ function renderTally(){
   }
   const folkloreHint = document.getElementById("folklore-hint");
   if(folkloreHint) folkloreHint.hidden = !(builtInDemo || PUBLIC_DEMO);
+  updateCommandCenter();
 }
 const noteEl = document.getElementById("note");
 function feedNote(msg, color){ noteEl.textContent = msg; noteEl.style.color = color || "#93a1b0"; }
@@ -2057,9 +2167,9 @@ document.getElementById("connect").onclick = ()=>{
   const v = document.getElementById("endpoint").value.trim();
   if(!v){
     if(ENDPOINT!==null){
-      activeFeedAbort?.abort();feedRevision++;clearFeedState();
+      activeFeedAbort?.abort();feedRevision++;clearFeedState(true);
     }
-    ENDPOINT=null;builtInDemo=true;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
+    ENDPOINT=null;syncFeedNotifications();builtInDemo=true;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("Back on the demo townmap.");return refresh({latest:true});
   }
   if(!isAllowedFeedUrl(v)){
     feedNote("feed URL must be http(s). data: and other schemes are blocked.", "#e2504a");
@@ -2067,9 +2177,9 @@ document.getElementById("connect").onclick = ()=>{
   }
   const nextEndpoint=new URL(v,location.href).href;
   if(nextEndpoint!==ENDPOINT){
-    activeFeedAbort?.abort();feedRevision++;clearFeedState();
+    activeFeedAbort?.abort();feedRevision++;clearFeedState(true);
   }
-  ENDPOINT=nextEndpoint;builtInDemo=false;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("connecting...");refresh({latest:true});
+  ENDPOINT=nextEndpoint;syncFeedNotifications();builtInDemo=false;stableLayout.reset();historyLayout=null;layoutSignature="";feedNote("connecting...");refresh({latest:true});
 };
 document.getElementById("endpoint").addEventListener("keydown", e=>{
   if(e.key==="Enter") document.getElementById("connect").click();
@@ -2083,7 +2193,16 @@ document.getElementById("pause").onclick = (e)=>{
   paused = !paused; SIM.setLive(!paused);
   e.target.setAttribute("aria-pressed", String(paused));
   e.target.textContent = paused ? "resume feed" : "pause feed";
+  syncFeedNotifications();
+  if (!paused) refresh({latest:true});
 };
+
+const feedNotifications=createFeedNotifications({origin:location.origin,onChange(){
+  if(!paused&&!PUBLIC_DEMO)refresh({latest:true});
+}});
+function syncFeedNotifications(){feedNotifications.sync(ENDPOINT,{enabled:!paused&&!PUBLIC_DEMO});}
+addEventListener("pagehide",()=>feedNotifications.stop());
+addEventListener("pageshow",syncFeedNotifications);
 
 const refresh=createLatestRefresh(async ()=>{
     const incoming=await fetchAgents();
@@ -2091,12 +2210,18 @@ const refresh=createLatestRefresh(async ()=>{
     agents=incoming;
     const nextSource=feedNamespace(ENDPOINT,builtInDemo);
     if(nextSource!==layoutSource){layoutSource=nextSource;stableLayout.reset();historyLayout=null;layoutSignature="";fauna.length=0;}
+    commandEvidence=commandSnapshot(agents,FEED_META,{stale:feedStale});
+    const canonicalPrs=new Map(commandEvidence.agents.map(agent=>[agent.id,agent.pr]));
+    agents=agents.map(agent=>({...agent,pr:canonicalPrs.get(agent.id)}));
+    townTrades.observeSnapshot({tasks:fleetView(commandEvidence,{includeSettled:true}).tasks,relationships:FEED_META.relationships,handoffs:FEED_META.handoffs},{sourceKey:nextSource,stale:feedStale});
     layout();observatory?.update(agents,{...FEED_META,stale:feedStale});renderTally();renderPanel();
     return false;
 });
 
 observatory=createObservatory({
   canvas:cv,ctx,getAgents:()=>agents,getPlots:()=>plots,getEndpoint:()=>ENDPOINT,isBuiltInDemo:()=>builtInDemo,getSourceKey:()=>feedNamespace(ENDPOINT,builtInDemo),
+  getEvidence:id=>commandEvidence.agents.find(a=>a.id===id),
+  activateTown:()=>commandCenter?.setView('town'),
   getBedtimeRoutine:id=>routineForAgent(bedtimeFrames,agents.find(agent=>agent.id===id)),
   getResidents:()=>residentTargets(actors,plots).concat([...bedtimeFrames].flatMap(([parentId,r])=>{
     if(!plots.some(plot=>plot.agent.id===parentId))return [];
@@ -2107,11 +2232,57 @@ observatory=createObservatory({
   getWorld:()=>({width:W,height:H,solids:sceneSolids,ponds:scenePonds,districts:sceneDistricts,roadX:VERT_ROAD,roadYs:HORZ_ROADS,roads:sceneRoads,road:ROAD,square:villageSquare,jack:jackPlot,showSettled}),
   select(id){selectedId=id;renderPanel();},drawJack,
   answerDemo:(id,text,requestId)=>SIM.answer(id,text,requestId),refresh,
+  onMilestones(events,meta){heartbeat.observe(events,{...meta,now:performance.now()/1000});},
   viewport:mapViewport,showDetails:mapDisplay.showDetails,onModeChange:mapDisplay.syncZoom,
   isMapFullscreen:mapDisplay.isActive,toggleMapFullscreen:mapDisplay.toggle,exitMapFullscreen:mapDisplay.exit
 });
+function focusTown(town){
+  filter=town||null;
+  renderTally();
+  if(observatory?.mode==='room')observatory.leave({activate:false});
+  observatory?.unfollow();
+  const bounds=projectBounds(plots.filter(p=>!observatory||observatory.visible(p.agent)),filter);
+  if(bounds)mapViewport.overview(bounds);
+  mapDisplay.syncZoom();
+  if(filter){
+    const candidates=(commandCenter?.tasks||[]).filter(task=>(task.raw.town||task.raw.role)===filter);
+    if(!candidates.some(task=>task.id===selectedId)){
+      const first=candidates.find(task=>task.input)||candidates.find(task=>task.status==='working')||candidates[0];
+      if(first)observatory.inspectCottage(first.id,{tab:first.input?'talk':'overview'});
+    }
+  }
+}
+function updateCommandCenter(){
+  currentTrades=townTrades.snapshot({tasks:fleetView(commandEvidence,{includeSettled:showSettled}).tasks,stale:feedStale});
+  commandCenter?.update({snapshot:commandEvidence,endpoint:ENDPOINT,sourceKey:feedNamespace(ENDPOINT,builtInDemo),
+    builtInDemo,publicDemo:PUBLIC_DEMO,stale:feedStale,selectedId,townFilter:filter,showSettled,trades:currentTrades,canRehearseGrowth:SIM.canRehearseGrowth});
+}
+commandCenter=createCommandCenter({root:document.getElementById('map-shell'),
+  onInspect(id,tab){observatory.inspectCottage(id,{tab});},
+  onLocate(id){
+    commandCenter.setView('town');
+    if(observatory.mode==='room')observatory.leave({activate:false});
+    mapViewport.setZoom(100);mapDisplay.syncZoom();observatory.focusCottage(id);
+  },
+  onTownFilter:focusTown,
+  onRehearseGrowth(){if(!(builtInDemo||PUBLIC_DEMO))return;if(SIM.rehearseGrowth(filter||'HubTown'))refresh({latest:true});},
+  onBalanceChange(){mapViewport.capture();requestAnimationFrame(()=>mapViewport.resize());},
+  onViewChange(view){
+    const alternate=view!=='town',viewport=document.getElementById('map-viewport');
+    mapViewport.capture();
+    observatory.setSuspended(false);
+    viewport.inert=false;viewport.style.visibility='';
+    viewport.setAttribute('aria-hidden','false');
+    document.getElementById('command-view').hidden=!alternate;
+    document.getElementById('map-shell').dataset.workspaceView=view;
+    requestAnimationFrame(()=>mapViewport.resize());
+    mapDisplay.syncZoom();
+    if(alternate)document.getElementById('command-view').focus({preventScroll:true});
+    if(!alternate)document.getElementById(observatory.mode==='room'?'room-canvas':'town').focus({preventScroll:true});
+  }
+});
 window.cottageObservatory=observatory;
-window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,blockId:p.blockId,roommates:(p.agent.roommates||[]).map(m=>m.id),kids:p.kids})),districts:sceneDistricts,roads:sceneRoads,townCounts:Object.fromEntries(townCounts),packingWidth,solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state,viewport:mapViewport.state,display:mapDisplay.state});
+window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,blockId:p.blockId,roommates:(p.agent.roommates||[]).map(m=>m.id),kids:p.kids})),districts:sceneDistricts,roads:sceneRoads,townCounts:Object.fromEntries(townCounts),packingWidth,solids:sceneSolids,ponds:scenePonds,fauna,bedtime:[...bedtimeFrames].map(([id,routine])=>({id,...routine})),live:LIVE,stale:feedStale,width:W,height:H,scene:observatory.state,viewport:mapViewport.state,display:mapDisplay.state,command:commandCenter.state,heartbeat:heartbeat.state,trades:currentTrades,tradeSites:currentTradeSites});
 
 (function boot(){
   const previewNight=()=>{
@@ -2155,6 +2326,7 @@ window.cottageState=()=>({agents,plots:plots.map(p=>({id:p.agent.id,x:p.x,y:p.y,
     previewNight();
   }
 })();
+syncFeedNotifications();
 refresh();
 setInterval(()=>{ if(!paused) refresh(); }, POLL_MS);
 requestAnimationFrame(draw);

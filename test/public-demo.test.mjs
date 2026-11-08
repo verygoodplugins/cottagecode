@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { createFeedNotifications } from '../src/live-feed.mjs';
 import { buildDemo, normalizeBase } from '../scripts/build-demo.mjs';
 import { isPublicDemoDocument, PUBLIC_DEMO } from '../src/runtime.mjs';
 import { isPracticeDemo } from '../src/observatory.mjs';
@@ -64,7 +65,7 @@ test('default build contains the complete browser graph and no backend or local 
   for (const id of ['endpoint', 'connect']) assert.match(html, new RegExp('<[^>]+id="' + id + '"[^>]+disabled[^>]*>'));
   assert.match(html, /src="\.\/modules\/town\.mjs"/);
   assert.doesNotMatch(html, /(?:src|href)="\/modules\//);
-  for (const name of ['town', 'runtime', 'observatory', 'interiors', 'world', 'pr', 'history', 'sound', 'occupancy', 'feed-client', 'village-extras', 'atmosphere', 'music', 'music-output', 'music-tracks', 'postcard'])
+  for (const name of ['town', 'runtime', 'observatory', 'interiors', 'world', 'pr', 'history', 'sound', 'occupancy', 'feed-client', 'village-extras', 'atmosphere', 'music', 'music-output', 'music-tracks', 'postcard', 'command-center', 'command-model', 'command-replies', 'command-styles', 'command-render'])
     assert.ok(result.files.includes(name + '.mjs'), name + ' should be included');
   const all = await listFiles(outDir), bundled = new Set(result.files);
   assert.deepEqual(all.filter(path => path.includes('/modules/')).map(path => path.slice('cottagecode/modules/'.length)).sort(), result.files);
@@ -203,7 +204,7 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
   const feed = { hidden: false }, listeners = new Map();
   const box = { value: endpoint, disabled: false, closest: () => feed, addEventListener: (name, fn) => listeners.set(name, fn) };
   const connect = { disabled: false, onclick: null, click() { this.onclick(); } };
-  const snapshot = [{ id: 'sample-resident' }], notes = [], requests = [], refreshes = [], resets = [];
+  const snapshot = [{ id: 'sample-resident' }], notes = [], requests = [], refreshes = [], resets = [], streams = [];
   const context = vm.createContext({
     PUBLIC_DEMO: publicDemo, ENDPOINT: endpoint, LIVE: true, feedStale: true, builtInDemo: false,
     FEED_META: {}, DEMO_META: { source: 'demo' }, SIM: { snapshot: () => snapshot },
@@ -215,6 +216,12 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
     isAllowedFeedUrl: value => /^https?:\/\//.test(value), stableLayout: { reset: () => resets.push('reset') },
     snapshotForEndpoint: ({ snapshot, endpoint: observed }, requested) => observed === requested ? snapshot : null,
     lastSnapshot: null, lastEndpoint: null, layoutSignature: 'preserved', agents: [],
+    paused: false, addEventListener() {},
+    createFeedNotifications: options => createFeedNotifications({ ...options, EventSourceClass: class {
+      constructor(url) { streams.push(url); }
+      addEventListener() {}
+      close() {}
+    } }),
   });
   context.clearFeedState = () => {
     context.lastSnapshot = null;
@@ -227,9 +234,11 @@ function controllerHarness({ publicDemo = true, search = '', endpoint = 'https:/
   const connectStart = TOWN.indexOf('document.getElementById("connect").onclick'), connectEnd = TOWN.indexOf('document.getElementById("settled").onclick', connectStart);
   assert.ok(connectStart >= 0 && connectEnd > connectStart, 'Connect section should be testable');
   vm.runInContext(TOWN.slice(connectStart, connectEnd), context);
+  const pushStart = TOWN.indexOf('const feedNotifications='), pushEnd = TOWN.indexOf('const refresh=createLatestRefresh', pushStart);
+  vm.runInContext(TOWN.slice(pushStart, pushEnd), context);
   const bootStart = TOWN.indexOf('(function boot(){'), bootEnd = TOWN.indexOf('\nrefresh();', bootStart);
   assert.ok(bootStart >= 0 && bootEnd > bootStart, 'Boot section should be testable');
-  return { context, feed, box, connect, snapshot, notes, requests, refreshes, resets, listeners,
+  return { context, feed, box, connect, snapshot, notes, requests, refreshes, resets, listeners, streams,
     boot() { vm.runInContext(TOWN.slice(bootStart, bootEnd), context); } };
 }
 
@@ -254,6 +263,7 @@ test('public boot, connection controls, and fetch are locked to sample data desp
     assert.equal(h.context.feedStale, false);
     assert.equal(h.context.FEED_META.source, 'demo');
     assert.equal(h.requests.length, 0);
+    assert.equal(h.streams.length, 0, 'public sample never opens a live notification stream');
     assert.equal(h.refreshes.length, 0);
     assert.equal(h.resets.length, 0);
   }
@@ -267,6 +277,7 @@ test('local builds retain explicit connect, query prefill, and their default loc
   assert.equal(normal.feed.hidden, false);
   await normal.context.fetchAgents();
   assert.equal(normal.requests.length, 1);
+  assert.deepEqual(normal.streams, ['https://sample.example/agents/events']);
   const prefilled = controllerHarness({ publicDemo: false, search: '?endpoint=https://custom.example/agents' });
   prefilled.boot();
   assert.equal(prefilled.context.ENDPOINT, null);
@@ -275,10 +286,12 @@ test('local builds retain explicit connect, query prefill, and their default loc
   prefilled.connect.onclick();
   assert.equal(prefilled.context.ENDPOINT, 'https://custom.example/agents');
   assert.equal(prefilled.refreshes.length, 1);
+  assert.equal(prefilled.streams.length, 0, 'prefilled and custom feeds do not auto-subscribe');
   const demo = controllerHarness({ publicDemo: false, search: '?demo=1' });
   demo.boot();
   assert.equal(demo.context.ENDPOINT, null);
   assert.equal(await demo.context.fetchAgents(), demo.snapshot);
+  assert.equal(demo.streams.length, 0);
 });
 
 test('an empty bundled local feed keeps its endpoint while enabling demo conversations', async () => {
