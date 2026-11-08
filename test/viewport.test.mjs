@@ -99,13 +99,13 @@ test('camera retains its initial scale through delayed feeds, room visits, and w
   near(camera.state.center.y,center.y);
 });
 
-test('Overview fits active bounds around desktop and mobile details within the zoom limits', () => {
+test('Overview fits active bounds around desktop and mobile details', () => {
   const bounds={x:0,y:0,w:1000,h:500};
   assert.equal(overviewZoom(bounds,{width:1100,height:700,baseScale:1}),100);
   assert.equal(overviewZoom(bounds,{width:1100,height:700,right:352,baseScale:1}),50);
   assert.equal(overviewZoom(bounds,{width:1100,height:700,bottom:300,baseScale:1}),50);
   assert.equal(overviewZoom(bounds,{width:850,height:600,baseScale:1}),75);
-  assert.equal(overviewZoom(bounds,{width:300,height:200,baseScale:2}),50);
+  assert.equal(overviewZoom(bounds,{width:300,height:200,baseScale:2}),12.6);
 });
 
 test('a wider packed world retains the reference cottage scale; Overview is explicit', t => {
@@ -121,4 +121,26 @@ test('a wider packed world retains the reference cottage scale; Overview is expl
   assert.equal(result.zoom,75);assert.equal(result.allVisible,true);
   camera.setWorld(1700,1600);near(camera.state.scale,.75);
   camera.setIndoors(true);assert.equal(camera.overview({x:0,y:0,w:50,h:50}),null);
+});
+
+test('Overview fits a town with a distant annex below the manual zoom floor', t => {
+  const original=globalThis.ResizeObserver;
+  globalThis.ResizeObserver=class{observe(){}};
+  t.after(()=>{if(original)globalThis.ResizeObserver=original;else delete globalThis.ResizeObserver;});
+  const viewport={clientWidth:1084,clientHeight:473,scrollLeft:0,scrollTop:0,classList:{toggle(){}},
+    scrollTo({left=0,top=0}){this.scrollLeft=left;this.scrollTop=top;}};
+  const camera=createMapViewport({viewport,surface:{style:{}},canvas:{style:{}},referenceWidth:768});
+  camera.setWorld(1000,1600);
+  const result=camera.overview({x:108,y:60,w:320,h:1256});
+  assert.ok(result.zoom<50);assert.equal(result.allVisible,true);
+  assert.equal(camera.state.zoom,result.zoom);
+  const g=camera.state.geometry,scroll={left:viewport.scrollLeft,top:viewport.scrollTop};
+  const top=screenPoint({x:108,y:60},g,scroll),bottom=screenPoint({x:428,y:1316},g,scroll);
+  assert.ok(top.y>=0&&bottom.y<=473);
+  assert.equal(nextZoom(result.zoom,-1),result.zoom);
+  assert.equal(nextZoom(result.zoom,1),50);
+  camera.setZoom(nextZoom(result.zoom,1));assert.equal(camera.state.zoom,50);
+  camera.setZoom(nextZoom(50,1));assert.equal(camera.state.zoom,75);
+  const small=camera.overview({x:108,y:60,w:320,h:200});
+  assert.equal(small.zoom,100);assert.equal(small.allVisible,true);
 });

@@ -5,11 +5,13 @@ import {movePoint,inside,normalizeRelationships,normalizedHandoffs} from './worl
 import {createDistrictRouter} from './town-layout.mjs';
 import {createHistory} from './history.mjs';
 import {createSound} from './sound.mjs';
-import {activityAddress,mergeActivity,elapsedMs,validTime,isCottageVisible} from './feed-client.mjs';
+import {activityAddress,mergeActivity,validTime,isCottageVisible} from './feed-client.mjs';
 import {cottageDoors,crossedDoor} from './interaction.mjs';
 import {normalizeTodos} from './todos.mjs';
 import {conversationCapability,MAX_MESSAGE_LENGTH} from './conversation.mjs';
 import {normalizeInputRequest,inputRequestVersion} from './input-request.mjs';
+import {taskView,durationLabel} from './command-model.mjs';
+import {createReplyClient,isTerminalForMessage} from './command-replies.mjs';
 import {PUBLIC_DEMO} from './runtime.mjs';
 import {createVillageExtras} from './village-extras.mjs';
 import {roomRest,paintBed} from './bedtime.mjs';
@@ -31,7 +33,6 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;
 const safeUrl=raw=>{try{const u=new URL(raw);return ['http:','https:'].includes(u.protocol)?u.href:'';}catch{return '';}};
 export const safeHttpsUrl=raw=>{try{const u=new URL(raw);return u.protocol==='https:'?u.href:'';}catch{return '';}};
 const clock=value=>{const ms=validTime(value);return ms?new Date(ms).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'Unavailable';};
-const elapsed=agent=>{const duration=elapsedMs(agent);if(duration===null)return 'Unavailable';const sec=Math.floor(duration/1000);return Math.floor(sec/60)+'m '+(sec%60)+'s';};
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const cottageReturnPoint=plot=>({x:plot.x+(plot.parentPlot?8:27),y:plot.y+(plot.parentPlot?22:76)});
 export const button=(action,label,extra='')=>'<button type="button" data-action="'+esc(action)+'" '+extra+'>'+label+'</button>';
@@ -88,8 +89,8 @@ export function activityCacheFor(cache,a={}){
 }
 /** Keep an intentional inspection; automatic choices start in the visible village. */
 export function cottageSelection(agents,{selected=null,interiorId=null,showSettled=false}={}){
-  if(interiorId&&agents.some(agent=>agent.id===interiorId))return interiorId;
   if(selected&&agents.some(agent=>agent.id===selected))return selected;
+  if(interiorId&&agents.some(agent=>agent.id===interiorId))return interiorId;
   const visible=agents.filter(agent=>isCottageVisible(agent,{showSettled}));
   const hosts=visible.filter(agent=>!agent.parent);
   return (hosts.find(agent=>['working','blocked'].includes(agent.status))||hosts[0]||visible[0])?.id||null;
@@ -128,6 +129,54 @@ function nearRect(p,r){return Math.hypot(p.x-Math.max(r.x,Math.min(p.x,r.x+r.w))
 
 export function isPracticeDemo(agent, builtInDemo = false){
   return builtInDemo && agent?.source==='demo' && !!normalizeInputRequest(agent.inputRequest);
+}
+
+/** Durable task receipts outrank editable drafts, including after a source revisit. */
+export function replyPresentation(agent,receipt={}){
+  const pending=['checking','sending'].includes(receipt.phase),uncertain=receipt.phase==='uncertain';
+  const answered=receipt.phase==='sent'&&agent.conversation?.mode==='respond'&&
+    !!normalizeInputRequest(agent.inputRequest)&&receipt.inputVersion===inputRequestVersion(agent.inputRequest);
+  return {phase:uncertain?'unconfirmed':pending?'sending':receipt.phase||'idle',locked:pending||uncertain||answered,notice:receipt.notice||''};
+}
+
+/** Question drafts can temporarily inherit another revision's in-flight receipt. */
+export function reconcileReplyReceipt(conversation,agent,receipt){
+  const delivery=replyPresentation(agent,receipt);
+  const inheritedPending=conversation.receiptPending&&conversation.phase==='sending';
+  conversation.deliveryLocked=delivery.locked;
+  if(delivery.locked){conversation.phase=delivery.phase;conversation.notice=delivery.notice;}
+  else if(inheritedPending){
+    conversation.phase=delivery.phase==='error'?'error':'idle';
+    conversation.notice=delivery.phase==='error'?delivery.notice:'';
+  }
+  conversation.receiptPending=delivery.locked&&delivery.phase==='sending';
+  return conversation;
+}
+
+export function evidenceOverviewHtml(agent,{now=Date.now(),stale=false,endpoint,activity=''}={}){
+  const view=taskView(agent,{now,stale,endpoint});
+  const age=value=>value===null?'Unavailable':durationLabel(value)+' ago';
+  const turnStart=validTime(agent.turnStartedAt);
+  const turnTerminal=agent.terminal===true||['done','offline','completed','failed','cancelled','interrupted'].includes(view.status);
+  const turnEnd=turnTerminal?validTime(agent.endedAt):now;
+  const turnAge=turnStart!==null&&turnEnd!==null&&turnEnd>=turnStart&&turnEnd<=now?turnEnd-turnStart:null;
+  const turnClocks=turnStart!==null||agent.inventorySource==='codex_rollout'?'<dt>Current turn age</dt><dd>'+esc(durationLabel(turnAge))+'</dd><dt>Current turn started</dt><dd>'+esc(clock(turnStart))+'</dd>':'';
+  const input=view.input?'<section class="input-request"><h3>Needs your input</h3><p class="input-prompt">'+esc(view.input.prompt.slice(0,420))+'</p>'+button('talk','Open Talk to reply')+'</section>':'';
+  const usage=agent.usage,context=agent.contextUsage;
+  const usageScope=(usage?.scope??context?.scope)==='attempt'?'Attempt':'Session';
+  const count=value=>Number.isFinite(value)&&value>=0?value.toLocaleString():'Unavailable';
+  const partial=agent.usageCoverage?.reason==='partial'||usage?.incompleteFields?.length||usage?.lowerBound?.length?' · partial':'';
+  const cost=usage?.cost;
+  const usageHtml=usage||context||agent.inventorySource==='codex_rollout'?'<h3>Recorded usage</h3><dl><dt>'+usageScope+' tokens</dt><dd>'+count(usage?.tokens?.totalTokens)+partial+'</dd><dt>'+usageScope+' cost</dt><dd>'+
+    (Number.isFinite(cost?.usd)&&cost.usd>=0?'$'+cost.usd.toFixed(2)+(cost.sources?.includes('estimate')?' · estimated':'')+(cost.complete?'':' · partial'):'Unavailable')+'</dd>'+
+    (context?'<dt>Context</dt><dd>'+count(context.usedTokens)+' / '+count(context.windowTokens)+' tokens'+(context.stale||stale?' · last recorded':'')+'</dd>':'')+
+    '</dl><p class="hint">'+(usageScope==='Session'?'Cumulative across this session. ':'Current attempt totals. ')+(usage?.measuredAt==null?'Usage measurement time is unavailable. ':'')+'</p>':'';
+  return '<h3>Today’s work</h3><p>'+esc(view.title)+'</p><div class="current-activity">'+esc(activity||view.activity||'No current activity supplied.')+'</div>'+lifecycleHtml(agent)+input+
+    '<dl><dt>Harness</dt><dd>'+esc(view.harness)+'</dd><dt>Source model</dt><dd>'+esc(view.model)+'</dd><dt>Task age</dt><dd>'+esc(durationLabel(view.taskAgeMs))+'</dd><dt>Task started</dt><dd>'+esc(clock(agent.taskStartedAt))+'</dd>'+
+    turnClocks+
+    (view.recordedExecutionMs!==null?'<dt>Recorded execution</dt><dd>'+esc(durationLabel(view.recordedExecutionMs))+'</dd>':'')+
+    '<dt>Session age</dt><dd>'+esc(durationLabel(view.sessionAgeMs))+'</dd><dt>Session started</dt><dd>'+esc(clock(agent.sessionStartedAt))+'</dd><dt>Last observed</dt><dd>'+esc(age(view.observedAgeMs))+(view.sourceStale?' · stale':'')+'</dd><dt>Last progress</dt><dd>'+esc(age(view.progressAgeMs))+'</dd><dt>Branch</dt><dd>'+esc(agent.branch||'Unavailable')+'</dd></dl><p class="hint">Observation records when the source last saw this task. Progress records its last reported work.</p>'+
+    usageHtml+'<h3>Pull request</h3>'+prSnapshotHtml(view.pr)+'<h3>Pinned request</h3><p class="request-preview">'+esc(agent.originalAsk?agent.originalAsk.slice(0,230)+(agent.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
 }
 
 function activeArrivalEntry(arrival, time, duration=8){
@@ -172,18 +221,25 @@ export function apprenticeResidentTarget(kid, arrival, arriving=false){
 export function createObservatory(api){
   const {canvas}=api,panel=$('panel'),roomCanvas=$('room-canvas'),roomCtx=roomCanvas.getContext('2d');
   const sound=createSound(),keys=new Set(),rooms=new Map(),activity=new Map(),inflight=new Map(),activityLines=new Map();
-  const conversations=new Map();
+  const conversations=new Map(),replyClients=new Map();
   const messageReceipts=new Map();
   const districtRoute=createDistrictRouter();
   let mode='town',selected=null,interiorId=null,room=null,roomPlayer=null,player=null,returnTo=null,tab='overview',prFilter=null;
   let followId=null,lastFrame=0,transition=1,latestAgents=[],relationships=[],handoffs=[],couriers=[],apprentices=[],knownKids=new Set();
   let sourceKey='',history=null,historyInitialized=false,stageSignature='',rosterSignature='',panelKey='',lastHint='',replayIndex=-1,replaying=false,replayTimer=0,replayEvents=[];
   let lastHealthCheck=0,selectedObject=null,board=null,gramophone=null,feedStale=false,historyView='since';
-  let talkingId=null,talkingUntil=0;
+  let talkingId=null,talkingUntil=0,suspended=false;
   let reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',e=>{reduce=e.matches;if(reduce)transition=1;});
   let storage=null;try{storage=localStorage;}catch{}
   const byId=id=>latestAgents.find(a=>a.id===id);
+  const evidenceFor=id=>api.getEvidence?.(id)||byId(id);
+  const replyClientFor=a=>{
+    if(PUBLIC_DEMO||api.isBuiltInDemo?.()||!a?.taskId||!api.getEndpoint())return null;
+    const endpoint=api.getEndpoint(),key=JSON.stringify([sourceKey,endpoint]);
+    if(!replyClients.has(key))replyClients.set(key,createReplyClient({endpoint,storage}));
+    return replyClients.get(key);
+  };
   const plotFor=id=>{
     for(const p of api.getPlots()){
       if(p.agent.id===id)return p;
@@ -206,9 +262,11 @@ export function createObservatory(api){
     const key=taskKey+'|'+(inputRequestVersion(request)||'conversation');
     if(!messageReceipts.has(taskKey))messageReceipts.set(taskKey,[]);
     if(!conversations.has(key))conversations.set(key,{text:'',phase:'idle',notice:'',sent:messageReceipts.get(taskKey),answers:{},requestId:null,payload:''});
-    return conversations.get(key);
+    const conversation=conversations.get(key),client=replyClientFor(a);
+    if(client)reconcileReplyReceipt(conversation,a,client.state(a.taskId));
+    return conversation;
   };
-  const capabilityFor=a=>isPracticeDemo(a,api.isBuiltInDemo?.())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
+  const capabilityFor=a=>isPracticeDemo(a,api.isBuiltInDemo?.())?{available:true,mode:'respond',source:'demo',demo:true}:PUBLIC_DEMO?{available:false,reason:'This is a sample village.'}:isTerminalForMessage(a)?{available:false,reason:'This task has finished. Start any follow-up in its original workflow.'}:conversationCapability(a,api.getEndpoint(),{stale:feedStale});
   const visible=a=>{
     if(!prFilter) return true;
     if(prStage(a.pr)===prFilter) return true;
@@ -234,6 +292,7 @@ export function createObservatory(api){
     api.onModeChange?.();
   }
   function enter(id){
+    api.activateTown?.();
     const a=byId(id),p=plotFor(id);if(!a||!p)return;
     api.showDetails?.();
     selected=id;api.select(id);interiorId=id;room=roomFor(a);
@@ -241,12 +300,17 @@ export function createObservatory(api){
     selectedObject=null;tab='overview';transition=reduce?1:0;
     followId=null;setMode('room');sound.play('door');renderPanel(id);roomCanvas.focus();
   }
-  function leave(){
+  function leave({activate=true}={}){
+    if(activate)api.activateTown?.();
     if(mode!=='room')return;
     player=returnTo||player;interiorId=null;room=null;roomPlayer=null;selectedObject=null;
-    setMode('town');sound.play('door');renderPanel(selected);canvas.focus();scrollToPlayer(true);
+    setMode('town');renderPanel(selected);
+    // Feed cleanup must not interrupt an evidence view or steal composer focus.
+    if(activate){sound.play('door');canvas.focus();scrollToPlayer(true);}
   }
   function follow(id){
+    api.activateTown?.();
+    if(suspended)return;
     const p=plotFor(id);if(!p)return;
     api.showDetails?.();
     if(mode==='room')leave();
@@ -255,6 +319,7 @@ export function createObservatory(api){
     setMode('town');renderPanel(selected);
   }
   function focusCottage(id){
+    api.activateTown?.();
     if(!byId(id))return;
     api.showDetails?.();
     if(mode==='room'&&id!==interiorId)leave();
@@ -263,7 +328,15 @@ export function createObservatory(api){
     const p=plotFor(id);if(p)scrollTo(p.x,p.y,true);
     renderPanel(id);ensureActivity(byId(id));
   }
+  function inspectCottage(id,{tab:nextTab='overview'}={}){
+    const a=evidenceFor(id);if(!a)return false;
+    if(mode==='board'||mode==='scrapbook'){replaying=false;setMode('town');}
+    selected=id;tab=['overview','request','journal','todos','review','artifacts','talk'].includes(nextTab)?nextTab:'overview';
+    selectedObject=null;api.select(id);api.showDetails?.();
+    renderPanel(id);ensureActivity(a);return true;
+  }
   function interact(){
+    if(suspended)return;
     if(mode==='room'){
       if(distance(roomPlayer,roomHost())<30){talk(interiorId);return;}
       const nearest=room.objects.filter(o=>o.interactable&&o.id!=='exit').sort((a,b)=>nearRect(roomPlayer,a)-nearRect(roomPlayer,b))[0];
@@ -287,7 +360,7 @@ export function createObservatory(api){
     }else hint('Walk into a doorway to enter. Press E near an agent to talk.');
   }
   function talk(id){
-    const a=byId(id);if(!a)return;
+    const a=evidenceFor(id);if(!a)return;
     api.showDetails?.();
     if(mode==='board'||mode==='scrapbook')setMode('town');
     selected=id;tab='talk';selectedObject=null;talkingId=id;talkingUntil=performance.now()+1500;
@@ -295,14 +368,15 @@ export function createObservatory(api){
   }
   function inspect(id){
     api.showDetails?.();
-    selectedObject=id;tab=({request:'request',clock:'overview',workbench:'journal',review:'review',shelf:'artifacts'})[id]||'overview';
+    selected=interiorId;api.select(interiorId);selectedObject=id;tab=({request:'request',clock:'overview',workbench:'journal',review:'review',shelf:'artifacts'})[id]||'overview';
     sound.play('talk');renderPanel(interiorId);
   }
   function scrollTo(x,y,immediate=false){
+    if(suspended)return;
     api.viewport.focus({x,y},immediate);
   }
   function scrollToPlayer(immediate=false){
-    if(!player||mode==='room')return;
+    if(suspended||!player||mode==='room')return;
     if(immediate)scrollTo(player.x,player.y,true);
     else api.viewport.ensureVisible(player);
   }
@@ -313,6 +387,7 @@ export function createObservatory(api){
       !(w.solids||[]).some(r=>inside({x,y},r,2));
   }
   function move(dt){
+    if(suspended)return false;
     let dx=(keys.has('ArrowRight')||keys.has('d')?1:0)-(keys.has('ArrowLeft')||keys.has('a')?1:0);
     let dy=(keys.has('ArrowDown')||keys.has('s')?1:0)-(keys.has('ArrowUp')||keys.has('w')?1:0);
     if(!dx&&!dy)return false;
@@ -331,6 +406,7 @@ export function createObservatory(api){
     sound.play('step');return true;
   }
   function onKey(e){
+    if(suspended)return;
     const key=e.key.length===1?e.key.toLowerCase():e.key;
     if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d'].includes(key)){
       if(mode==='board'||mode==='scrapbook')setMode('town');
@@ -352,7 +428,7 @@ export function createObservatory(api){
   window.addEventListener('blur',()=>keys.clear());
   canvas.addEventListener('blur',()=>keys.clear());roomCanvas.addEventListener('blur',()=>keys.clear());
   roomCanvas.addEventListener('click',e=>{
-    if(!room||transition<1)return;
+    if(suspended||!room||transition<1)return;
     const r=roomCanvas.getBoundingClientRect(),area=api.viewport.visibleArea(),scale=Math.min(area.width/room.width,area.height/room.height);
     const p={x:(e.clientX-r.left-(area.width-room.width*scale)/2)/scale,y:(e.clientY-r.top-(area.height-room.height*scale)/2)/scale};
     const host=roomHost();
@@ -361,6 +437,7 @@ export function createObservatory(api){
     if(obj){if(obj.id==='exit')leave();else inspect(obj.id);}
   });
   function handleClick(e){
+    if(suspended)return false;
     const p=api.viewport.pointAtEvent(e);
     const resident=(api.getResidents?.()||[]).find(a=>visible(byId(a.id)||{})&&inside(p,{x:a.x-7,y:a.y-18,w:14,h:20}));
     if(resident){talk(resident.id);return true;}
@@ -452,11 +529,11 @@ export function createObservatory(api){
   function talkHtml(a,cache){
     const conversation=conversationFor(a),capability=capabilityFor(a),request=normalizeInputRequest(a.inputRequest);
     const pending=conversation.phase==='sending',uncertain=conversation.phase==='unconfirmed';
-    const enabled=capability.available&&!pending&&!uncertain&&!!conversation.text.trim()&&conversation.text.trim()!==conversation.uncertainPayload;
+    const enabled=capability.available&&!conversation.deliveryLocked&&!pending&&!uncertain&&!!conversation.text.trim()&&conversation.text.trim()!==conversation.uncertainPayload;
     const receipts=conversation.sent.map(message=>'<li><p>'+esc(message.text)+'</p><small>'+esc(clock(message.timestamp))+' · '+esc(message.label)+'</small></li>').join('');
     let input='';
     if(request){
-      input='<section class="input-request" data-request-id="'+esc(request.id)+'" aria-label="Agent input request"><h3>'+(['question','permission','plan'].includes(request.kind)?esc(a.name)+' needs your input':'Needs attention')+'</h3><p class="input-prompt">'+esc(request.prompt)+'</p>'+(request.detail&&request.detail!==request.prompt?'<div class="input-detail">'+esc(request.detail)+'</div>':'')+request.questions.map((q,qi)=>'<fieldset><legend>'+esc(q.prompt)+'</legend>'+(q.multiSelect?'<p class="hint">Choose any that apply.</p>':'')+'<div class="input-options">'+q.options.map((option,oi)=>button('input-choice:'+qi+':'+oi,'<strong>'+esc(option.label)+'</strong>'+(option.description?'<span>'+esc(option.description)+'</span>':''),'class="input-option" aria-pressed="'+!!conversation.answers[q.id]?.includes(option.label)+'" '+(pending?'disabled':''))).join('')+'</div></fieldset>').join('')+'<p class="hint">'+esc(request.source)+' · '+esc(clock(request.updatedAt))+(request.stale||feedStale?' · stale':'')+'</p></section>';
+      input='<section class="input-request" data-request-id="'+esc(request.id)+'" aria-label="Agent input request"><h3>'+(['question','permission','plan'].includes(request.kind)?esc(a.name)+' needs your input':'Needs attention')+'</h3><p class="input-prompt">'+esc(request.prompt)+'</p>'+(request.detail&&request.detail!==request.prompt?'<div class="input-detail">'+esc(request.detail)+'</div>':'')+request.questions.map((q,qi)=>'<fieldset><legend>'+esc(q.prompt)+'</legend>'+(q.multiSelect?'<p class="hint">Choose any that apply.</p>':'')+'<div class="input-options">'+q.options.map((option,oi)=>button('input-choice:'+qi+':'+oi,'<strong>'+esc(option.label)+'</strong>'+(option.description?'<span>'+esc(option.description)+'</span>':''),'class="input-option" aria-pressed="'+!!conversation.answers[q.id]?.includes(option.label)+'" '+(pending||conversation.deliveryLocked?'disabled':''))).join('')+'</div></fieldset>').join('')+'<p class="hint">'+esc(request.source)+' · '+esc(clock(request.updatedAt))+(request.stale||feedStale?' · stale':'')+'</p></section>';
     }else if(a.status==='blocked')input='<section class="input-request"><h3>Needs attention</h3><p class="input-prompt">'+esc(a.attention||'The source marked this agent blocked, but has not supplied its question or blocker.')+'</p><p class="hint">A blocked status can indicate a dependency or failure. A reply is available when the task source supplies a supported input route.</p></section>';
     else if(prStage(a.pr)==='blocked')input='<section class="input-request"><h3>The PR needs attention</h3><p class="input-prompt">'+esc(a.pr?.reason||'The pull request is blocked. Its review desk shows the available evidence.')+'</p>'+button('tab:review','Open PR desk')+'</section>';
     const composer=PUBLIC_DEMO&&!capability.demo?'<p class="hint">This is a sample village. Find a resident marked “needs input” to try a practice conversation.</p>':
@@ -467,9 +544,9 @@ export function createObservatory(api){
       '<div class="section-head"><h3>From the workbench</h3>'+activityPagingButtons(cache)+'</div><p class="hint">'+esc(cache.source)+(cache.stale?' · stale — '+esc(cache.error||'connection interrupted'):' · recorded activity')+'</p><ol class="journal" tabindex="0" aria-label="Agent conversation activity">'+eventHtml(cache.events)+'</ol>';
   }
   async function sendMessage(){
-    const a=byId(interiorId||selected);if(!a)return;
+    const a=evidenceFor(selected);if(!a)return;
     const conversation=conversationFor(a),capability=capabilityFor(a),inputRequest=normalizeInputRequest(a.inputRequest);
-    if(!capability.available||['sending','unconfirmed'].includes(conversation.phase)||!conversation.text.trim()||conversation.text.trim()===conversation.uncertainPayload)return;
+    if(!capability.available||conversation.deliveryLocked||['sending','unconfirmed'].includes(conversation.phase)||!conversation.text.trim()||conversation.text.trim()===conversation.uncertainPayload)return;
     const text=conversation.text.trim();if(text.length>MAX_MESSAGE_LENGTH)return;
     if(capability.demo){
       if(api.answerDemo?.(a.id,text,inputRequest.id)){
@@ -478,29 +555,27 @@ export function createObservatory(api){
       }
       return;
     }
-    conversation.requestId ||= crypto.randomUUID();conversation.payload=text;conversation.phase='sending';conversation.notice='Submitting your message…';
-    const epoch=sourceKey,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);renderPanel(selected);
+    const client=replyClientFor(a);if(!client)return;
+    conversation.payload=text;conversation.phase='sending';conversation.notice='Checking the current task and question…';
+    const epoch=sourceKey,pending=client.send({...a,isStale:feedStale||a.isStale},text);renderPanel(selected);
     try{
-      const response=await fetch(capability.url,{method:'POST',credentials:'omit',redirect:'error',signal:controller.signal,headers:{'content-type':'application/json','x-cottagecode-request':'user-message'},body:JSON.stringify({taskId:a.taskId,message:text,requestId:conversation.requestId,...(capability.mode==='respond'&&inputRequest?{inputRequestId:inputRequest.id,inputRequestVersion:inputRequestVersion(inputRequest)}:{})})});
-      const result=await response.json();
-      if(result.delivery==='unconfirmed')throw new Error('Delivery is unconfirmed. Check the task before sending this message again.');
-      if(!response.ok){
-        if(result.delivery!=='not_sent')throw new Error('Delivery is unconfirmed. Check the task before sending again.');
-        conversation.phase='error';conversation.notice=String(result.error||'The source declined this message.');conversation.requestId=null;return;
+      const result=await pending,delivery=replyPresentation(a,result);
+      conversation.phase=delivery.phase;conversation.notice=delivery.notice;conversation.deliveryLocked=delivery.locked;
+      if(result.phase==='uncertain')conversation.uncertainPayload=text;
+      if(result.phase==='sent'){
+        const label=result.receipt?.delivery==='accepted'?'Accepted by task source':'Submitted to agent terminal';
+        conversation.sent.push({text,timestamp:Date.now(),label});conversation.sent.splice(0,Math.max(0,conversation.sent.length-20));
+        conversation.text='';conversation.answers={};
+        if(epoch===sourceKey)ensureActivity(a);
       }
-      if(!result.ok||!['submitted','accepted'].includes(result.delivery))throw new Error('The source did not confirm delivery. Check the task before sending again.');
-      const label=result.delivery==='submitted'?'Submitted to agent terminal':'Accepted by task source';
-      conversation.sent.push({text,timestamp:Date.now(),label});conversation.sent.splice(0,Math.max(0,conversation.sent.length-20));
-      conversation.text='';conversation.requestId=null;conversation.phase='sent';conversation.notice=label+'. Replies appear in the recorded activity when the source supplies them.';
-      if(epoch===sourceKey)ensureActivity(a);
-    }catch(error){conversation.phase='unconfirmed';conversation.uncertainPayload=text;conversation.notice=error.name==='AbortError'?'Delivery is unconfirmed after a timeout. Check the task before sending again.':error.message||'Delivery is unconfirmed. Check the task before sending again.';}
-    finally{clearTimeout(timeout);if(epoch===sourceKey&&(selected===a.id||interiorId===a.id))renderPanel(selected);}
+    }finally{if(epoch===sourceKey&&selected===a.id)renderPanel(selected);}
   }
+
   function renderPanel(id){
     selected=id;
     if(mode==='board'||mode==='scrapbook'){renderHistory();return true;}
-    const a=byId(mode==='room'?interiorId:id);if(!a)return false;
-    const pr=normalizePr(a.pr),stage=pr.stage,s=STAGES[stage],cache=cacheFor(a);
+    const a=evidenceFor(id);if(!a)return false;
+    const pr=taskView(a,{stale:feedStale,endpoint:api.getEndpoint()}).pr,stage=pr.stage,s=STAGES[stage],cache=cacheFor(a);
     let content='';
     if(tab==='talk'){
       content=talkHtml(a,cache);
@@ -520,16 +595,17 @@ export function createObservatory(api){
       content='<h3>On the shelves</h3>'+(a.result?'<div class="request-paper">'+esc(a.result)+'</div>':'')+(rows.length?'<ul class="artifact-list">'+rows.map(e=>'<li>'+link(e.url,e.title||'Artifact')+'</li>').join('')+'</ul>':'<p class="hint">Artifacts appear here when the feed supplies them.</p>');
       if(stage==='merged')content='<h3>A keepsake from this work</h3><p class="hint">Merged · '+esc(clock(pr.mergedAt))+'</p>'+content;
     }else{
-      content='<h3>Today’s work</h3><p>'+esc(a.task&&a.task!=='-'?a.task:'Task description unavailable')+'</p><div class="current-activity">'+esc(latestLine(a)||'No current activity supplied.')+'</div>'+lifecycleHtml(a)+'<h3>Pull request</h3>'+prSnapshotHtml(pr)+'<dl><dt>Task started</dt><dd>'+esc(clock(a.taskStartedAt))+'</dd><dt>Elapsed</dt><dd>'+esc(elapsed(a))+'</dd><dt>Session started</dt><dd>'+esc(clock(a.sessionStartedAt))+'</dd><dt>Last signal</dt><dd>'+esc(clock(a.updatedAt))+'</dd><dt>Model</dt><dd>'+esc(a.model||'Unavailable')+'</dd><dt>Branch</dt><dd>'+esc(a.branch||'Unavailable')+'</dd></dl><h3>Pinned request</h3><p class="request-preview">'+esc(a.originalAsk?a.originalAsk.slice(0,230)+(a.originalAsk.length>230?'…':''):'Original request not supplied.')+'</p>'+button('tab:request','Read the pinned note');
+      content=evidenceOverviewHtml(a,{stale:feedStale,endpoint:api.getEndpoint(),activity:latestLine(a)});
     }
     const nav=[['overview','Clock'],['request','Request'],['journal','Journal'],['todos','To-do'],['review','PR desk'],['artifacts','Shelves']].map(([key,label])=>button('tab:'+key,label,'aria-pressed="'+(tab===key)+'"')).join('');
-    const header='<div class="inspector-heading"><span class="eyebrow">'+esc(a.town)+' · '+(mode==='room'?'INSIDE':'COTTAGE')+'</span><h2>'+esc(a.name)+'</h2></div><div class="inspector-chips"><span class="status-chip">'+esc(a.status)+'</span><span class="pr-chip" style="--pr-color:'+s.color+'">'+s.symbol+' '+s.label+'</span></div>';
-    const actions='<div class="cottage-actions">'+button(mode==='room'?'leave':'enter',mode==='room'?'Leave cottage ↗':'Enter cottage ↗')+button('talk','Talk to '+esc(a.name),'aria-pressed="'+(tab==='talk')+'"')+button('follow',followId===a.id?'Leave bench':'Follow from bench')+handoffAction(a.handoffUrl)+button('postcard','Make a postcard')+'</div>';
+    const header='<div class="inspector-heading"><span class="eyebrow">'+esc(a.town)+' · '+(mode==='room'&&interiorId===a.id?'INSIDE':'COTTAGE')+'</span><h2>'+esc(a.name)+'</h2></div><div class="inspector-chips"><span class="status-chip">'+esc(a.status)+'</span><span class="pr-chip" style="--pr-color:'+s.color+'">'+s.symbol+' '+s.label+'</span></div>';
+    const actions='<div class="cottage-actions">'+button(mode==='room'&&interiorId===a.id?'leave':'enter',mode==='room'&&interiorId===a.id?'Leave cottage ↗':'Enter cottage ↗')+button('talk','Talk to '+esc(a.name),'aria-pressed="'+(tab==='talk')+'"')+button('follow',followId===a.id?'Leave bench':'Follow from bench')+handoffAction(a.handoffUrl)+button('postcard','Make a postcard')+'</div>';
     const worktree=worktreeActionsHtml(a);
-    replacePanel(header+actions+'<nav class="room-tabs" aria-label="Cottage objects">'+nav+'</nav>'+content+worktree,(mode==='room'?interiorId:id)+'|'+(a.taskId||'')+':'+tab);
+    replacePanel(header+actions+'<nav class="room-tabs" aria-label="Cottage objects">'+nav+'</nav>'+content+worktree,id+'|'+(a.taskId||'')+':'+tab);
     return true;
   }
   function showHistory(next='board'){
+    api.activateTown?.();
     api.showDetails?.();
     if(mode==='room')leave();followId=null;historyView=next==='board'?'since':'all';replaying=false;setMode(next);renderHistory();
   }
@@ -547,10 +623,10 @@ export function createObservatory(api){
   panel.addEventListener('input',e=>{
     if(e.target.id==='replay-range'){replaying=false;replayEvents=history.events();replayIndex=Number(e.target.value);showReplay();}
     if(e.target.id==='agent-message'){
-      const a=byId(interiorId||selected);if(!a)return;
+      const a=evidenceFor(selected);if(!a)return;
       const conversation=conversationFor(a);conversation.text=e.target.value;
-      if(conversation.phase!=='sending'&&conversation.text.trim()!==conversation.payload){conversation.phase='idle';conversation.requestId=null;conversation.notice='';}
-      const send=panel.querySelector('[data-action="send-message"]');if(send)send.disabled=!capabilityFor(a).available||!conversation.text.trim()||['sending','unconfirmed'].includes(conversation.phase)||conversation.text.trim()===conversation.uncertainPayload;
+      if(!conversation.deliveryLocked&&!['sending','unconfirmed'].includes(conversation.phase)&&conversation.text.trim()!==conversation.payload){conversation.phase='idle';conversation.requestId=null;conversation.notice='';}
+      const send=panel.querySelector('[data-action="send-message"]');if(send)send.disabled=!capabilityFor(a).available||conversation.deliveryLocked||!conversation.text.trim()||['sending','unconfirmed'].includes(conversation.phase)||conversation.text.trim()===conversation.uncertainPayload;
     }
   });
   panel.addEventListener('submit',e=>{if(e.target.id==='agent-conversation'){e.preventDefault();sendMessage();}});
@@ -558,23 +634,23 @@ export function createObservatory(api){
     const action=e.target.closest('[data-action]')?.dataset.action;if(!action)return;
     if(action==='enter')enter(selected);
     else if(action==='leave')leave();
-    else if(action==='follow')follow(interiorId||selected);
-    else if(action==='talk')talk(interiorId||selected);
-    else if(action==='postcard')extras.openPostcard(interiorId||selected);
+    else if(action==='follow')follow(selected);
+    else if(action==='talk')talk(selected);
+    else if(action==='postcard')extras.openPostcard(selected);
     else if(action.startsWith('input-choice:')){
-      const a=byId(interiorId||selected),request=normalizeInputRequest(a?.inputRequest);if(!request)return;
-      const conversation=conversationFor(a);if(conversation.phase==='sending')return;
+      const a=evidenceFor(selected),request=normalizeInputRequest(a?.inputRequest);if(!request)return;
+      const conversation=conversationFor(a);if(conversation.deliveryLocked||['sending','unconfirmed'].includes(conversation.phase))return;
       const [,qi,oi]=action.split(':'),question=request.questions[Number(qi)],option=question?.options[Number(oi)];if(!option)return;
       const chosen=conversation.answers[question.id]||[];
       conversation.answers[question.id]=question.multiSelect?(chosen.includes(option.label)?chosen.filter(label=>label!==option.label):[...chosen,option.label]):[option.label];
       conversation.text=request.questions.filter(q=>conversation.answers[q.id]?.length).map(q=>(request.questions.length>1?q.prompt+'\n':'')+conversation.answers[q.id].join(', ')).join('\n\n');
       conversation.phase='idle';conversation.notice='';conversation.requestId=null;renderPanel(selected);$('agent-message')?.focus({preventScroll:true});
     }
-    else if(action.startsWith('tab:')){tab=action.slice(4);selectedObject=({request:'request',journal:'workbench',review:'review',artifacts:'shelf',overview:'clock'})[tab];renderPanel(selected);if(['journal','todos'].includes(tab))ensureActivity(byId(interiorId||selected));}
-    else if(action==='older')await ensureActivity(byId(interiorId||selected),{older:true});
-    else if(action==='latest'){const a=byId(interiorId||selected);if(a){returnToLatestActivity(cacheFor(a));renderPanel(selected);const log=panel.querySelector('.journal');if(log)log.scrollTop=log.scrollHeight;}}
-    else if(action==='copy'){try{await navigator.clipboard.writeText(byId(interiorId||selected).worktreePath);e.target.textContent='Copied';}catch{e.target.textContent='Copy unavailable';}}
-    else if(action==='handoff'){const url=safeHttpsUrl(byId(interiorId||selected)?.handoffUrl);if(url)window.open(url,'_blank','noopener,noreferrer');}
+    else if(action.startsWith('tab:')){tab=action.slice(4);selectedObject=selected===interiorId?({request:'request',journal:'workbench',review:'review',artifacts:'shelf',overview:'clock'})[tab]:null;renderPanel(selected);if(['journal','todos'].includes(tab))ensureActivity(evidenceFor(selected));}
+    else if(action==='older')await ensureActivity(evidenceFor(selected),{older:true});
+    else if(action==='latest'){const a=evidenceFor(selected);if(a){returnToLatestActivity(cacheFor(a));renderPanel(selected);const log=panel.querySelector('.journal');if(log)log.scrollTop=log.scrollHeight;}}
+    else if(action==='copy'){try{await navigator.clipboard.writeText(evidenceFor(selected).worktreePath);e.target.textContent='Copied';}catch{e.target.textContent='Copy unavailable';}}
+    else if(action==='handoff'){const url=safeHttpsUrl(evidenceFor(selected)?.handoffUrl);if(url)window.open(url,'_blank','noopener,noreferrer');}
     else if(action.startsWith('jump:'))focusCottage(action.slice(5));
     else if(action.startsWith('history:')){historyView=action.slice(8);renderHistory();}
     else if(action==='back'){setMode('town');renderPanel(selected);}
@@ -621,12 +697,15 @@ export function createObservatory(api){
     const nextKey=api.getSourceKey?.()||api.getEndpoint()||'demo';
     const sourceChanged=nextKey!==sourceKey;
     if(sourceChanged){
-      if(mode==='room')leave();
+      if(mode==='room')leave({activate:false});
       sourceKey=nextKey;for(const c of inflight.values())c.abort();inflight.clear();activity.clear();rooms.clear();activityLines.clear();
       history=createHistory({storage,key:sourceKey});historyInitialized=false;seenHandoffs.clear();couriers=[];knownKids.clear();apprentices=[];player=null;returnTo=null;followId=null;
       setMode('town');selected=null;prFilter=null;stageSignature='';rosterSignature='';replaying=false;replayEvents=[];replayIndex=-1;
     }
     const changes=history.observe(agents,{initial:!historyInitialized});
+    // Only newly observed changes travel through town; a source switch resets
+    // decorative traffic without replaying its initial inventory.
+    api.onMilestones?.(historyInitialized?changes:[],{sourceKey,sourceChanged});
     for(const e of changes){if(e.text==='PR · ready')sound.play('ready');if(e.text==='Task done')sound.play('done');if(e.text==='Task blocked'||e.text==='PR · blocked')sound.play('blocked');}
     for(const a of agents){
       if(a.parent&&!knownKids.has(a.id)){
@@ -644,7 +723,7 @@ export function createObservatory(api){
       activityLines.set(a.id,line);
     }
     if(mode==='room'){
-      if(!byId(interiorId))leave();
+      if(!byId(interiorId))leave({activate:false});
       else{const plot=plotFor(interiorId);if(plot)returnTo=cottageReturnPoint(plot);}
     }
     historyInitialized=true;placePlayer();if(sourceChanged)scrollToPlayer(true);
@@ -660,7 +739,7 @@ export function createObservatory(api){
     board=w.square?{x:w.square.x+2,y:w.square.y-8}:{x:w.roadX+26,y:(w.roadYs?.[0]||w.height-60)+16};
     gramophone={x:board.x+40,y:board.y};
     if(mode==='room'&&byId(interiorId)){const newRoom=roomFor(byId(interiorId));if(newRoom.seed!==room.seed){room=newRoom;roomPlayer={...room.door};}}
-    updatePrTally();updateRoster();ensureActivity(byId(interiorId||selected));renderPanel(selected);
+    updatePrTally();updateRoster();ensureActivity(evidenceFor(selected));renderPanel(selected);
   }
   function drawApprenticeArrivals(ctx,time){
     if(mode!=='town')return;
@@ -728,7 +807,7 @@ export function createObservatory(api){
       const near=room.objects.filter(o=>o.interactable&&o.id!=='exit').sort((a,b)=>nearRect(roomPlayer,a)-nearRect(roomPlayer,b))[0];
       hint(distance(roomPlayer,roomHost())<30?'E · Talk to '+(byId(interiorId)?.name||'your host')+' · Walk out through the door to leave':near&&nearRect(roomPlayer,near)<30?'E · '+near.label+' · Walk out through the door to leave':rest?'Your host is tucked in · E beside the bed to talk · Walk into the doorway to leave':'Walk around your host’s cottage · E near your host to talk · Walk into the doorway to leave');
     }else drawTown(api.ctx,time,dt,moving);
-    if(replaying){replayTimer+=dt;if(replayTimer>1.8){replayTimer=0;replayIndex++;if(replayIndex>=replayEvents.length){replaying=false;replayIndex=replayEvents.length-1;renderHistory();}showReplay();}}
+    if(replaying&&!suspended){replayTimer+=dt;if(replayTimer>1.8){replayTimer=0;replayIndex++;if(replayIndex>=replayEvents.length){replaying=false;replayIndex=replayEvents.length-1;renderHistory();}showReplay();}}
   }
   function drawDispatch(ctx,p,time){
     const stage=prStage(p.agent.pr),s=STAGES[stage],x=p.x-15,y=p.y+55;
@@ -749,7 +828,9 @@ export function createObservatory(api){
     if(p.agent.pr?.number){ctx.fillStyle=label;ctx.fillText('#'+p.agent.pr.number,x-2,y+26);}
     else if(stage==='none'){ctx.fillStyle=label;ctx.font='6px "Silkscreen",monospace';ctx.fillText('NO PR',x-4,y+26);}
   }
-  return {update,draw,renderPanel,handleClick,enter,leave,follow,focusCottage,drawDispatch,latestLine,visible,talk,
+  return {update,draw,renderPanel,handleClick,enter,leave,follow,focusCottage,inspectCottage,
+    setSuspended(value){suspended=Boolean(value);keys.clear();},
+    drawDispatch,latestLine,visible,talk,
     unfollow(){followId=null;replaying=false;keys.clear();if(mode!=='room')setMode(mode);},
     drawAtmosphere:(ctx,world,time,beforePalette)=>extras.drawTown(ctx,world,time,reduce,beforePalette),
     drawApprenticeArrivals,
@@ -759,6 +840,6 @@ export function createObservatory(api){
     apprenticeArrival:(id,time=performance.now()/1000)=>apprenticeResidentPosition(apprentices,id,api.getPlots(),time,null,{reduce}),
     isTalking:id=>talkingId===id&&performance.now()<talkingUntil,
     get player(){return player;},get mode(){return mode;},
-    get state(){return {mode,selected,interiorId,roomSeed:room?.seed,roomPlayer,resident:room?{...room.resident,...roomHost()}:null,resting:!!restForRoom(),roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(interiorId||selected),...extras.state};}
+    get state(){return {mode,selected,interiorId,suspended,roomSeed:room?.seed,roomPlayer,resident:room?{...room.resident,...roomHost()}:null,resting:!!restForRoom(),roomDoor:room?.door,player,returnTo,tab,followId,prFilter,feedStale,talking:talkingId=== (interiorId||selected)&&performance.now()<talkingUntil,historyCount:history?.events().length||0,sound:sound.enabled,reduce,replaying,replayIndex,relationships,couriers:couriers.length,apprentices:apprentices.length,activity:activity.get(selected),...extras.state};}
   };
 }

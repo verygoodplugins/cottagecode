@@ -25,7 +25,8 @@ test('explicit history inspection and the current room survive inventory updates
   ];
   assert.equal(cottageSelection(agents,{selected:'history',showSettled:true}),'history');
   assert.equal(cottageSelection(agents,{selected:'history',showSettled:false}),'history');
-  assert.equal(cottageSelection(agents,{selected:'working',interiorId:'history'}),'history');
+  assert.equal(cottageSelection(agents,{selected:'working',interiorId:'history'}),'working','inspected evidence stays independent of the occupied room');
+  assert.equal(cottageSelection(agents,{selected:'removed',interiorId:'history'}),'history','the room host remains a fallback when inspected evidence disappears');
   assert.equal(cottageSelection(agents.slice(1),{selected:'history',interiorId:'history'}),'working');
   assert.equal(cottageSelection([],{selected:'working'}),null);
 });

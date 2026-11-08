@@ -3,15 +3,19 @@ export const ZOOM_LEVELS = Object.freeze([50, 75, 100, 125, 150, 200]);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export function nextZoom(current, direction) {
-  const index = ZOOM_LEVELS.indexOf(current);
-  return ZOOM_LEVELS[clamp((index < 0 ? 2 : index) + Math.sign(direction), 0, ZOOM_LEVELS.length - 1)];
+  if (!direction) return current;
+  if (direction > 0) return ZOOM_LEVELS.find(level => level > current) ?? ZOOM_LEVELS.at(-1);
+  // An automatic Overview fit may sit below the manual zoom range. Keep it
+  // there on minus; plus returns to the first ordinary step without jumping.
+  if (current < ZOOM_LEVELS[0]) return current;
+  return ZOOM_LEVELS.filter(level => level < current).at(-1) ?? ZOOM_LEVELS[0];
 }
 
-/** Overview never enlarges cottages beyond their normal scale. */
+/** Overview fits separated districts too, without enlarging beyond normal scale. */
 export function overviewZoom(bounds, {width,height,right=0,bottom=0,baseScale,padding=24}) {
   const fit = Math.min(Math.max(1,width-right-padding*2)/Math.max(1,bounds.w),
     Math.max(1,height-bottom-padding*2)/Math.max(1,bounds.h))/baseScale*100;
-  return ZOOM_LEVELS.filter(level => level <= Math.min(100,fit)).at(-1) || ZOOM_LEVELS[0];
+  return ZOOM_LEVELS.filter(level => level <= Math.min(100,fit)).at(-1) || Math.max(.01,Math.floor(fit*100)/100);
 }
 
 export function zoomKey(event) {
