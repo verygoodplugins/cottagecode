@@ -237,6 +237,53 @@ export function createFeed({
   let stale = false;
   let errors = [];
   let scanning = null;
+  let scanAgain = false;
+  let catchupTimer = null;
+  let started = false;
+  let revision = 0;
+  let published = "";
+  const listeners = new Set();
+
+  function publish() {
+    // Observation timestamps advance during fallback polling. Only a changed
+    // public snapshot needs to wake browsers; their clocks already tick locally.
+    const value = snapshot();
+    const signature = JSON.stringify({ ...value, checkedAt: undefined });
+    if (signature === published) return;
+    published = signature;
+    revision++;
+    for (const listener of listeners) {
+      try { listener(revision); } catch { /* One closed client cannot block the feed. */ }
+    }
+  }
+
+  function scan({ latest = false } = {}) {
+    if (scanning) {
+      if (latest) scanAgain = true;
+      return scanning;
+    }
+    if (catchupTimer !== null) { clearTimeout(catchupTimer); catchupTimer = null; }
+    scanning = (async () => {
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          scanAgain = false;
+          await doScan();
+          if (!scanAgain) break;
+        }
+        return snapshot();
+      } finally {
+        scanning = null;
+        if (scanAgain && started && catchupTimer === null) {
+          catchupTimer = setTimeout(() => {
+            catchupTimer = null;
+            if (started) void scan({ latest: true }).catch(() => {});
+          }, 0);
+          catchupTimer.unref?.();
+        }
+      }
+    })();
+    return scanning;
+  }
 
   async function doScan() {
     const nextErrors = [];
@@ -381,6 +428,7 @@ export function createFeed({
     errors = nextErrors;
     stale = errors.length > 0;
     if (!stale) lastSuccessAt = now();
+    publish();
     return snapshot();
   }
 
@@ -419,9 +467,23 @@ export function createFeed({
 
   return {
     snapshot,
-    scan() {
-      if (!scanning) scanning = doScan().finally(() => { scanning = null; });
-      return scanning;
+    scan,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    start() {
+      if (started) return;
+      started = true;
+      if (hubInventory.configured) hubInventory.start?.(() => {
+        if (started) void scan({ latest: true }).catch(() => {});
+      });
+    },
+    stop() {
+      started = false;
+      scanAgain = false;
+      if (catchupTimer !== null) { clearTimeout(catchupTimer); catchupTimer = null; }
+      hubInventory.stop?.();
     },
     async flushEnrichment() {
       if (hubInventory.configured || typeof enrich.flush !== "function") return snapshot();
@@ -472,13 +534,14 @@ function isSameOriginRequest(req) {
 }
 
 export function createFeedServer(feed, { directory = HERE, messages = createHubMessenger() } = {}) {
-  return createServer(async (req, res) => {
+  const streams = new Set();
+  const server = createServer(async (req, res) => {
     const headers = { "cache-control": "no-store" };
     const json = (status, body) => { res.writeHead(status, { ...headers, "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
       const url = new URL(req.url, "http://localhost");
       const messageRoute = url.pathname.match(/^\/agents\/([^/]+)\/messages$/);
-      const isAgentRoute = url.pathname === "/agents" || /^\/agents\/[^/]+\/activity$/.test(url.pathname);
+      const isAgentRoute = ["/agents", "/agents/events"].includes(url.pathname) || /^\/agents\/[^/]+\/activity$/.test(url.pathname);
       if (isAgentRoute && !isSameOriginRequest(req)) return json(403, { error: "Cross-origin agent access is not allowed" });
       if (req.method === "OPTIONS") { res.writeHead(204, { ...headers, "access-control-allow-methods": "GET, POST, OPTIONS" }); return res.end(); }
       if (req.method === "POST" && messageRoute) {
@@ -503,6 +566,26 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
         return json(sent.status, sent.body);
       }
       if (req.method !== "GET" && req.method !== "HEAD") return json(405, { error: "Read-only endpoint" });
+      if (url.pathname === "/agents/events") {
+        if (typeof feed.subscribe !== "function") return json(404, { error: "Live notifications unavailable" });
+        res.writeHead(200, { ...headers, "content-type": "text/event-stream", "x-accel-buffering": "no" });
+        if (req.method === "HEAD") return res.end();
+        res.flushHeaders();
+        streams.add(res);
+        const notify = revision => {
+          // Notifications contain no Hub payload. Clients read the committed,
+          // normalized /agents snapshot, including its messaging capabilities.
+          if (!res.destroyed && !res.write(`event: change\ndata: ${JSON.stringify({ revision })}\n\n`)) res.destroy();
+        };
+        const unsubscribe = feed.subscribe(notify);
+        const heartbeat = setInterval(() => {
+          if (!res.destroyed && !res.write(": heartbeat\n\n")) res.destroy();
+        }, 15000);
+        heartbeat.unref?.();
+        res.once("close", () => { clearInterval(heartbeat); unsubscribe(); streams.delete(res); });
+        notify(null); // Every connection resynchronizes, including after restart.
+        return;
+      }
       if (url.pathname === "/agents") {
         const snapshot = feed.snapshot();
         return json(200, { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, conversation: messages.capability(agent, { stale: !!snapshot.stale, checkedAt: snapshot.checkedAt }) })) });
@@ -564,6 +647,14 @@ export function createFeedServer(feed, { directory = HERE, messages = createHubM
       else res.end();
     }
   });
+  server.on("listening", () => feed.start?.());
+  server.on("close", () => feed.stop?.());
+  const close = server.close;
+  server.close = function (...args) {
+    for (const response of streams) response.end();
+    return close.apply(this, args);
+  };
+  return server;
 }
 
 async function main() {

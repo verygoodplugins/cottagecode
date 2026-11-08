@@ -61,3 +61,40 @@ export function createLatestRefresh(run) {
     return active;
   };
 }
+
+/** Push wakeups are optional and belong only to the bundled same-origin feed. */
+export function createFeedNotifications({
+  origin,
+  EventSourceClass = globalThis.EventSource,
+  onChange = () => {},
+} = {}) {
+  let source = null, current = null, generation = 0;
+  function stop() {
+    generation++;
+    source?.close();
+    source = null;
+    current = null;
+  }
+  return {
+    sync(endpoint, { enabled = true } = {}) {
+      let url = null;
+      try {
+        const candidate = new URL(endpoint, origin);
+        if (enabled && endpoint && candidate.origin === origin && candidate.pathname === "/agents" &&
+          !candidate.search && !candidate.hash && !candidate.username && !candidate.password) url = candidate;
+      } catch { /* Custom feeds retain ordinary JSON polling. */ }
+      if (!url || typeof EventSourceClass !== "function") { stop(); return; }
+      if (source && current === url.href) return;
+      stop();
+      const epoch = generation;
+      current = url.href;
+      try {
+        source = new EventSourceClass(new URL("/agents/events", origin).href);
+        source.addEventListener("change", () => {
+          if (epoch === generation && source) onChange();
+        });
+      } catch { stop(); } // Polling is still active when SSE is unsupported.
+    },
+    stop,
+  };
+}
