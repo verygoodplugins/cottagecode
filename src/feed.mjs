@@ -238,6 +238,7 @@ export function createFeed({
   let errors = [];
   let scanning = null;
   let scanAgain = false;
+  let catchupTimer = null;
   let started = false;
   let revision = 0;
   let published = "";
@@ -261,14 +262,25 @@ export function createFeed({
       if (latest) scanAgain = true;
       return scanning;
     }
+    if (catchupTimer !== null) { clearTimeout(catchupTimer); catchupTimer = null; }
     scanning = (async () => {
       try {
-        do {
+        for (let pass = 0; pass < 2; pass++) {
           scanAgain = false;
           await doScan();
-        } while (scanAgain);
+          if (!scanAgain) break;
+        }
         return snapshot();
-      } finally { scanning = null; }
+      } finally {
+        scanning = null;
+        if (scanAgain && started && catchupTimer === null) {
+          catchupTimer = setTimeout(() => {
+            catchupTimer = null;
+            if (started) void scan({ latest: true }).catch(() => {});
+          }, 0);
+          catchupTimer.unref?.();
+        }
+      }
     })();
     return scanning;
   }
@@ -464,11 +476,13 @@ export function createFeed({
       if (started) return;
       started = true;
       if (hubInventory.configured) hubInventory.start?.(() => {
-        void scan({ latest: true }).catch(() => {});
+        if (started) void scan({ latest: true }).catch(() => {});
       });
     },
     stop() {
       started = false;
+      scanAgain = false;
+      if (catchupTimer !== null) { clearTimeout(catchupTimer); catchupTimer = null; }
       hubInventory.stop?.();
     },
     async flushEnrichment() {
