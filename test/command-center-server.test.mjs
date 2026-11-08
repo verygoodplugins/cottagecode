@@ -51,3 +51,21 @@ test('town preview serves the original scene and production modules without wide
   assert.equal((await fetch(url+'/modules/command-model.mjs')).status,200);
   for(const route of ['/?scenario=1','/modules/audio/../../package.json','/modules/.env','/v1/tasks'])assert.equal((await fetch(url+route)).status,400,route);
 });
+
+test('encoded-colon child IDs preserve the advertised route for activity and explicit messages',async t=>{
+  const {url,upstreamUrl,seen}=await fixture(t),route='/agents/session%3Aroot1234';
+  const activity=await fetch(url+route+'/activity?before=cursor&limit=10');
+  assert.equal(activity.status,200);assert.deepEqual(seen.map(row=>row.url),[route+'/activity?before=cursor&limit=10']);
+  const body=JSON.stringify({taskId:'session:root1234',message:'Stub only',requestId:'stub-child-1234'});
+  const response=await fetch(url+route+'/messages',{method:'POST',headers:headers(url),body});
+  assert.equal(response.status,200);assert.deepEqual(seen.map(row=>row.url),[route+'/activity?before=cursor&limit=10',route+'/messages']);
+  assert.equal(seen[1].method,'POST');assert.equal(seen[1].origin,upstreamUrl);
+  assert.equal(seen[1].request,'user-message');assert.equal(seen[1].body,body);
+});
+
+test('encoded child route separators, traversal, double encoding and malformed escapes never reach upstream',async t=>{
+  const {url,seen}=await fixture(t);
+  for(const suffix of ['a%2Fb','a%5Cb','a%252Fb','%2e','%2e%2e','bad%'])
+    assert.equal((await fetch(url+`/agents/${suffix}/activity`)).status,400,suffix);
+  assert.equal(seen.length,0);
+});

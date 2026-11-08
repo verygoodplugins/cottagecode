@@ -9,7 +9,7 @@ const now=Date.parse('2026-11-04T10:00:00Z');
 const agent={id:'selected-evidence',taskId:'task-selected',status:'blocked',terminal:false,
   inputRequest:{id:'q1',prompt:'Which scope?',options:['Small','Full']},
   conversation:{available:true,mode:'respond',messageUrl:'/agents/selected-evidence/messages',checkedAt:now}};
-const storage=()=>{const records=new Map();return {getItem:key=>records.get(key)??null,setItem:(key,value)=>records.set(key,value)};};
+const storage=()=>{const records=new Map();return {records,getItem:key=>records.get(key)??null,setItem:(key,value)=>records.set(key,value)};};
 
 test('evidence clocks distinguish task age, execution, session, observation and progress',()=>{
   const html=evidenceOverviewHtml({...agent,task:'Ship <feature>',harness:'codex',model:'gpt-6.1-sol-full-source-name',
@@ -153,4 +153,41 @@ test('receipt reconciliation preserves real uncertainty and accepted current-que
   const accepted={phase:'sent',notice:'Accepted',inputVersion:inputRequestVersion(agent.inputRequest)};
   reconcileReplyReceipt(draft,agent,accepted);
   assert.equal(draft.phase,'sent');assert.equal(draft.deliveryLocked,true);
+});
+
+test('inspector replies POST the exact normalized advertised same-origin custom route and save receipts',async t=>{
+  for(const [label,messageUrl,expected] of [
+    ['relative','/api/tasks/task-selected/messages','http://127.0.0.1:8790/api/tasks/task-selected/messages'],
+    ['absolute same-origin','http://127.0.0.1:8790/custom/task-selected/reply','http://127.0.0.1:8790/custom/task-selected/reply'],
+    ['query-bearing','/api/tasks/task-selected/messages?channel=review','http://127.0.0.1:8790/api/tasks/task-selected/messages?channel=review'],
+  ])await t.test(label,async()=>{
+    const shown={...agent,conversation:{...agent.conversation,messageUrl}},saved=storage(),posts=[];
+    const fetchImpl=async(url,options={})=>{
+      if(options.method==='POST'){
+        posts.push({url,options});
+        return {ok:true,json:async()=>({ok:true,delivery:'accepted',requestId:JSON.parse(options.body).requestId})};
+      }
+      return {ok:true,json:async()=>({agents:[shown]})};
+    };
+    const client=createReplyClient({endpoint,storage:saved,fetchImpl,now:()=>now});
+    const result=await client.send(shown,'Small');
+    assert.equal(result.phase,'sent');assert.equal(posts.length,1);
+    assert.equal(posts[0].url,expected);
+    assert.equal(client.state(shown.taskId).phase,'sent');
+    const stored=JSON.parse(saved.records.get(`cottagecode:command-center:reply:${new URL(endpoint).href}:task-selected`));
+    assert.equal(stored.phase,'sent');assert.equal(stored.receipt.requestId,posts[0].options.body&&JSON.parse(posts[0].options.body).requestId);
+  });
+});
+
+test('inspector preflight rejects a changed custom route or query before POST',async t=>{
+  for(const changedUrl of ['/api/tasks/task-selected/other','/api/tasks/task-selected/messages?channel=changed'])await t.test(changedUrl,async()=>{
+    const shown={...agent,conversation:{...agent.conversation,messageUrl:'/api/tasks/task-selected/messages?channel=review'}};let posts=0;
+    const latest={...shown,conversation:{...shown.conversation,messageUrl:changedUrl}};
+    const client=createReplyClient({endpoint,storage:storage(),now:()=>now,fetchImpl:async(_url,options={})=>{
+      if(options.method==='POST'){posts++;return {ok:true,json:async()=>({ok:true,delivery:'accepted',requestId:JSON.parse(options.body).requestId})};}
+      return {ok:true,json:async()=>({agents:[latest]})};
+    }});
+    const result=await client.send(shown,'Small');
+    assert.equal(result.phase,'error');assert.match(result.notice,/route changed/i);assert.equal(posts,0);
+  });
 });

@@ -30,7 +30,6 @@ export function createReplyClient({endpoint='http://127.0.0.1:8790/agents',fetch
   }
   function fail(taskId,notice){const result={phase:'error',notice};states.set(taskId,result);return {...result};}
   function capability(agent,stale=false){return conversationCapability(agent,feed.href,{now:now(),stale:Boolean(stale||agent?.isStale||agent?.freshness?.isStale)});}
-  function exactRoute(agent,cap){try{const route=new URL(cap.url);return route.origin===feed.origin&&route.pathname===`/agents/${encodeURIComponent(agent.id)}/messages`&&!route.search&&!route.hash;}catch{return false;}}
   async function send(agent,message){
     const taskId=agent?.taskId;
     if(!taskId)return {phase:'error',notice:'The source has not identified a supported task.'};
@@ -42,7 +41,7 @@ export function createReplyClient({endpoint='http://127.0.0.1:8790/agents',fetch
     const value=typeof message==='string'?message.trim():'';
     if(!value||value.length>MAX_MESSAGE_LENGTH)return fail(taskId,`Write a message of 1–${MAX_MESSAGE_LENGTH} characters.`);
     const shownCapability=capability(agent);
-    if(!shownCapability.available||!exactRoute(agent,shownCapability))return fail(taskId,shownCapability.reason||'The task has no supported local message route.');
+    if(!shownCapability.available)return fail(taskId,shownCapability.reason||'The task has no supported local message route.');
     active.add(taskId);states.set(taskId,{phase:'checking',notice:'Checking the current task and question…'});
     let reserved=false,requestId;
     try{
@@ -56,7 +55,7 @@ export function createReplyClient({endpoint='http://127.0.0.1:8790/agents',fetch
       if((currentInput?.id??null)!==(shownInput?.id??null)||inputRequestVersion(currentInput)!==version)return fail(taskId,'The question or its choices changed. Refresh before replying.');
       const supported=capability(latest,snapshot.stale);
       if(!supported.available)return fail(taskId,supported.reason);
-      if(!exactRoute(latest,supported)||supported.mode!==shownCapability.mode||supported.url!==shownCapability.url)return fail(taskId,'The supported message route changed. Refresh before sending.');
+      if(supported.mode!==shownCapability.mode||supported.url!==shownCapability.url)return fail(taskId,'The supported message route changed. Refresh before sending.');
       if(supported.mode==='respond'&&!currentInput)return fail(taskId,'The source has not supplied an exact current question.');
       if(supported.mode==='redirect'&&currentInput)return fail(taskId,'The task has a pending question. Refresh before replying.');
       // Check persistent state again after the read preflight, before reserving the write.
