@@ -5,6 +5,34 @@ import {timestampMs,safeActivityUrl} from './activity.mjs';
 import {taskText} from './task-text.mjs';
 import {classifyOccupancy} from './occupancy.mjs';
 import {normalizePr} from './pr.mjs';
+import {attachHubTelemetry} from './hub-telemetry.mjs';
+import {createHubEventStream} from './hub-event-stream.mjs';
+
+// Hub's dashboard is a list of roots, not a lifecycle filter for their children.
+// Promote only explicitly linked, canonically fresh active sessions; cached
+// history remains untouched so a disappearing root cannot leave ghosts behind.
+function includeActiveFamilies(tasks, now) {
+  const active = cottage => cottage.conversationTarget?.recordKind==='external_session' &&
+    cottage.freshness?.isStale===false && ['working','blocked','idle'].includes(cottage.status) &&
+    ['running','queued','pending','needs_input','awaiting_input','awaiting_review'].includes(cottage.executionStatus);
+  for(const cottage of tasks.values()) {
+    if(cottage.inventoryScope!=='history'||!cottage.parent||!active(cottage))continue;
+    const seen=new Set([cottage.id]);let ancestor=tasks.get(cottage.parent),anchored=false,valid=false;
+    while(ancestor) {
+      if(seen.has(ancestor.id))break;
+      seen.add(ancestor.id);
+      if(ancestor.inventoryScope==='dashboard')anchored=true;
+      else if(!active(ancestor))break;
+      if(!ancestor.parent){valid=anchored;break;}
+      ancestor=tasks.get(ancestor.parent);
+    }
+    if(valid) {
+      const family={...cottage,inventoryScope:'family'};
+      family.occupancy=classifyOccupancy(family,now);
+      tasks.set(cottage.id,family);
+    }
+  }
+}
 
 export function toInventoryCottage(task, now=Date.now()) {
   const context=typeof task.context==='object' && task.context ? task.context : {};
@@ -27,6 +55,10 @@ export function toInventoryCottage(task, now=Date.now()) {
   },now);
   const request=taskText(task.originalRequest);
   cottage.taskId=task.id;
+  // The inventory's execution backend is explicit harness evidence; a model or
+  // the caller who dispatched the task is not a substitute for it.
+  cottage.harness=typeof task.harness==='string'&&task.harness.trim()?task.harness.trim().slice(0,120):
+    typeof task.backend==='string'&&task.backend.trim()?task.backend.trim().slice(0,120):null;
   // The shared inventory owns lifecycle evidence. Old local context and prose
   // must never override a fresher reconciliation (or invent a missing PR).
   const finalizationState=task.finalization?.status;
@@ -54,8 +86,14 @@ export function toInventoryCottage(task, now=Date.now()) {
   cottage.branch=task.branch || '';
   cottage.updatedAt=timestampMs(task.updatedAt) || cottage.updatedAt;
   cottage.inventorySource=task.source || null;
+  // The rollout observer writes cumulative usage to the shared event stream,
+  // not the legacy task counters (whose storage defaults are zero).
+  if(task.recordKind==='external_session'&&task.source==='codex_rollout') {
+    if(cottage.tokens===0)cottage.tokens=null;
+    if(cottage.cost===0)cottage.cost=null;
+  }
   cottage.dispatchedBy=task.provenance?.caller || task.provenance?.platform || task.platform || task.provider || 'hub';
-  cottage.freshness=task.freshness || {lastSeenAt:task.lastSeenAt || null,isStale:task.isStale===true};
+  cottage.freshness=task.freshness || {lastSeenAt:task.lastSeenAt || null,isStale:typeof task.isStale==='boolean'?task.isStale:null};
   cottage.resultLinks=resultLinks.map(({kind,url})=>({kind,url}));
   cottage.artifacts=resultLinks.map(link=>({url:link.url,title:taskText(link.label || link.title) || (link.kind==='pull_request'?'Pull request':'Result')}));
   cottage.conversationTarget={...cottage.conversationTarget,
@@ -75,7 +113,8 @@ export function toInventoryCottage(task, now=Date.now()) {
 
 export function createHubInventoryReader({
   baseUrl=process.env.AUTOHUB_HUB_BASE || '',token=process.env.AUTOHUB_HUB_TOKEN || process.env.COTTAGE_HUB_TOKEN || '',
-  fetchFn=globalThis.fetch,now=Date.now,ttl=5000,pageSize=500,historyTtl=60000,timeoutMs=45000,
+  fetchFn=globalThis.fetch,now=Date.now,ttl=5000,pageSize=500,historyTtl=60000,timeoutMs=45000,telemetryTimeoutMs=3000,
+  streamFactory=createHubEventStream,streamCoalesceMs=100,
 }={}) {
   let base=null;
   if(baseUrl) {
@@ -86,21 +125,81 @@ export function createHubInventoryReader({
     } catch {throw new Error('AUTOHUB_HUB_BASE must be an HTTP(S) URL without credentials.');}
   }
   let previous=null,checkedAt=0,inFlight=null,history=null,historyCheckedAt=0;
-  async function get(path) {
+  let revision=0,appliedRevision=0,fullRevision=0,appliedFullRevision=0,canonicalRevision=0;
+  const changedTasks=new Map();
+  let stream=null,onChange=null,notifyTimer=null;
+  function scheduleChange() {
+    if(onChange&&notifyTimer===null) {
+      notifyTimer=setTimeout(()=>{notifyTimer=null;onChange?.();},streamCoalesceMs);
+      notifyTimer.unref?.();
+    }
+  }
+  function invalidate(hint) {
+    const next=++revision;
+    if(hint.type==='resync'){fullRevision=next;canonicalRevision=next;}
+    else if(hint.type==='task'&&typeof hint.taskId==='string') {
+      canonicalRevision=next;
+      changedTasks.set(hint.taskId,next);
+      if(hint.parentTaskId)changedTasks.set(hint.parentTaskId,next);
+      // A replay burst is cheaper and more complete as one canonical rebuild.
+      if(changedTasks.size>200){fullRevision=next;changedTasks.clear();}
+    }
+    scheduleChange();
+  }
+  async function get(path,{allowMissing=false}={}) {
     const response=await fetchFn(new URL(path,base),{headers:{accept:'application/json',...(token?{authorization:`Bearer ${token}`}:{})},redirect:'error',signal:AbortSignal.timeout(timeoutMs)});
+    if(allowMissing&&response.status===404)return null;
     if(!response.ok)throw new Error('Hub inventory temporarily unavailable');
     return response.json();
   }
+  async function telemetry() {
+    const controller=new AbortController();let timer;
+    try {
+      return await Promise.race([
+        (async()=>{
+          const response=await fetchFn(new URL('agent-events/snapshot?limit=200',base),{headers:{accept:'application/json',...(token?{authorization:`Bearer ${token}`}:{})},redirect:'error',signal:controller.signal});
+          if(!response.ok)return null;
+          return await response.json();
+        })(),
+        new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(null);},Math.max(1,telemetryTimeoutMs));}),
+      ]);
+    }catch{return null;}finally{clearTimeout(timer);}
+  }
   async function refresh() {
     try {
+      const readingRevision=revision,readingFullRevision=fullRevision;
+      const changed=[...changedTasks].filter(([,value])=>value<=readingRevision).map(([id])=>id);
+      const telemetryRead=telemetry();
       const tasks=new Map();
-      let nextHistory=null;
+      let nextHistory=null,historyPaginated=false;
       // The Hub owns Live + recent membership. History alone cannot reproduce
       // it from PR links or task clocks, and includes old external children.
       // Read dashboard last so its newer rows win if a task changes mid-scan.
       for(const scope of ['history','dashboard']) {
-        if(scope==='history'&&history&&now()-historyCheckedAt<historyTtl){
+        if(scope==='history'&&history&&readingFullRevision===appliedFullRevision&&now()-historyCheckedAt<historyTtl){
           for(const [id,cottage] of history)tasks.set(id,cottage);
+          // Notifications supply identity only. Hydrate the current canonical
+          // row (and missing ancestry), including archive/delete/unlink changes.
+          const queue=[...changed],seen=new Set();
+          while(queue.length) {
+            const batch=queue.splice(0,4).filter(id=>!seen.has(id));
+            for(const id of batch)seen.add(id);
+            const details=await Promise.all(batch.map(async id=>({id,task:await get(`tasks/${encodeURIComponent(id)}`,{allowMissing:true})})));
+            for(const {id,task} of details) {
+              if(task&&task.id!==id)throw new Error();
+              if(!task||task.archived===true){tasks.delete(id);continue;}
+              const cottage={...toInventoryCottage(task,now()),inventoryScope:'history'};
+              cottage.occupancy=classifyOccupancy(cottage,now());
+              const cached=tasks.get(id);
+              // Version, not updatedAt: a parent-link change may preserve clocks.
+              if(!cached||cottage.version>=cached.version)tasks.set(id,cottage);
+              if(cottage.parent&&!tasks.has(cottage.parent)&&!seen.has(cottage.parent)) {
+                if(seen.size+queue.length>=200)throw new Error();
+                queue.push(cottage.parent);
+              }
+            }
+          }
+          nextHistory=new Map(tasks);
           continue;
         }
         const seen=new Set();let cursor='';
@@ -111,7 +210,9 @@ export function createHubInventoryReader({
           if(!Array.isArray(page.tasks))throw new Error();
           for(const task of page.tasks) {
             if(typeof task?.id!=='string'||!task.id)throw new Error();
-            const cottage={...toInventoryCottage(task,now()),inventoryScope:scope};
+            if(task.archived===true){tasks.delete(task.id);continue;}
+            const incoming=toInventoryCottage(task,now()),cached=tasks.get(task.id);
+            const cottage={...(cached&&cached.version>incoming.version?cached:incoming),inventoryScope:scope};
             cottage.occupancy=classifyOccupancy(cottage,now());
             tasks.set(task.id,cottage);
           }
@@ -119,18 +220,44 @@ export function createHubInventoryReader({
           if(page.has_more && (typeof cursor!=='string'||!cursor||seen.has(cursor)))throw new Error();
           if(cursor)seen.add(cursor);
         }while(cursor);
-        if(scope==='history')nextHistory=new Map(tasks);
+        if(scope==='history'){nextHistory=new Map(tasks);historyPaginated=true;}
       }
-      if(nextHistory){history=nextHistory;historyCheckedAt=now();}
-      previous={ok:true,agents:[...tasks.values()],keys:new Set(tasks.keys()),links:new Map([...tasks.keys()].map(id=>[id,new Set([id])]))};
-      checkedAt=now();return previous;
+      if(nextHistory){
+        history=nextHistory;
+        if(historyPaginated)historyCheckedAt=now();
+      }
+      includeActiveFamilies(tasks,now());
+      const toolSnapshot=await telemetryRead;
+      previous={ok:true,agents:[...tasks.values()].map(cottage=>attachHubTelemetry(cottage,toolSnapshot,now())),keys:new Set(tasks.keys()),links:new Map([...tasks.keys()].map(id=>[id,new Set([id])]))};
+      checkedAt=now();appliedRevision=readingRevision;appliedFullRevision=readingFullRevision;
+      for(const [id,value] of changedTasks)if(value<=readingRevision)changedTasks.delete(id);
+      return previous;
     }catch {throw new Error('Hub inventory temporarily unavailable');}
   }
   return {configured:Boolean(base),
+    start(callback) {
+      if(!base||stream)return;
+      onChange=callback;
+      stream=streamFactory({url:new URL('agent-events/stream',base),token,fetchFn,onChange:invalidate});
+      stream.start();
+    },
+    stop() {
+      stream?.stop();stream=null;onChange=null;
+      clearTimeout(notifyTimer);notifyTimer=null;
+    },
     async read(){
       if(!base)return {ok:true,missing:true,agents:[],keys:new Set(),links:new Map()};
-      if(previous && now()-checkedAt<ttl)return previous;
-      if(!inFlight)inFlight=refresh().finally(()=>{inFlight=null;});
+      if(previous && appliedRevision===revision && now()-checkedAt<ttl)return previous;
+      if(!inFlight)inFlight=(async()=>{
+        // An event arriving during canonical hydration cannot be marked served
+        // by the older response. Catch up once, then publish a coherent pass
+        // even when canonical writes continue; dirty versions and IDs survive
+        // for the next scan rather than requiring global stream quiescence.
+        let passes=0;
+        do {await refresh();passes++;}while(appliedRevision<canonicalRevision&&passes<2);
+        if(appliedRevision!==revision)scheduleChange();
+        return previous;
+      })().finally(()=>{inFlight=null;});
       return inFlight;
     },
     async detail(id){
@@ -140,7 +267,12 @@ export function createHubInventoryReader({
         if(task.id!==id)throw new Error();
         const cottage=toInventoryCottage(task,now());
         const scope=previous?.agents.find(agent=>agent.id===id)?.inventoryScope;
-        if(scope)cottage.inventoryScope=scope;
+        if(scope)cottage.inventoryScope=scope==='family'?'history':scope;
+        if(scope==='family') {
+          const family=new Map(previous.agents.map(agent=>[agent.id,agent]));
+          family.set(id,cottage);includeActiveFamilies(family,now());
+          cottage.inventoryScope=family.get(id).inventoryScope;
+        }
         cottage.occupancy=classifyOccupancy(cottage,now());
         return cottage;
       }catch {throw new Error('Hub task detail temporarily unavailable');}
