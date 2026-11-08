@@ -1,6 +1,7 @@
 import {fleetView, durationLabel, safeUrl} from './model.mjs';
 import {createScenario} from './scenario.mjs';
 import {createReplyClient, isTerminalForMessage} from './replies.mjs';
+import {draftVersion,reconcileDraft} from './drafts.mjs';
 import {inputRequestVersion} from '/src/input-request.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -33,7 +34,7 @@ const short = (text, length = 180) => String(text || '').length > length ? `${St
 const displayTerminal = task => Boolean(task.raw.terminal || ['done','completed','offline','cancelled','failed','interrupted'].includes(task.status));
 const terminal = task => isTerminalForMessage(task.raw);
 const canReply = task => task.capability.available && !terminal(task);
-const version = task => `${task.raw.taskId || task.id}:${inputRequestVersion(task.raw.inputRequest) || 'no-input'}`;
+const version = draftVersion;
 const taskById = id => state.fleet.tasks.find(task => task.id === id);
 const scoped = () => state.fleet.tasks.filter(task => !state.project || task.project === state.project);
 const prGroup = task => state.fleet.prs.find(pr => pr.key === task.prKey);
@@ -79,7 +80,7 @@ function updateModel() {
     if(!state.order.has(task.id)) state.order.set(task.id,state.order.size);
     if(!state.projectOrder.has(task.project)) state.projectOrder.set(task.project,state.projectOrder.size);
     const draft = state.drafts.get(task.id);
-    if(draft && draft.version !== version(task)) draft.changed = true;
+    if(draft) reconcileDraft(draft,task);
   }
   state.fleet.tasks.sort((a,b)=>state.order.get(a.id)-state.order.get(b.id));
   state.fleet.projects.sort((a,b)=>state.projectOrder.get(a.id)-state.projectOrder.get(b.id));
