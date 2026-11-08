@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 
 const localHosts=new Set(['127.0.0.1','localhost','[::1]']);
-const staticFiles=new Map([['/','index.html'],['/model.mjs','model.mjs'],['/scenario.mjs','scenario.mjs'],['/replies.mjs','replies.mjs'],['/app.mjs','app.mjs'],['/style.css','style.css']]);
+const staticFiles=new Map([['/','index.html'],['/model.mjs','model.mjs'],['/scenario.mjs','scenario.mjs'],['/replies.mjs','replies.mjs'],['/drafts.mjs','drafts.mjs'],['/app.mjs','app.mjs'],['/style.css','style.css']]);
 const MAX_BODY=32*1024;
 export function createLabServer({upstream='http://127.0.0.1:8787',fetchImpl=globalThis.fetch,town=false}={}){
   const target=new URL(upstream);

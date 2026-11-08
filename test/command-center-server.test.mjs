@@ -33,7 +33,7 @@ test('explicit local message proxy preserves validation headers for upstream aut
   assert.equal(seen.length,1);assert.equal(seen[0].origin,upstreamUrl);assert.equal(seen[0].request,'user-message');assert.equal(seen[0].body,body);
 });
 test('static routes only expose safe known modules and no filesystem traversal',async t=>{
-  const {url,seen}=await fixture(t);assert.equal((await fetch(url+'/model.mjs')).status,200);assert.equal((await fetch(url+'/src/pr.mjs')).status,200);
+  const {url,seen}=await fixture(t);assert.equal((await fetch(url+'/model.mjs')).status,200);assert.equal((await fetch(url+'/drafts.mjs')).status,200);assert.equal((await fetch(url+'/src/pr.mjs')).status,200);
   for(const route of ['/src/../package.json','/src/%2e%2e%2fpackage.json','/server.mjs','/.git/config'])assert.ok([400,404].includes((await fetch(url+route)).status),route);assert.equal(seen.length,0);
 });
 test('upstream is fixed loopback only and redirect responses are not followed',async t=>{
