@@ -43,6 +43,14 @@ test('source-side roads resolve current explicit story and inspect only a suppor
   const html=tradePanelHTML({trades:t,tasks,townFilter:'OakTown',selectedId:story.id});assert.match(html,/Recorded parent/);assert.match(html,/data-cc-inspect="a"/);assert.doesNotMatch(html,/data-cc-inspect="b"/);
   assert.doesNotMatch(tradePanelHTML({trades:t,tasks:tasks.slice(1),townFilter:'OakTown',selectedId:story.id}),/data-cc-inspect/);
 });
+test('explicit expired evidence never falls back to another story for the same task',()=>{
+  const current={id:'road:new',role:'road',town:'OakTown',fromTown:'OakTown',toTown:'OakTown',taskId:'a',fromId:'a',toId:'b',title:'New road',reason:'Recorded now'};
+  const value={stories:[current]};
+  const site={role:'road',town:'OakTown',taskId:'a',evidence:{id:'old'}};
+  assert.equal(tradeStoryForSite(site,value,'OakTown'),null);
+  assert.equal(tradeStoryForSite({...site,evidence:{id:'new'}},value,'OakTown'),current);
+  assert.equal(tradeStoryForSite({...site,evidence:undefined},value,'OakTown'),current);
+});
 test('garden story follows exact town when its first arrival has departed',()=>{
   const story={id:'garden:OakTown',role:'gardener',town:'OakTown',taskId:'departed',title:'A growing garden'};
   const t={stories:[story]};assert.equal(tradeStoryForSite({role:'gardener',town:'OakTown',taskId:'a'},t,'OakTown'),story);
