@@ -15,8 +15,8 @@ export function tradeStoryForSite(site,trades={},townFilter='') {
   const role=story=>story.role===site.role && inTown(story,site.town);
   const source=site.evidence;
   // Prefer exact recorded event identity; never manufacture a story from a prop.
-  return stories.find(s=>role(s)&&(source?.id?s.id===source.id||s.id===`${site.role}:${source.id}`:false)) ||
-    stories.find(s=>role(s)&&(site.role==='gardener'||(site.taskId?[s.taskId,...(site.role==='road'?[s.fromId,s.toId]:[])].includes(site.taskId):!s.taskId))) || null;
+  if(source?.id)return stories.find(s=>role(s)&&(s.id===source.id||s.id===`${site.role}:${source.id}`))||null;
+  return stories.find(s=>role(s)&&(site.role==='gardener'||(site.taskId?[s.taskId,...(site.role==='road'?[s.fromId,s.toId]:[])].includes(site.taskId):!s.taskId)))||null;
 }
 export function toolEvidence(tasks,{townFilter='',now=Date.now(),stale=false}={}) {
   const result={recent:0,older:0,unreported:0,total:0,working:[]};
