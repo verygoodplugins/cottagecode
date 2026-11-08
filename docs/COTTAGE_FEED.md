@@ -29,7 +29,15 @@ Optional envelope fields:
 
 An empty custom feed stays empty. The bundled same-origin `/agents` endpoint has an onboarding exception: an empty snapshot with `source: "none"` opens the demo until local agents appear. Demo history uses its own namespace.
 
-The browser polls every 1.5 seconds. HTTP failures keep the last snapshot from the same endpoint, marked stale; they never substitute another feed. The Node adapters refresh every 2 seconds. GitHub enrichment runs on its own slower cache.
+The bundled browser feed subscribes to same-origin `GET /agents/events` for immediate
+refresh notifications. Each `event: change` carries only `{ "revision": number | null }`;
+it is sent after the normalized `/agents` cache has been committed. A connection or
+reconnection sends a notification with a null revision to request a fresh snapshot.
+The stream never forwards raw upstream events or credentials. Arbitrary custom JSON
+feeds are not assumed to implement this route. Pause closes the subscription;
+resume reconnects and refreshes immediately. Endpoint changes fence off old notifications.
+
+The browser also polls every 1.5 seconds as a fallback. HTTP failures keep the last snapshot from the same endpoint, marked stale; they never substitute another feed. The Node adapters refresh every 2 seconds. GitHub enrichment runs on its own slower cache.
 
 CORS: the browser fetches the URL entered in the connect box. Serve `Access-Control-Allow-Origin: *` (or the CottageCode origin) for feeds and activity endpoints on another host. The bundled server defaults to `127.0.0.1:8787` and permits its `/agents` and activity routes only to a Townmap loaded from that same origin; it does not provide CORS access to its local agent data. To use a separately hosted Townmap, point it at a separate feed/activity service that allows the Townmap origin, or host that service and the Townmap together. Message writes require this server's own origin, JSON, and the explicit message header described below.
 
@@ -57,7 +65,7 @@ Full shape (everything else is optional):
 | `role` | string | Fallback for `town` if `town` is missing. |
 | `status` | string | One of `working` `idle` `blocked` `done` `offline`. |
 | `occupancy` | string | `live` `recent` `settled`. Optional. If omitted, the townmap classifies from `status` + timestamps (done ages out after ~2h). |
-| `inventoryScope` | string | Optional canonical Hub membership: `dashboard` keeps Live + recent tasks visible; `history` keeps older tasks settled, including those with historical PR links. Omit for standalone/custom classification. |
+| `inventoryScope` | string | Optional Hub membership: `dashboard` keeps Live + recent roots visible; `family` includes canonically fresh active external sessions with an explicit parent chain to a dashboard root; `history` keeps other tasks settled, including those with historical PR links. Omit for standalone/custom classification. |
 | `parent` | string \| null | Id of the parent cottage. Kids render as sheds in the yard. |
 | `task` | string | Short description of the current work. Separate from the original request. |
 | `taskId` | string \| null | Explicit task/run identity. Changes reset the room and activity cache for that cottage. |
@@ -83,22 +91,34 @@ Full shape (everything else is optional):
 | `lastLine` | string | Latest log line / thought bubble fodder. |
 | `attention` | string | Why it's blocked. Shows up in Jack's letter pile. |
 | `handoffUrl` | string | Optional https handoff link. |
-| `model` | string | `opus` `sonnet` `haiku` `gpt` `local` `mlx` (or a string containing those). Roof flag color. |
+| `model` | string | Full source model identifier, retained in evidence. Known `opus` `sonnet` `haiku` `gpt` `local` `mlx` substrings choose roof flag color. |
+| `harness` | string | Explicit execution harness, such as Claude Code or Codex. Never inferred from the model. `execution.harness` is also accepted. |
+| `owner` | string | Optional explicit responsible party; otherwise command views show the supplied harness or Unknown. |
+| `lastProgressAt` | number \| null | Last meaningful progress reported by the producer; `telemetry.progressAt` is also accepted. Observation time does not substitute. |
+| `durationMs` | number \| null | Recorded execution duration, independent from wall-clock task age and waits. |
+| `issues` | array | Explicit `{url, title?, number?}` issue links. HTTP/HTTPS only. Used by Threads and search; never parsed from prose. |
 | `dispatchedBy` | string | Who sent it. |
 | `taskStartedAt` | number \| null | Start of the identified task, in epoch milliseconds. |
 | `sessionStartedAt` | number \| null | Start of the enclosing session, in epoch milliseconds. |
+| `turnStartedAt` | number \| null | Latest explicitly observed turn start within a persistent session, in epoch milliseconds. |
 | `startedAt` | number \| null | Legacy start value, still accepted for occupancy. It does not replace the explicit task/session clocks. |
 | `endedAt` | number \| null | Known completion time. The task clock uses it to stop elapsed time for terminal tasks. |
 | `terminal` | boolean | Optional. Set when a terminal source record is presented as `blocked` for attention; the task clock stops at `endedAt`. |
 | `updatedAt` | number \| null | Time of the last signal. |
-| `tokens` | number | |
-| `cost` | number | USD for this run. |
+| `tokens` | number or null | Recorded run total; missing measurements stay null. |
+| `cost` | number or null | Recorded USD for this run; missing pricing stays null. |
 | `pr` | object | PR identity, state, and review evidence. See [Pull requests](#pull-requests). |
 | `interiorTheme` | string | Optional `hub`, `app`, `memory`, `vault`, or `neutral` furniture theme. `theme` is an accepted alias. |
 
 ### Task and session boundaries
 
 Supply `taskId` and `taskStartedAt` only when the source identifies a task. A recent assistant response or file modification is not a new task start. Missing or invalid clocks show **Unavailable**; they are never filled with the current time.
+
+The Codex desktop rollout observer's canonical `startedAt` is the latest turn
+boundary. CottageCode maps it to `turnStartedAt`, shown as **Current turn age /
+Current turn started**. It does not infer the persistent session's creation time
+from that value; session clocks stay unavailable without an explicit session
+start. A turn boundary alone also does not establish a separate logical task.
 
 The local transcript adapter preserves the first genuine user request, excluding tool replies, runtime metadata, and compaction summaries. Explicit `taskId`/`runId` records establish task boundaries. Without them, `taskId` and `taskStartedAt` remain null, and `originalAskSource: "session"` labels the pinned note as the first request in that session. Assistant updates populate activity instead of replacing the request.
 
@@ -448,8 +468,24 @@ npx --yes http-server . -p 9999 --cors
 
 ### Shared Hub inventory mode
 
-The Node process caches dashboard reads for five seconds and history for one
-minute, using up to 500 tasks per page. It allows 45 seconds for a Hub request
+The Node process keeps one authenticated connection to Hub's shared
+`GET /v1/agent-events/stream`. A canonical `task_updated` notification wakes inventory
+hydration immediately, including new children, lifecycle changes, and explicit parent
+links. Event payloads are invalidation hints; canonical task detail remains the
+authority for status, ancestry, readiness, and permissions. New snapshots reach the
+browser through the local notification stream and use the existing layout/path logic.
+The stream does not claim user presence or send messages to agents.
+
+Fallback reads cache dashboard data for five seconds and history for one
+minute, using up to 500 tasks per page. Task-change notifications bypass those delays;
+tool and usage notifications update telemetry without repaging all history. Reconnect,
+cursor reset, and reported telemetry gaps force canonical resynchronization. A global
+`task_updated` hint with `payload.resync: true` also resynchronizes inventory when a
+canonical task or parent ID cannot fit telemetry's bounded identifier vocabulary.
+Invalidations
+received during a read schedule another pass, so an older response cannot consume a newer
+notification. A missing or disconnected stream leaves ordinary polling available.
+It allows 45 seconds for a Hub request
 to finish during database contention instead of abandoning and requeuing it.
 It follows
 all cursor pages for both `history` and `dashboard` before replacing a snapshot.
@@ -481,4 +517,76 @@ Hub cottages also expose `executionStatus`, `version`, `finalization` (`status`,
 
 Hub PR observations carry `authority: "hub"`: `reviewState` comes from canonical finalization, while raw `labels` remain evidence. The browser preserves that verified state during an outage and marks its evidence stale. It does not infer readiness from a stale ready label or overrule Hub's head-change blocker. Standalone observations retain conservative freshness-based classification.
 
-Hub `durationMs` is the recorded execution time; review and merge waits do not inflate elapsed time. Hub also owns PR freshness, including immutable merged observations. Once cleanup is `removed`, the historical worktree path remains copyable but no longer offers an open action.
+Hub `durationMs` is recorded execution time. The command center labels it separately from task age, which includes review and merge waits. Hub also owns PR freshness, including immutable merged observations. Once cleanup is `removed`, the historical worktree path remains copyable but no longer offers an open action.
+
+### Recorded work relationships in Threads
+
+The command center accepts typed `relationships` whose `from` and `to` refer to
+known nodes: `task:<cottage-id>`, `pr:<host>/<owner>/<repo>#<number>`
+(for example, `pr:github.com/example/project#42`), or
+`issue:<canonical-http-url>`. PR repository keys are lowercase. Kinds such as `depends-on` are shown with the arrow
+from prerequisite to dependent. It also creates typed links from supplied
+`parent`, `issues`, and PR evidence. Shared PRs have one node. Town-to-town paths
+continue using the existing town relationship contract; they do not imply task
+or issue dependencies. Missing issue links have an explicit empty explanation.
+
+### Optional Hub tool telemetry
+
+Hub-backed inventory refreshes make one shared, authenticated server-side
+`GET /v1/agent-events/snapshot?limit=200` request. It shares the inventory cache
+and concurrent reads, runs alongside canonical inventory reads, and has an
+independent 3 second timeout. Missing endpoints, errors and partial telemetry
+never change task membership, lifecycle, PR readiness, permissions or input.
+The browser does not poll this endpoint.
+
+A cottage may carry `toolActivity: null` or the small allowlisted object:
+
+```json
+{"name":"read_file","state":"started","at":1793880000000,"callId":"call-1","source":"hub:agent-events","stale":false}
+```
+
+States preserve Hub's `started`, `succeeded`, `failed`, or `cancelled` spelling.
+`at` is Unix milliseconds from the explicit tool fact. Names and optional call
+IDs are bounded to 120 identifier characters; malformed facts are unavailable.
+Facts older than two minutes or from canonically stale inventory have
+`stale: true`. A timestamp more than 30 seconds in the future is rejected.
+
+`toolCoverage: {available, reason}` distinguishes a valid fact (reason `null`,
+or `partial` for an incomplete Hub snapshot) from unavailable evidence
+(`unavailable`, `missing_task`, `ambiguous_task`, `missing_scope`,
+`ambiguous_scope`, `stale_scope`, `missing_tool`, or `invalid_tool`).
+It does not claim complete event history or infer that no tool was used.
+An attempt with no retained scope, or an observed session absent from the
+snapshot, reports `missing_scope`; conflicting or non-unique matches remain
+`ambiguous_scope`. Neither condition permits falling back to another identity.
+
+Telemetry joins exact `cottage.taskId` to projected `taskId`. Managed tasks use
+only the uniquely marked `currentAttempt`; old or conflicting attempts cannot
+supply tools. With no attempt scopes, observed telemetry requires a single exact
+known cottage session and exact `s:<sessionId>` scope. Unknown or ambiguous
+sessions remain unavailable. Cached historical cottages retain their existing
+session identity for this check. The adapter exports neither full scopes nor
+arguments, outputs, progress text, authentication or unrelated fields.
+
+The same identity check may also attach `usage` and `contextUsage`, independently
+of whether a tool fact exists. `usage` preserves the explicit `session` or
+`attempt` scope, a `tokens` object (`inputTokens`, `outputTokens`,
+`cacheReadTokens`, `cacheWriteTokens`, `totalTokens`), `incompleteFields`,
+`lowerBound`, and `cost: {usd, sources, complete}`. Values are finite nonnegative
+numbers or null; zero is a measurement. `usageCoverage: {available, reason}`
+reports missing, conflicting, partial, or superseded evidence. Observer aliases
+owned by managed tasks do not expose duplicate usage totals.
+
+Session usage is cumulative across that session, never task or interval spend.
+It does not replace the top-level run counters or enter the town's recorded
+cost sum. In particular, cached input is not added again to a reported total.
+Missing cost is not estimated. `measuredAt` stays null because Hub's projection
+does not yet export a usage-specific timestamp; a subsequent tool event cannot
+make an older usage total appear newly measured. `coverageComplete` preserves
+the snapshot's known completeness.
+
+`contextUsage` contains `scope`, `usedTokens`, `windowTokens`, `usedRatio`, `at`,
+`stale`, and the same `hub:agent-events` source. Its own explicit timestamp owns
+freshness (two minutes or canonical staleness), independently of tool activity.
+The inspector labels cumulative observations as **Session tokens / Session
+cost**, and leaves unavailable values visible as unavailable.
