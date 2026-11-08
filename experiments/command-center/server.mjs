@@ -18,7 +18,12 @@ export function createLabServer({upstream='http://127.0.0.1:8787',fetchImpl=glob
       // Check raw segments before URL parsing can normalize traversal away.
       if(!req.url?.startsWith('/')||req.url.startsWith('//')||req.url.includes('\\')||/%(?:2f|5c|25)/i.test(req.url.split('?')[0])||req.url.split('?')[0].split('/').some(segment=>{try{return ['.','..'].includes(decodeURIComponent(segment));}catch{return true;}}))return json(400,{error:'Invalid local route.'});
       const url=new URL(req.url,host);
-      const activity=/^\/agents\/[A-Za-z0-9_.:-]+\/activity$/.test(url.pathname),messages=/^\/agents\/[A-Za-z0-9_.:-]+\/messages$/.test(url.pathname),agents=url.pathname==='/agents';
+      const rawPath=req.url.split('?')[0];
+      const agentRoute=/^\/agents\/([^/]+)\/(activity|messages)$/.exec(rawPath);
+      let routeAction='',routeId='';
+      if(agentRoute){try{routeId=decodeURIComponent(agentRoute[1]);}catch{return json(400,{error:'Invalid local route.'});}
+        if(/^[A-Za-z0-9_.:-]+$/.test(routeId))routeAction=agentRoute[2];}
+      const activity=routeAction==='activity',messages=routeAction==='messages',agents=url.pathname==='/agents';
       const source=/^\/src\/[a-zA-Z0-9_-]+\.mjs$/.test(url.pathname),module=town&&/^\/modules\/[a-zA-Z0-9_-]+\.mjs$/.test(url.pathname),audio=town&&/^\/modules\/audio\/[a-zA-Z0-9_-]+\.mp3$/.test(url.pathname),file=staticFiles.get(url.pathname);
       if(!agents&&!activity&&!messages&&!source&&!module&&!audio&&!file)return json(400,{error:'This route is not available in the lab.'});
       if(req.method!==(messages?'POST':'GET'))return json(405,{error:'This method is not available for the route.'});
