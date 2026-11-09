@@ -51,10 +51,12 @@ test('the noticeboard square remains reachable when the original busy town empti
   assert.deepEqual(positions(after)['AppTown-0'],positions(first)['AppTown-0']);
 });
 
-test('width budget uses the normal cottage scale and full scene width once', () => {
-  assert.equal(townWidthBudget({windowWidth:2077,standardWidth:1084}),1455);
-  assert.equal(townWidthBudget({windowWidth:390,standardWidth:340}),827);
+test('width budget uses native pixels and full scene width once, independent of panel width', () => {
+  assert.equal(townWidthBudget({windowWidth:2077,standardWidth:1084}),1920);
+  assert.equal(townWidthBudget({windowWidth:390,standardWidth:340}),768);
   assert.equal(townWidthBudget({windowWidth:8000,standardWidth:800}),1920);
+  assert.equal(townWidthBudget({windowWidth:1422,standardWidth:1007}),1398);
+  assert.equal(townWidthBudget({windowWidth:1422,standardWidth:340}),1398);
 });
 
 test('a desktop fleet can place large districts abreast without shrinking cottages',()=>{

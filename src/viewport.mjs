@@ -1,5 +1,6 @@
 /** The town's world pixels and the viewport's CSS pixels are independent. */
 export const ZOOM_LEVELS = Object.freeze([50, 75, 100, 125, 150, 200]);
+export const CAMERA_VIEWS = Object.freeze({town: 100, walk: 200});
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 export function nextZoom(current, direction) {
@@ -24,6 +25,7 @@ export function zoomKey(event) {
   if (event.key === '+' || event.key === '=') return 'in';
   if (event.key === '-') return 'out';
   if (event.key === '0') return 'reset';
+  if (event.key?.toLowerCase() === 'v') return 'view';
   return null;
 }
 
@@ -52,10 +54,11 @@ export function scrollForPoint(point, geometry, target = {x: geometry.width / 2,
     top: clamp(point.y * geometry.scale + geometry.y - target.y, 0, geometry.contentHeight - geometry.height)};
 }
 
-export function createMapViewport({viewport, surface, canvas, referenceWidth, getObscured = () => ({})}) {
-  // Remember the normal layout even if fullscreen is entered while the feed is still loading.
-  const initialWidth = viewport.clientWidth;
-  let worldWidth = 0, worldHeight = 0, baseScale = null, zoom = 100, geometry = null;
+export function createMapViewport({viewport, surface, canvas, getObscured = () => ({})}) {
+  // 100% means one artwork pixel per CSS pixel, independent of startup width,
+  // display density, fullscreen, and how many districts the feed discovers.
+  const baseScale = 1;
+  let worldWidth = 0, worldHeight = 0, zoom = CAMERA_VIEWS.town, geometry = null;
   let indoors = false, pendingCenter = null;
   const scroll = () => ({left: viewport.scrollLeft, top: viewport.scrollTop});
   const center = () => geometry && worldPoint({x: geometry.width / 2, y: geometry.height / 2}, geometry, scroll());
@@ -65,7 +68,6 @@ export function createMapViewport({viewport, surface, canvas, referenceWidth, ge
   function resize() {
     if (indoors || !worldWidth || !worldHeight || !viewport.clientWidth || !viewport.clientHeight) return;
     const anchor = pendingCenter || center();
-    if (baseScale === null) baseScale = (initialWidth || viewport.clientWidth) / (referenceWidth || worldWidth);
     const next = viewportGeometry({worldWidth, worldHeight, width: viewport.clientWidth,
       height: viewport.clientHeight, scale: baseScale * zoom / 100, ...getObscured()});
     if (!pendingCenter && geometry && Object.keys(next).every(key => next[key] === geometry[key])) return;
@@ -94,8 +96,17 @@ export function createMapViewport({viewport, surface, canvas, referenceWidth, ge
     const target = {x: clamp(p.x, mx, width - mx), y: clamp(p.y, my, height - my)};
     if (target.x !== p.x || target.y !== p.y) viewport.scrollTo({...scrollForPoint(point, geometry, target), behavior: 'instant'});
   }
+  function setZoom(value) {
+    if (indoors || !ZOOM_LEVELS.includes(value) || value === zoom) return;
+    capture(); zoom = value; resize();
+  }
   return {
-    capture, resize, focus, ensureVisible,
+    capture, resize, focus, ensureVisible, setZoom,
+    setView(view, point) {
+      if (indoors || !Object.hasOwn(CAMERA_VIEWS, view)) return;
+      setZoom(CAMERA_VIEWS[view]);
+      if (point) focus(point, true);
+    },
     overview(bounds) {
       if (!bounds || indoors) return null;
       resize();if (!geometry) return null;
@@ -118,16 +129,13 @@ export function createMapViewport({viewport, surface, canvas, referenceWidth, ge
       if (value) viewport.scrollTo({left: 0, top: 0, behavior: 'instant'});
       else resize();
     },
-    setZoom(value) {
-      if (indoors || !ZOOM_LEVELS.includes(value) || value === zoom) return;
-      capture(); zoom = value; resize();
-    },
     pointAtEvent(event) {
       const rect = canvas.getBoundingClientRect();
       return {x: (event.clientX - rect.left) * canvas.width / rect.width,
         y: (event.clientY - rect.top) * canvas.height / rect.height};
     },
-    get state() { return {zoom, baseScale, scale: baseScale === null ? null : baseScale * zoom / 100,
+    get state() { return {zoom, baseScale, scale: geometry ? baseScale * zoom / 100 : null,
+      view: Object.keys(CAMERA_VIEWS).find(view => CAMERA_VIEWS[view] === zoom) || 'custom',
       center: indoors ? pendingCenter : center(), indoors, geometry: geometry && {...geometry}}; },
   };
 }

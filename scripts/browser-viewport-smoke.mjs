@@ -45,6 +45,17 @@ try {
   // where a former fixed scroll offset would legitimately clamp at the edge.
   await evaluate('window.originalPanel=document.getElementById("panel"); window.nativeCalls=[]; document.getElementById("map-shell").requestFullscreen=()=>{nativeCalls.push("request");return Promise.resolve();}; document.exitFullscreen=()=>{nativeCalls.push("exit");return Promise.resolve();}; window.originalWindow=[innerWidth,innerHeight]; const v=document.getElementById("map-viewport"); v.scrollTop=Math.max(0,(window.cottageState().viewport.geometry.mapHeight-v.clientHeight)/2);');
   const normal = await state();
+  near(normal.viewport.scale,1,'Native Town scale',1e-8);
+  const beforeWalk=await evaluate('window.cottageState().scene.player');
+  await click('#camera-walk');
+  near((await state()).viewport.scale,2,'Walk scale',1e-8);
+  assert.deepEqual(await evaluate('window.cottageState().scene.player'),beforeWalk,'Walk frames Jack without teleporting him');
+  assert.equal(await evaluate('document.getElementById("camera-walk").getAttribute("aria-pressed")'),'true');
+  await key('v');
+  near((await state()).viewport.scale,1,'V returns to Town scale',1e-8);
+  // Restore the original center before exercising fullscreen's preservation.
+  await evaluate(`document.getElementById('map-viewport').scrollTop=${normal.viewport.center.y}-document.getElementById('map-viewport').clientHeight/2`);
+  pass('Town and Walk use native and double pixels without moving Jack');
   await click('#fullscreen-toggle');
   await until('window.cottageState().display.fullscreen','In-window fullscreen did not open');
   const full = await state();
@@ -164,6 +175,7 @@ try {
       frame.remove();return result;
     })()`);
     near(result.scale,result.initial,'Responsive fullscreen scale',1e-8);
+    near(result.initial,1,'Responsive startup uses native pixels',1e-8);
     assert.equal(result.overflow,false); assert.equal(result.closeVisible,true);
     assert.ok(result.panel.left>=0 && result.panel.right<=result.width);
     assert.ok(result.panel.top>=0 && result.panel.bottom<=result.height);

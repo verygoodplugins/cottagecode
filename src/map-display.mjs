@@ -2,13 +2,14 @@ import {fullscreenButtonCopy} from './fullscreen.mjs';
 import {nextZoom, zoomKey, ZOOM_LEVELS} from './viewport.mjs';
 
 /** Fullscreen and panel chrome live outside the inspector's streaming content. */
-export function createMapDisplay({camera, canvas, getMode, onOverview, getWorkspaceView=()=> 'town', focusWorkspace}) {
+export function createMapDisplay({camera, canvas, getMode, getWalkPoint, onOverview, getWorkspaceView=()=> 'town', focusWorkspace}) {
   const $ = id => document.getElementById(id);
   const root = $('map-shell'), viewport = $('map-viewport'), details = $('details-shell');
   const panel = $('panel');
   const outside = [...root.parentElement.children].filter(element => element !== root);
   const fullscreen = $('fullscreen-toggle'), toggle = $('details-toggle'), close = $('details-close');
   const zoomControls = $('map-zoom'), minus = $('zoom-out'), plus = $('zoom-in'), reset = $('zoom-reset');
+  const townView = $('camera-town'), walkView = $('camera-walk');
   let active = false, detailsOpen = true, pageScroll = null;
   let frame = 0;
   let fullscreenReading = null;
@@ -70,11 +71,22 @@ export function createMapDisplay({camera, canvas, getMode, onOverview, getWorksp
     const zoom = camera.state.zoom;
     zoomControls.hidden = getMode() === 'room';
     minus.disabled = zoom <= ZOOM_LEVELS[0]; plus.disabled = zoom === ZOOM_LEVELS.at(-1);
-    reset.textContent = zoom + '%'; reset.setAttribute('aria-label', 'Map zoom ' + zoom + '%. Reset to 100%');
+    reset.textContent = zoom + '%'; reset.setAttribute('aria-label', 'Map zoom ' + zoom + '%. Reset to Town view');
+    townView.setAttribute('aria-pressed', String(camera.state.view === 'town'));
+    walkView.setAttribute('aria-pressed', String(camera.state.view === 'walk'));
+  }
+  function changeView(view) {
+    camera.setView(view, view === 'walk' ? getWalkPoint?.() : undefined);
+    syncZoom();
+    $('overview-status').textContent = view === 'walk' ? 'Walk view. Camera follows Jack at 200%.' : 'Town view at 100%. Hover cottages for details.';
   }
   function changeZoom(action) {
+    if (action === 'view') { changeView(camera.state.view === 'walk' ? 'town' : 'walk'); return; }
     camera.setZoom(action === 'reset' ? 100 : nextZoom(camera.state.zoom, action === 'in' ? 1 : -1));
     syncZoom();
+  }
+  for (const [button, view] of [[townView, 'town'], [walkView, 'walk']]) {
+    button.addEventListener('click', () => { changeView(view); focusMap(); });
   }
   for (const [button, action] of [[minus, 'out'], [plus, 'in'], [reset, 'reset']]) {
     button.addEventListener('click', () => { changeZoom(action); focusMap(); });
