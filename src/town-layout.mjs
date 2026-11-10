@@ -1,11 +1,10 @@
-/** The old two-district width remains the reference for 100% cottage scale. */
+/** Minimum packing width; camera scale is independent of district layout. */
 export const MAP_REFERENCE_WIDTH = 768;
 
 /** Choose a packing budget once. Floating Details must not permanently narrow the world. */
-export function townWidthBudget({windowWidth, standardWidth}) {
-  const scale = Math.max(1, standardWidth) / MAP_REFERENCE_WIDTH;
+export function townWidthBudget({windowWidth}) {
   const clearWidth = windowWidth - 24;
-  return Math.round(Math.max(MAP_REFERENCE_WIDTH, Math.min(1920, clearWidth / scale)));
+  return Math.round(Math.max(MAP_REFERENCE_WIDTH, Math.min(1920, clearWidth)));
 }
 
 const townOf = agent => agent.town || agent.role || 'WildTown';

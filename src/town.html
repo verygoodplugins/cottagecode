@@ -115,13 +115,19 @@
   #room-canvas{position:absolute;top:0;left:0;width:100%;height:100%;background:#171e22}
   .map-viewport.is-indoors{overflow:hidden}
   .map-viewport.is-indoors .map-surface{display:none}
-  .map-zoom{display:inline-flex;gap:2px;align-items:center}
+  .map-zoom{display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap}
   .map-zoom button{min-width:34px;padding:8px}
+  #camera-walk{margin-right:6px}
   #zoom-reset{min-width:62px;font-variant-numeric:tabular-nums}
   .details-shell{min-width:0;min-height:0}
   .details-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid #44524f;border-bottom:0;background:#273238}
   .split.details-closed{grid-template-columns:minmax(0,1fr)}
   #perspective-stage{position:relative;min-width:0;min-height:0}
+  .cottage-peek{position:absolute;z-index:5;width:270px;max-width:calc(100% - 16px);padding:9px 11px;border:1px solid #9eaa83;border-radius:4px;background:#202e2bf5;box-shadow:0 4px 16px #101b2255;pointer-events:none;font:12px/1.4 ui-sans-serif,system-ui;color:#e4ebe2;overflow-wrap:anywhere}
+  .cottage-peek strong,.cottage-peek span{display:block}
+  .cottage-peek strong{color:#e8d39b;font-size:13px}
+  .cottage-peek span{color:#b5c6b8;margin-top:2px}
+  .cottage-peek p{margin:5px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   #command-view{position:absolute;inset:0;overflow:auto;outline:none;border-radius:3px}
   #command-view[hidden],.details-shell[hidden]{display:none!important}
   .split.is-fullscreen{position:fixed;inset:0;width:100%;height:100dvh;max-width:none;display:block;overflow:hidden;z-index:100;background:#171d23}
@@ -262,9 +268,11 @@
         <button id="sound-toggle" type="button" aria-pressed="false">Sound off</button>
         <button id="music-toggle" type="button" aria-pressed="false" aria-label="Play village music">♫ Music off</button>
         <div class="map-zoom" id="map-zoom" role="group" aria-label="Townmap zoom">
+          <button id="camera-town" type="button" aria-pressed="true" title="Compact town · original pixel size (0)">Town</button>
+          <button id="camera-walk" type="button" aria-pressed="false" aria-keyshortcuts="V" title="Closer view around Jack · double pixel size (V)">Walk</button>
           <button id="map-overview" type="button" aria-label="Overview: frame working and blocked cottages" title="Frame working and blocked cottages">Overview</button>
           <button id="zoom-out" type="button" aria-label="Zoom out" aria-keyshortcuts="-" title="Zoom out (−)">−</button>
-          <button id="zoom-reset" type="button" aria-label="Map zoom 100%. Reset to 100%" aria-keyshortcuts="0" title="Reset zoom (0)">100%</button>
+          <button id="zoom-reset" type="button" aria-label="Map zoom 100%. Reset to Town view" aria-keyshortcuts="0" title="Town view · original pixel size (0)">100%</button>
           <button id="zoom-in" type="button" aria-label="Zoom in" aria-keyshortcuts="+ =" title="Zoom in (+)">+</button>
         </div>
         <span id="overview-status" class="sr-only" role="status"></span>
@@ -291,9 +299,10 @@
       <div id="command-attention"></div>
       <div id="perspective-stage">
       <div id="map-viewport" class="map-viewport">
-      <div class="map-surface" id="map-surface"><canvas id="town" tabindex="0" role="img" aria-label="Townmap: arrow keys or WASD to walk, walk into doors to enter, E near an agent to talk, click cottages to inspect, plus and minus to zoom, 0 to reset zoom, F for fullscreen"></canvas></div><canvas id="room-canvas" tabindex="0" role="img" aria-label="Cottage interior. Arrow keys to walk, walk through the doorway to leave, E near your host to talk or inspect objects, Escape to leave." hidden></canvas>
+      <div class="map-surface" id="map-surface"><canvas id="town" tabindex="0" role="img" aria-label="Townmap: arrow keys or WASD to walk, walk into doors to enter, E near an agent to talk, click cottages to inspect, V to switch Town and Walk views, plus and minus to zoom, 0 for Town view, F for fullscreen"></canvas></div><canvas id="room-canvas" tabindex="0" role="img" aria-label="Cottage interior. Arrow keys to walk, walk through the doorway to leave, E near your host to talk or inspect objects, Escape to leave." hidden></canvas>
       </div>
       <section id="command-view" tabindex="-1" aria-label="Command workspace" hidden></section>
+      <div id="cottage-peek" class="cottage-peek" role="tooltip" hidden><strong></strong><span></span><p></p></div>
       </div>
       <p class="scene-status" id="scene-status">Arrow keys / WASD to walk · Walk into doors · E to talk · F for fullscreen · Click to inspect</p>
       <div class="stage-foot">

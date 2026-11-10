@@ -580,10 +580,11 @@ cv.width = W; cv.height = 0;
 ctx.imageSmoothingEnabled = false;
 let mapDisplay;
 const mapViewport = createMapViewport({canvas:cv,viewport:document.getElementById('map-viewport'),
-  surface:document.getElementById('map-surface'),referenceWidth:MAP_REFERENCE_WIDTH,getObscured:()=>mapDisplay?.obscured()||{}});
-const packingWidth=townWidthBudget({windowWidth:window.innerWidth,standardWidth:document.getElementById('map-viewport').clientWidth});
+  surface:document.getElementById('map-surface'),getObscured:()=>mapDisplay?.obscured()||{}});
+const packingWidth=townWidthBudget({windowWidth:window.innerWidth});
 stableLayout=createTownLayout({maxWidth:packingWidth});
 mapDisplay = createMapDisplay({camera:mapViewport,canvas:cv,getMode:()=>observatory?.mode||'town',
+  getWalkPoint:()=>observatory?.player,
   getWorkspaceView:()=>commandCenter?.state.view||'town',
   focusWorkspace:()=>document.getElementById('command-view').focus({preventScroll:true}),onOverview:()=>{
   observatory?.unfollow();
@@ -1750,7 +1751,7 @@ function draw(){
   t = performance.now()/1000;
   frameDt=Math.min(.05,lastDrawAt?t-lastDrawAt:1/60);lastDrawAt=t;
   // Clock labels age independently from feed polling, including a paused feed.
-  if(t-lastCommandClock>=1){lastCommandClock=t;updateCommandCenter();}
+  if(t-lastCommandClock>=1){lastCommandClock=t;updateCommandCenter();if(!cottagePeek.hidden)renderCottagePeek();}
   const villageLight=observatory?.lightAt(t);
   bedtimeFrames=bedtime.update(plots,villageLight,{time:t,reduce,present:agents,source:layoutSource||feedNamespace(ENDPOINT,builtInDemo)});
   const bedtimeLabel=villageLifeLabel(villageLight,bedtimeFrames);
@@ -1975,8 +1976,35 @@ function openBest(ag){
     a.click();
   }
 }
-cv.addEventListener("mousemove", e=>{ hoverId = hit(e); cv.style.cursor = hoverId||hitTrade(e) ? "pointer":"default"; });
-cv.addEventListener("mouseleave", ()=>{ hoverId = null; });
+// Readable details belong to the interface, not to enlarged artwork pixels.
+const cottagePeek=document.getElementById('cottage-peek');
+const perspectiveStage=document.getElementById('perspective-stage');
+function hideCottagePeek(){cottagePeek.hidden=true;cv.removeAttribute('aria-describedby');}
+function renderCottagePeek(){
+  const agent=agents.find(agent=>agent.id===hoverId);
+  if(!agent||observatory?.mode==='room'){hideCottagePeek();return;}
+  cottagePeek.querySelector('strong').textContent=agent.name||agent.id;
+  cottagePeek.querySelector('span').textContent=[townKey(agent),STATUS_TEXT[agent.status]||'unknown',
+    agent.harness||agent.model,feedStale?'feed stale':null].filter(Boolean).join(' · ');
+  cottagePeek.querySelector('p').textContent=agent.activity||agent.task||agent.branch||'Click to inspect this cottage';
+  cottagePeek.hidden=false;cv.setAttribute('aria-describedby','cottage-peek');
+}
+cv.addEventListener("mousemove", e=>{
+  hoverId=hit(e);cv.style.cursor=hoverId||hitTrade(e)?'pointer':'default';
+  renderCottagePeek();
+  if(cottagePeek.hidden)return;
+  const stage=perspectiveStage.getBoundingClientRect(),view=document.getElementById('map-viewport').getBoundingClientRect();
+  const w=cottagePeek.offsetWidth,h=cottagePeek.offsetHeight;
+  const left=Math.max(8,Math.min(e.clientX-stage.left+14,stage.width-w-8));
+  const below=e.clientY-stage.top+18;
+  const top=below+h<=view.bottom-stage.top-8?below:e.clientY-stage.top-h-12;
+  cottagePeek.style.left=left+'px';cottagePeek.style.top=Math.max(view.top-stage.top+8,top)+'px';
+});
+cv.addEventListener("mouseleave", ()=>{hoverId=null;hideCottagePeek();});
+document.getElementById('map-shell').addEventListener('click',hideCottagePeek,true);
+document.getElementById('map-shell').addEventListener('keydown',hideCottagePeek,true);
+document.getElementById('map-shell').addEventListener('scroll',hideCottagePeek,true);
+window.addEventListener('resize',hideCottagePeek);
 cv.addEventListener("click", e=>{
   const site=hitTrade(e);if(site){commandCenter?.inspectTrade(site);return;}
   if(observatory?.handleClick(e))return;

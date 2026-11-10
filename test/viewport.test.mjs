@@ -68,12 +68,13 @@ test('zoom steps stop at the limits and include the default scale', () => {
 test('map zoom shortcuts leave typing, browser zoom, composition, and held keys alone', () => {
   for (const key of ['+','=']) assert.equal(zoomKey({key}), 'in');
   assert.equal(zoomKey({key:'-'}),'out'); assert.equal(zoomKey({key:'0'}),'reset');
+  assert.equal(zoomKey({key:'v'}),'view'); assert.equal(zoomKey({key:'V'}),'view');
   assert.equal(zoomKey({key:'f'}),null);
   for (const modifier of ['ctrlKey','metaKey','altKey','isComposing','repeat']) assert.equal(zoomKey({key:'+', [modifier]:true}),null);
   assert.equal(zoomKey({key:'-',target:{closest:()=>({})}}),null);
 });
 
-test('camera retains its initial scale through delayed feeds, room visits, and world growth', t => {
+test('camera retains its native scale through delayed feeds, room visits, and world growth', t => {
   const original = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class {observe() {}};
   t.after(() => {if(original)globalThis.ResizeObserver=original;else delete globalThis.ResizeObserver;});
@@ -82,7 +83,7 @@ test('camera retains its initial scale through delayed feeds, room visits, and w
   const camera = createMapViewport({viewport,surface:{style:{}},canvas:{style:{}}});
   viewport.clientWidth=2077;viewport.clientHeight=1100; // Fullscreen before the first snapshot arrives.
   camera.setWorld(768,2400);
-  near(camera.state.scale,1084/768);
+  near(camera.state.scale,1);
   viewport.scrollTop=900;
   const center=camera.state.center;
   camera.setZoom(150);
@@ -94,9 +95,46 @@ test('camera retains its initial scale through delayed feeds, room visits, and w
   camera.setWorld(768,3200);
   camera.setIndoors(false);
   near(camera.state.center.x,center.x);near(camera.state.center.y,center.y);
-  near(camera.state.scale,1084/768*1.5);
+  near(camera.state.scale,1.5);
   camera.setWorld(768,3600);
   near(camera.state.center.y,center.y);
+});
+
+test('100% is one CSS pixel per world pixel at every startup width, even when initially hidden', t => {
+  const original=globalThis.ResizeObserver;
+  globalThis.ResizeObserver=class{observe(){}};
+  t.after(()=>{if(original)globalThis.ResizeObserver=original;else delete globalThis.ResizeObserver;});
+  for(const initialWidth of [0,340,1007,2077]){
+    const viewport={clientWidth:initialWidth,clientHeight:520,scrollLeft:0,scrollTop:0,classList:{toggle(){}},
+      scrollTo({left=0,top=0}){this.scrollLeft=left;this.scrollTop=top;}};
+    const canvas={width:1600,height:2400,style:{},getBoundingClientRect(){return {
+      left:35-viewport.scrollLeft,top:200-viewport.scrollTop,
+      width:parseFloat(this.style.width),height:parseFloat(this.style.height)};}};
+    const camera=createMapViewport({viewport,surface:{style:{}},canvas});
+    assert.equal(camera.state.scale,null,'A camera without geometry is not ready');
+    camera.setWorld(1600,2400);
+    viewport.clientWidth=1007;camera.resize();
+    assert.equal(camera.state.scale,1);assert.equal(canvas.style.width,'1600px');
+    camera.focus({x:800,y:1200},true);
+    const center=camera.state.center;
+    camera.setView('walk');
+    assert.equal(camera.state.scale,2);assert.equal(camera.state.view,'walk');
+    assert.deepEqual(camera.state.center,center);
+    // DOM hit targets still refer to the same artwork coordinates after zooming.
+    for(const view of ['town','walk']){
+      camera.setView(view);
+      const rect=canvas.getBoundingClientRect(),point={x:540,y:660},scale=camera.state.scale;
+      assert.deepEqual(camera.pointAtEvent({clientX:rect.left+point.x*scale,clientY:rect.top+point.y*scale}),point);
+    }
+    const jack={x:720,y:980};
+    camera.setView('walk',jack);
+    const screen=screenPoint(jack,camera.state.geometry,{left:viewport.scrollLeft,top:viewport.scrollTop});
+    near(screen.x,viewport.clientWidth/2);near(screen.y,viewport.clientHeight*.45);
+    assert.deepEqual(jack,{x:720,y:980},'Framing Jack must not move him');
+    camera.setIndoors(true);camera.setView('town');assert.equal(camera.state.view,'walk');
+    camera.setIndoors(false);camera.setView('town');assert.equal(camera.state.scale,1);
+    camera.setZoom(125);assert.equal(camera.state.view,'custom');
+  }
 });
 
 test('Overview fits active bounds around desktop and mobile details', () => {

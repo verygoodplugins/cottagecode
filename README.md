@@ -55,15 +55,21 @@ Click the map to give it keyboard focus.
 | Escape | Leave the cottage or bench while the map has focus |
 | F / Fullscreen | Fill the browser window at the current map scale; use Exit fullscreen or Escape to return |
 | + / − or zoom buttons | Zoom the Townmap between 50% and 200% |
-| 0 / percentage button | Reset to the initial map scale (100%) |
+| Town / 0 / percentage button | Compact view at one CSS pixel per artwork pixel (100%) |
+| Walk | A closer, crisp 2× view centred on Jack, without moving him |
+| V | Switch between Town and Walk while the map has focus |
 | Overview | Frame working and blocked cottages, including active roommates and shed residents |
 | Evidence / Close | Show or hide the shared inspector in any view |
 | Click a cottage or its roster button | Open its inspector without walking there |
+| Hover a cottage | Read its name, status, harness and current work without enlarging the map |
 | Enter cottage / Leave cottage | Visit or exit using buttons |
 | Click a resident / Talk to agent | Open their conversation and recorded activity |
 | Click a room object or inspector tab | Read the request, clock, journal, to-do list, PR desk, or shelves |
 | Click a parcel | Open its PR when a URL is available |
 
+Town starts at 100% on every screen: a cottage is 54 × 66 CSS pixels. Walk uses
+200% for a closer view. These scales stay the same when the window, evidence
+drawer, or fleet size changes; they are not a percentage of the initial panel width.
 Fullscreen fills the browser window and shows more map without enlarging cottages.
 Browser tabs stay visible; it never requests native fullscreen or a macOS space.
 Details float on
@@ -78,7 +84,7 @@ blocked residents, including roommates and children. Existing plots stay fixed
 through feed updates, fullscreen and resizing; arrivals fill spare lots or add
 an annex. Overview changes the camera, with the Details panel taken into account,
 and falls back to all visible cottages when none are active. It respects the
-current filters and the 50% zoom floor, so very large fleets still need scrolling.
+current filters and can fit below the ordinary 50% manual zoom floor.
 Branch labels express grouping, not inferred Git ancestry.
 
 Rooms and residents are generated from cottage and task identity. Return visits keep the furniture in place. A new explicit task gets a new home. HubTown sets the cozy base with switchboards and pigeonholes. AppTown fills its desks with computers, phones and charging leads. MemTown lines its walls with bookshelves. VaultTown is a clock-and-lock repair shop, with pendulums, key racks and scattered repair tools. Unknown projects get neutral homes.

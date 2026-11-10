@@ -783,7 +783,7 @@ export function createObservatory(api){
     }
     if(followId)hint('On the bench with '+(byId(followId)?.name||'your agent')+' · Move or press Escape to leave');
     else if(mode==='town'&&gramophone&&distance(player,gramophone)<24)hint('E · '+(extras.state.music.enabled?'Stop':'Play')+' the village gramophone');
-    else if(mode==='town')hint('Arrow keys / WASD to walk · E to talk · + / − zoom · 0 reset · F fullscreen · Click to inspect');
+    else if(mode==='town')hint('WASD / arrows to walk · E to talk · V Town / Walk · + / − zoom · 0 Town · F fullscreen · Hover or click cottages');
   }
   function draw(time){
     const dt=Math.min(.05,lastFrame?time-lastFrame:1/60);lastFrame=time;
